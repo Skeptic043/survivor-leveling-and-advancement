@@ -1,0 +1,63 @@
+# Local orchestration and agent state
+.project/
+AGENTS.md
+.agents/
+.codex/
+.claude/
+.cursor/
+CLAUDE.md
+
+# Isolated local worktrees
+.worktrees/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.vs/
+*.code-workspace
+*.suo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local
+*.user
+
+# Logs, coverage, and temporary files
+*.log
+coverage/
+.cache/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# Generated packages and Workshop staging
+build/
+dist/
+out/
+artifacts/
+local/
+release/
+sandbox/
+steamcmd/
+_staging/
+_workshop/
+/workshop/
+workshop-upload/
+*.vdf
+steam_appid.txt
+*.zip
+*.7z
+
+# Project Zomboid local runtime data
+/Saves/
+/Logs/
+/console.txt
+/coop-console.txt
+/server-console.txt

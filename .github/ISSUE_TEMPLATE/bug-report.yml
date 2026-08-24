@@ -1,0 +1,67 @@
+name: Bug report
+description: Report reproducible Survivor Leveling & Advancement behavior
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Back up affected saves before testing. Remove personal paths, usernames, server credentials, and private save data from anything you upload.
+  - type: input
+    id: pz-version
+    attributes:
+      label: Project Zomboid version
+      placeholder: "42.20.3"
+    validations:
+      required: true
+  - type: input
+    id: mod-version
+    attributes:
+      label: Mod version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Single-player
+        - Split-screen
+        - Hosted multiplayer
+        - Dedicated server
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Relevant settings and other mods
+      description: Include Survivor settings and any skill, XP, level-cap, or Skills-screen mods.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Load ...
+        2. Perform ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Scrubbed logs or screenshots
+      description: Paste only the relevant section or attach a privacy-checked file.
