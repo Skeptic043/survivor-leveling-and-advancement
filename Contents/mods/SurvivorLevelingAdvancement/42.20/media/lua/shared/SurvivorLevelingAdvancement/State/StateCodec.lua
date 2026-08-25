@@ -1,7 +1,7 @@
 local Codec = {}
 
 Codec.SCHEMA_VERSION = 1
-local ROOT_FIELDS = { schemaVersion = true, revision = true, survivor = true, perks = true, orphanedPerks = true }
+local ROOT_FIELDS = { schemaVersion = true, revision = true, survivor = true, perks = true, orphanedPerks = true, inFlightAdvancement = true }
 local SURVIVOR_FIELDS = { level = true, xpIntoLevel = true, spent = true }
 local PERK_FIELDS = {
     adapterId = true, adapterVersion = true, curveFingerprint = true,
@@ -9,6 +9,11 @@ local PERK_FIELDS = {
     activeTargets = true, postMaxFullRateUsed = true,
 }
 local TARGET_FIELDS = { targetId = true, targetLevel = true, targetPosition = true }
+local IN_FLIGHT_FIELDS = {
+    requestId = true, perkId = true, preRevision = true, preSpent = true,
+    preLevel = true, prePosition = true, targetLevel = true, targetPosition = true,
+    adapterId = true, adapterVersion = true, curveFingerprint = true, effectiveMaximum = true,
+}
 
 local function failure(code, detail, raw)
     return { ok = false, code = code, detail = detail, raw = raw }
@@ -109,6 +114,7 @@ local function validatePerk(perk)
         if targetIds[target.targetId] then return nil, failure("invalid_perk", "duplicate_target_id") end
         if target.targetLevel <= lastLevel then return nil, failure("invalid_perk", "target_level_order") end
         if target.targetPosition <= lastPosition then return nil, failure("invalid_perk", "target_order") end
+        if target.targetPosition <= perk.highWaterPosition then return nil, failure("invalid_perk", "target_at_or_behind_high_water") end
         targetIds[target.targetId] = true
         lastLevel = target.targetLevel
         lastPosition = target.targetPosition
@@ -124,6 +130,36 @@ local function validatePerk(perk)
         curveFingerprint = perk.curveFingerprint, effectiveMaximum = perk.effectiveMaximum,
         naturalPosition = perk.naturalPosition, highWaterPosition = perk.highWaterPosition,
         activeTargets = targets, postMaxFullRateUsed = perk.postMaxFullRateUsed,
+    }
+end
+
+local function validateInFlight(record)
+    if record == nil then return nil end
+    if type(record) ~= "table" then return nil, failure("invalid_in_flight_advancement", "not_table") end
+    local fields, key = hasOnlyFields(record, IN_FLIGHT_FIELDS)
+    if not fields then return nil, failure("invalid_in_flight_advancement", "unknown_field:" .. tostring(key)) end
+    if not isSafeId(record.requestId) then return nil, failure("invalid_in_flight_advancement", "requestId") end
+    if not isSafeId(record.perkId) then return nil, failure("invalid_in_flight_advancement", "perkId") end
+    if not isNonNegativeInteger(record.preRevision) then return nil, failure("invalid_in_flight_advancement", "preRevision") end
+    if not isNonNegativeInteger(record.preSpent) then return nil, failure("invalid_in_flight_advancement", "preSpent") end
+    if not isNonNegativeInteger(record.preLevel) then return nil, failure("invalid_in_flight_advancement", "preLevel") end
+    if not (isFiniteNumber(record.prePosition) and record.prePosition >= 0) then return nil, failure("invalid_in_flight_advancement", "prePosition") end
+    if not isPositiveInteger(record.targetLevel) then return nil, failure("invalid_in_flight_advancement", "targetLevel") end
+    if not (isFiniteNumber(record.targetPosition) and record.targetPosition >= 0) then return nil, failure("invalid_in_flight_advancement", "targetPosition") end
+    if not isSafeId(record.adapterId) then return nil, failure("invalid_in_flight_advancement", "adapterId") end
+    if not isNonNegativeInteger(record.adapterVersion) then return nil, failure("invalid_in_flight_advancement", "adapterVersion") end
+    if not isSafeId(record.curveFingerprint) then return nil, failure("invalid_in_flight_advancement", "curveFingerprint") end
+    if not isPositiveInteger(record.effectiveMaximum) then return nil, failure("invalid_in_flight_advancement", "effectiveMaximum") end
+    if record.targetLevel > record.effectiveMaximum then return nil, failure("invalid_in_flight_advancement", "targetLevel_above_maximum") end
+    if record.targetLevel ~= record.preLevel + 1 then return nil, failure("invalid_in_flight_advancement", "targetLevel_not_next") end
+    if record.targetPosition <= record.prePosition then return nil, failure("invalid_in_flight_advancement", "targetPosition_not_ahead") end
+    return {
+        requestId = record.requestId, perkId = record.perkId,
+        preRevision = record.preRevision, preSpent = record.preSpent,
+        preLevel = record.preLevel, prePosition = record.prePosition,
+        targetLevel = record.targetLevel, targetPosition = record.targetPosition,
+        adapterId = record.adapterId, adapterVersion = record.adapterVersion,
+        curveFingerprint = record.curveFingerprint, effectiveMaximum = record.effectiveMaximum,
     }
 end
 
@@ -150,6 +186,7 @@ local function validateV1(raw)
     if not survivorFields then return nil, failure("invalid_survivor", "unknown_field:" .. tostring(survivorKey)) end
     local survivor = raw.survivor
     if not isNonNegativeInteger(survivor.level) or not (isFiniteNumber(survivor.xpIntoLevel) and survivor.xpIntoLevel >= 0) then return nil, failure("invalid_survivor", "level_or_xp") end
+    if survivor.xpIntoLevel >= 1200 + 300 * survivor.level then return nil, failure("invalid_survivor", "xp_into_level_at_or_above_cost") end
     if not isNonNegativeInteger(survivor.spent) or survivor.spent > survivor.level then return nil, failure("invalid_survivor", "ap") end
     local perks, perkError = validateMap(raw.perks, "perks")
     if not perks then return nil, perkError end
@@ -158,16 +195,27 @@ local function validateV1(raw)
     for id in pairs(perks) do
         if orphaned[id] then return nil, failure("invalid_state", "duplicate_perk:" .. id) end
     end
+    local inFlight, inFlightError = validateInFlight(raw.inFlightAdvancement)
+    if inFlightError then return nil, inFlightError end
+    if inFlight ~= nil then
+        if inFlight.preSpent > survivor.level then return nil, failure("invalid_in_flight_advancement", "preSpent_above_survivor_level") end
+        if raw.revision ~= inFlight.preRevision and raw.revision ~= inFlight.preRevision + 1 then
+            return nil, failure("invalid_in_flight_advancement", "revision_outside_reservation")
+        end
+        if survivor.spent ~= inFlight.preSpent and survivor.spent ~= inFlight.preSpent + 1 then
+            return nil, failure("invalid_in_flight_advancement", "spent_outside_reservation")
+        end
+    end
     return {
         schemaVersion = Codec.SCHEMA_VERSION, revision = raw.revision,
         survivor = { level = survivor.level, xpIntoLevel = survivor.xpIntoLevel, spent = survivor.spent },
-        perks = perks, orphanedPerks = orphaned,
+        perks = perks, orphanedPerks = orphaned, inFlightAdvancement = inFlight,
     }
 end
 
 local function freshState()
     return { schemaVersion = Codec.SCHEMA_VERSION, revision = 0,
-        survivor = { level = 0, xpIntoLevel = 0, spent = 0 }, perks = {}, orphanedPerks = {} }
+        survivor = { level = 0, xpIntoLevel = 0, spent = 0 }, perks = {}, orphanedPerks = {}, inFlightAdvancement = nil }
 end
 
 local function sameIdentity(record, spec)
@@ -259,7 +307,15 @@ local function canonical(state)
         for index = 1, #keys do parts[index] = keys[index] .. "=" .. perk(value[keys[index]]) end
         return table.concat(parts, ";")
     end
-    return table.concat({ state.schemaVersion, state.revision, state.survivor.level, number(state.survivor.xpIntoLevel), state.survivor.spent, map(state.perks), map(state.orphanedPerks) }, "#")
+    local function inFlight(value)
+        if value == nil then return "absent" end
+        return table.concat({
+            value.requestId, value.perkId, value.preRevision, value.preSpent,
+            value.preLevel, number(value.prePosition), value.targetLevel, number(value.targetPosition),
+            value.adapterId, value.adapterVersion, value.curveFingerprint, value.effectiveMaximum,
+        }, "|")
+    end
+    return table.concat({ state.schemaVersion, state.revision, state.survivor.level, number(state.survivor.xpIntoLevel), state.survivor.spent, map(state.perks), map(state.orphanedPerks), inFlight(state.inFlightAdvancement) }, "#")
 end
 
 function Codec.decode(raw, options)
