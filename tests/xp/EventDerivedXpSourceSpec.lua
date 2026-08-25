@@ -43,13 +43,10 @@ local function makeHarness(options)
         positions = setmetatable({}, { __mode = "k" }),
         divisors = setmetatable({}, { __mode = "k" }),
         internal = setmetatable({}, { __mode = "k" }),
-        nowValue = options.nowValue or 0,
         arithmeticCalls = 0,
-        clockCalls = 0,
         resolverFailures = setmetatable({}, { __mode = "k" }),
     }
     h.addXpEvent = makeEvent(options.addXpEvent)
-    h.tickEvent = makeEvent(options.tickEvent)
 
     local function perkId(perk)
         return type(perk) == "table" and perk.id or nil
@@ -79,7 +76,6 @@ local function makeHarness(options)
     h.globals = {
         Events = {
             AddXP = h.addXpEvent,
-            OnTick = h.tickEvent,
         },
         addXp = nativeAward,
         addXpNoMultiplier = nativeAward,
@@ -98,18 +94,6 @@ local function makeHarness(options)
                     return { ok = true, authoritative = "yes" }
                 end
                 return { ok = true, authoritative = options.authoritative ~= false }
-            end,
-        },
-        clock = {
-            now = function()
-                h.clockCalls = h.clockCalls + 1
-                if h.clockThrow then
-                    error("clock", 0)
-                end
-                if h.clockFail then
-                    return { ok = false }
-                end
-                return { ok = true, milliseconds = h.nowValue }
             end,
         },
         playerIdentity = {
@@ -224,7 +208,6 @@ do
     equal(failure.code, "invalid_dependencies", "nil dependency code")
     local missing = {
         { "authority", "describe" },
-        { "clock", "now" },
         { "playerIdentity", "isPlayer" },
         { "perkIdentity", "resolve" },
         { "positionReader", "read" },
@@ -257,7 +240,6 @@ do
     expect(answer.ok, "non-authority is inert")
     equal(answer.code, "inert_non_authoritative", "non-authority result")
     equal(#h.addXpEvent.callbacks, 0, "non-authority has no XP observer")
-    equal(#h.tickEvent.callbacks, 0, "non-authority has no tick observer")
     equal(h.globals.addXp, h.originalAddXp, "non-authority leaves global alone")
 end
 
@@ -282,28 +264,22 @@ do
     h.globals.Events.AddXP = nil
     local source = assert(EventDerivedXpSource.create(h.dependencies))
     equal(source.install().code, "missing_seam", "missing XP event rejected")
-    h = makeHarness()
-    h.globals.Events.OnTick = nil
-    source = assert(EventDerivedXpSource.create(h.dependencies))
-    equal(source.install().code, "missing_seam", "missing tick event rejected")
 end
 
 do
     local h = makeHarness()
     local source = h.createAndInstall()
     equal(#h.addXpEvent.callbacks, 1, "one XP observer")
-    equal(#h.tickEvent.callbacks, 1, "one tick observer")
     expect(h.globals.addXp ~= h.originalAddXp, "addXp wrapped")
     expect(h.globals.addXpNoMultiplier ~= h.originalNoMultiplier, "no-multiplier wrapped")
     local again = source.install()
     equal(again.code, "already_installed", "repeat install is idempotent")
     equal(#h.addXpEvent.callbacks, 1, "repeat install keeps one XP observer")
-    equal(#h.tickEvent.callbacks, 1, "repeat install keeps one tick observer")
     expect(source.verifyOwnership().ok, "ownership verified")
     local status = source.status()
     expect(status.ownsAddXp and status.ownsAddXpNoMultiplier, "owns globals")
-    expect(status.ownsAddXpEvent and status.ownsTickEvent, "owns events")
-    h.globals.Events.OnTick = makeEvent()
+    expect(status.ownsAddXpEvent, "owns XP event")
+    h.globals.Events.AddXP = makeEvent()
     local lost = source.verifyOwnership()
     equal(lost.code, "ownership_lost", "event ownership loss found")
     equal(source.status().capturing, false, "capture stops after ownership loss")
@@ -322,10 +298,6 @@ do
         {
             detail = "reloadRegistry.Events.AddXP",
             apply = function(h) h.globals.Events.AddXP = makeEvent() end,
-        },
-        {
-            detail = "Events.OnTick",
-            apply = function(h) h.globals.Events.OnTick = makeEvent() end,
         },
     }
     for index = 1, #replacements do
@@ -355,7 +327,6 @@ do
     equal(reloaded, first, "fresh source chunk adopts the globals sentinel owner")
     equal(reloaded.install().code, "already_installed", "fresh source chunk adds no ownership layer")
     equal(#h.addXpEvent.callbacks, 1, "second create adds no XP observer")
-    equal(#h.tickEvent.callbacks, 1, "second create adds no tick observer")
     equal(h.globals.addXp, wrappedAddXp, "second create adds no addXp wrapper layer")
     equal(h.globals.addXpNoMultiplier, wrappedNoMultiplier, "second create adds no no-multiplier layer")
     h.globals.addXp = h.originalAddXp
@@ -495,15 +466,6 @@ do
 end
 
 do
-    local h = makeHarness({ tickEvent = { throwOnAdd = true } })
-    local source = assert(EventDerivedXpSource.create(h.dependencies))
-    equal(source.install().code, "observer_registration_ambiguous", "tick registration ambiguity")
-    equal(source.install().code, "observer_registration_ambiguous", "partial ambiguity is sticky")
-    equal(h.addXpEvent.attempts, 1, "partial registration remains bounded")
-    equal(h.tickEvent.attempts, 1, "tick registration attempted once")
-end
-
-do
     local seen = nil
     local h = makeHarness({
         prior = function(...)
@@ -525,14 +487,31 @@ end
 
 do
     local marker = {}
-    local h = makeHarness({ prior = function() error(marker) end })
-    h.createAndInstall()
-    local ok, thrown = pcall(h.globals.addXp, {}, { id = "Axe" }, 1)
+    local shouldThrow = true
+    local h = makeHarness({
+        prior = function()
+            if shouldThrow then
+                error(marker)
+            end
+            return nil, "native", 0
+        end,
+    })
+    local source = h.createAndInstall()
+    local player = {}
+    local perk = { id = "Axe" }
+    h.setPosition(player, perk, 0)
+    source.initializePlayer(player, { perk })
+    local ok, thrown = pcall(h.globals.addXpNoMultiplier, player, perk, 0)
     equal(ok, false, "wrapper rethrows")
     equal(thrown == marker, false, "Kahlua does not preserve a table error sentinel")
     equal(tostring(thrown), "Method name is null java.lang.NullPointerException",
         "Kahlua table-error limitation is exact and stable")
-    equal(h.source.status().lastCode, "prior_threw", "wrapper records the original throw path")
+    equal(source.status().lastCode, "prior_threw", "wrapper records the original throw path")
+    shouldThrow = false
+    h.emit(player, perk, 2)
+    equal(#h.awards, 1, "wrapper error leaves no route frame behind")
+    equal(h.awards[1].award.survivorCreditBase, 1,
+        "follow-up unmarked event uses its sandbox divisor")
 end
 
 do
@@ -589,12 +568,12 @@ do
     source.initializePlayer(player, { axe, sprint })
     h.emit(player, sprint, 2)
     local repeated = source.initializePlayer(player, { axe })
-    equal(repeated.detail.flushed, 1, "repeat initialization flushes older player work")
+    expect(repeated.ok, "repeat initialization has no pending work")
+    equal(repeated.detail.flushed, nil, "repeat initialization exposes no flush facts")
     equal(source.status().cursorCount, 1, "repeat initialization removes omitted cursors")
     h.emit(player, sprint, 1)
-    equal(source.status().batchCount, 0, "omitted perk must establish a new cursor")
+    equal(#h.awards, 1, "omitted perk must establish a new cursor")
     h.emit(player, sprint, 1)
-    source.flushAll()
     equal(#h.awards, 2, "omitted perk continues only after its new boundary")
 end
 
@@ -605,75 +584,17 @@ do
     local axe = { id = "Axe" }
     h.setPosition(player, axe, 0)
     source.initializePlayer(player, { axe })
-    h.emit(player, axe, 2)
-    local recursed = false
-    h.onProcess = function()
-        if not recursed then
-            recursed = true
-            h.emit(player, axe, 1)
-        end
-    end
-    source.initializePlayer(player, { axe })
-    h.onProcess = nil
-    h.emit(player, axe, 1)
-    source.flushAll()
-    equal(h.awards[2].award.actualPositionBefore, 3,
-        "repeat initialization snapshots after recursive flush XP")
-end
-
-do
-    local h = makeHarness()
-    local source = h.createAndInstall()
-    local player = {}
-    local axe = { id = "Axe" }
-    local sprint = { id = "Sprinting" }
-    h.setPosition(player, axe, 0)
-    h.setPosition(player, sprint, 0)
-    source.initializePlayer(player, { axe, sprint })
-    h.emit(player, axe, 2)
-    local recursed = false
-    h.onProcess = function()
-        if not recursed then
-            recursed = true
-            h.emit(player, sprint, 4)
-        end
-    end
-    local pending = source.initializePlayer(player, { axe })
-    equal(pending.ok, false, "cross-perk flush work defers repeat initialization")
-    equal(pending.code, "initialization_pending_work", "repeat initialization has stable pending code")
-    equal(source.status().batchCount, 1, "cross-perk handler batch remains pending")
-    equal(source.status().cursorCount, 2, "pending initialization does not replace cursors")
-    h.onProcess = nil
-    source.flushAll()
-    equal(#h.awards, 2, "cross-perk handler work is delivered without XP loss")
-    equal(h.awards[2].award.perkId, "Sprinting", "cross-perk batch retains exact identity")
-    local retried = source.initializePlayer(player, { axe })
-    expect(retried.ok, "repeat initialization succeeds after pending work flushes")
-    equal(source.status().cursorCount, 1, "successful retry replaces omitted cursors")
-end
-
-do
-    local h = makeHarness()
-    local source = h.createAndInstall()
-    local player = {}
-    local axe = { id = "Axe" }
-    h.setPosition(player, axe, 0)
-    source.initializePlayer(player, { axe })
     h.emit(player, axe, 4)
-    equal(#h.awards, 0, "positive work is batched")
-    source.flushPlayerPerk(player, "Axe")
-    equal(#h.awards, 1, "player/perk flush sends batch")
+    equal(#h.awards, 1, "standard route delivers synchronously")
     equal(h.awards[1].award.survivorCreditBase, 2, "standard route removes sandbox divisor")
     equal(h.awards[1].award.appliedDelta, 4, "event movement preserved")
-    equal(h.awards[1].award.actualPositionBefore, 0, "batch keeps first position")
-    equal(h.awards[1].award.actualPositionAfter, 4, "batch keeps latest position")
+    equal(h.awards[1].award.actualPositionBefore, 0, "event keeps exact prior position")
+    equal(h.awards[1].award.actualPositionAfter, 4, "event keeps exact observed position")
 
     h.globals.addXpNoMultiplier(player, axe, 2)
-    source.flushPlayerPerk(player, "Axe")
     equal(h.awards[2].award.survivorCreditBase, 2, "no-multiplier route uses divisor one")
 
     h.emit(player, axe, 6)
-    source.flushAll()
     equal(h.awards[3].award.survivorCreditBase, 3, "unmarked event uses sandbox divisor")
 end
 
@@ -693,19 +614,20 @@ do
     end
     h.emit(player, axe, amount, observed[1])
     h.emit(player, axe, amount, observed[2])
-    source.flushAll()
-    equal(#h.awards, 1, "binary32 events remain one positive batch")
-    equal(h.awards[1].award.appliedDelta, 0.1999969482421875,
-        "batch movement is the exact observed cumulative difference")
-    equal(h.awards[1].award.survivorCreditBase, amount,
-        "credit retains both event amounts divided by sandbox")
+    equal(#h.awards, 2, "binary32 events deliver one envelope each")
+    equal(h.awards[1].award.appliedDelta, 0.09999847412109375,
+        "first event uses exact observed binary32 movement")
+    equal(h.awards[2].award.appliedDelta, 0.09999847412109375,
+        "second event uses exact observed binary32 movement")
+    equal(h.awards[1].award.survivorCreditBase, amount / 2,
+        "each event retains its exact divided credit")
     h.arithmeticAnswer = function()
         return { ok = true, positionAfter = observed[1], moved = true }
     end
     h.emit(player, axe, -amount, observed[1])
-    equal(h.awards[2].award.appliedDelta, -0.09999847412109375,
+    equal(h.awards[3].award.appliedDelta, -0.09999847412109375,
         "signed loss uses the exact observed cumulative difference")
-    equal(h.awards[2].award.survivorCreditBase, 0,
+    equal(h.awards[3].award.survivorCreditBase, 0,
         "signed binary32 loss retains zero survivor credit")
 end
 
@@ -727,12 +649,9 @@ do
             return { ok = true, positionAfter = case.after, moved = true }
         end
         h.emit(player, axe, case.amount, case.after)
-        if case.positive then
-            equal(source.flushAll().ok, false,
-                "invalid positive movement is rejected at delivery")
-        end
         equal(#h.awards, 0, "invalid movement sign or zero never reaches handler")
-        equal(source.status().batchCount, 0, "invalid delivered movement is dropped")
+        equal(source.status().lastCode, "invalid_event_movement",
+            "invalid movement has a stable synchronous status")
     end
 end
 
@@ -760,14 +679,12 @@ do
     h.emit(player, dynamic, 2, 12)
     equal(#h.awards, 0, "first dynamic event only rebases")
     h.emit(player, dynamic, 2, 14)
-    source.flushAll()
     equal(#h.awards, 1, "next continuous dynamic event is accepted")
     equal(h.awards[1].award.actualPositionBefore, 12, "dynamic cursor starts at first observation")
 
     h.emit(player, dynamic, 2, 99)
-    equal(source.status().batchCount, 0, "mismatch flushes older work")
+    equal(#h.awards, 1, "mismatch does not create an award")
     h.emit(player, dynamic, 1, 100)
-    source.flushAll()
     equal(#h.awards, 2, "event after mismatch can proceed")
     equal(h.awards[2].award.actualPositionBefore, 99, "mismatch rebased cursor")
 end
@@ -783,10 +700,8 @@ do
     h.emit(player, oldHandle, 2)
     h.setPosition(player, newHandle, 3)
     h.emit(player, newHandle, 1, 3)
-    equal(#h.awards, 1, "handle discontinuity flushes older valid work")
-    equal(source.status().batchCount, 0, "discontinuous event not awarded")
+    equal(#h.awards, 1, "handle discontinuity preserves older delivered work")
     h.emit(player, newHandle, 1, 4)
-    source.flushAll()
     equal(#h.awards, 2, "new exact handle continues after rebase")
 end
 
@@ -801,11 +716,9 @@ do
     perk.id = "Blade"
     h.setPosition(player, perk, 3)
     h.emit(player, perk, 1, 3)
-    equal(#h.awards, 1, "ID discontinuity flushes work under the prior ID")
-    equal(h.awards[1].award.perkId, "Axe", "prior-ID batch retains its identity")
-    equal(source.status().batchCount, 0, "ID-discontinuous event is not awarded")
+    equal(#h.awards, 1, "ID discontinuity preserves prior delivered work")
+    equal(h.awards[1].award.perkId, "Axe", "prior event retains its identity")
     h.emit(player, perk, 1, 4)
-    source.flushAll()
     equal(#h.awards, 2, "same handle continues under rebased ID")
     equal(h.awards[2].award.perkId, "Blade", "rebased ID is exact")
 end
@@ -820,11 +733,9 @@ do
     h.emit(player, axe, 2)
     h.resolverFailures[axe] = true
     h.emit(player, axe, 1)
-    equal(#h.awards, 1, "resolver failure flushes cached-handle work")
-    equal(source.status().batchCount, 0, "resolver-failed event is not carried across boundary")
+    equal(#h.awards, 1, "resolver failure does not duplicate delivered work")
     h.resolverFailures[axe] = nil
     h.emit(player, axe, 1)
-    source.flushAll()
     equal(#h.awards, 2, "cached handle boundary permits later resolved continuity")
     equal(h.awards[2].award.actualPositionBefore, 3, "resolver failure rebases from current position")
 end
@@ -838,7 +749,7 @@ do
     source.initializePlayer(player, { axe })
     h.emit(player, axe, 4)
     h.emit(player, axe, -1)
-    equal(#h.awards, 2, "negative movement flushes positive then processes immediately")
+    equal(#h.awards, 2, "positive and negative movements process immediately in order")
     equal(h.awards[1].award.survivorCreditBase, 2, "positive precedes loss")
     equal(h.awards[2].award.survivorCreditBase, 0, "loss has zero survivor credit")
     equal(h.awards[2].award.appliedDelta, -1, "loss preserves signed movement")
@@ -863,9 +774,9 @@ do
     h.arithmeticAnswer = nil
     h.emit(player, axe, 1 / 0, 100000000)
     equal(h.arithmeticCalls, 2, "nonfinite amount never reaches arithmetic")
-    equal(source.status().batchCount, 0, "nonfinite amount rebases without work")
+    equal(#h.awards, 0, "nonfinite amount rebases without work")
     h.emit(player, axe, 1, math.huge)
-    equal(source.status().batchCount, 0, "nonfinite observed position fails closed")
+    equal(#h.awards, 0, "nonfinite observed position fails closed")
 end
 
 do
@@ -877,13 +788,13 @@ do
     source.initializePlayer(player, { axe })
     h.divisors[player] = { Axe = math.huge }
     h.emit(player, axe, 2)
-    equal(source.status().batchCount, 0, "nonfinite sandbox divisor fails closed")
+    equal(#h.awards, 0, "nonfinite sandbox divisor fails closed")
     h.divisors[player].Axe = 2
     h.arithmeticAnswer = function()
         return { ok = true, positionAfter = math.huge, moved = true }
     end
     h.emit(player, axe, 2)
-    equal(source.status().batchCount, 0, "nonfinite forward result fails closed")
+    equal(#h.awards, 0, "nonfinite forward result fails closed")
 end
 
 do
@@ -901,12 +812,10 @@ do
     h.emit(playerA, axe, 2)
     h.emit(playerA, sprint, 4)
     h.emit(playerB, axe, 6)
-    source.flushPlayer(playerA)
-    equal(#h.awards, 2, "player flush is isolated")
-    source.flushAll()
-    equal(#h.awards, 3, "all flush includes other player")
+    equal(#h.awards, 3, "players and perks deliver immediately")
     equal(h.awards[3].player, playerB, "exact player identity retained")
-    equal(h.awards[1].award.perkId < h.awards[2].award.perkId, true, "player flush order is stable")
+    equal(h.awards[1].award.perkId, "Axe", "first accepted event stays first")
+    equal(h.awards[2].award.perkId, "Sprinting", "second accepted event stays second")
 end
 
 do
@@ -917,55 +826,13 @@ do
     h.setPosition(player, axe, 0)
     source.initializePlayer(player, { axe })
     h.emit(player, axe, 2)
-    h.nowValue = 999
-    h.tickEvent.fire()
-    equal(#h.awards, 0, "batch stays before deadline")
-    h.nowValue = 1000
-    h.tickEvent.fire()
-    equal(#h.awards, 1, "batch flushes at deadline")
-
-    h.emit(player, axe, 2)
+    equal(h.awards[1].award.survivorCreditBase, 1, "initial divisor is applied immediately")
     local divisors = {}
     h.divisors[player] = divisors
     divisors.Axe = 4
     h.emit(player, axe, 4)
-    equal(#h.awards, 2, "divisor boundary flushes older work")
-    source.flushAll()
-    equal(h.awards[3].award.survivorCreditBase, 1, "new divisor is used")
-end
-
-do
-    local h = makeHarness()
-    h.createAndInstall()
-    h.tickEvent.fire()
-    equal(h.clockCalls, 0, "empty tick returns before reading the clock")
-end
-
-do
-    local h = makeHarness()
-    local source = h.createAndInstall()
-    local player = {}
-    local axe = { id = "Axe" }
-    h.setPosition(player, axe, 0)
-    source.initializePlayer(player, { axe })
-    h.clockFail = true
-    h.emit(player, axe, 2)
-    equal(#h.awards, 1, "clock failure processes positive work immediately")
-    equal(source.status().batchCount, 0, "clock failure leaves no timed work")
-end
-
-do
-    local h = makeHarness({ nowValue = 100 })
-    local source = h.createAndInstall()
-    local player = {}
-    local axe = { id = "Axe" }
-    h.setPosition(player, axe, 0)
-    source.initializePlayer(player, { axe })
-    h.emit(player, axe, 2)
-    h.nowValue = 90
-    h.emit(player, axe, 2)
-    equal(#h.awards, 2, "clock regression flushes old and processes current")
-    equal(source.status().batchCount, 0, "regression leaves no timed work")
+    equal(#h.awards, 2, "divisor changes do not delay either event")
+    equal(h.awards[2].award.survivorCreditBase, 1, "new divisor is used")
 end
 
 do
@@ -980,7 +847,6 @@ do
     equal(#h.awards, 0, "capture-time mutation scope suppresses event")
     h.internal[player].Axe = false
     h.emit(player, axe, 2)
-    source.flushAll()
     equal(#h.awards, 1, "continuous event after internal rebase proceeds")
     equal(h.awards[1].award.actualPositionBefore, 3, "internal event rebased cursor")
 end
@@ -1000,11 +866,9 @@ do
         end
     end
     h.emit(player, axe, 2)
-    source.flushAll()
     equal(#h.awards, 1, "handler-scoped recursion is suppressed")
     h.onProcess = nil
     h.emit(player, axe, 1)
-    source.flushAll()
     equal(#h.awards, 2, "cursor follows scoped recursion rebase")
 end
 
@@ -1016,21 +880,12 @@ do
     h.setPosition(player, axe, 0)
     source.initializePlayer(player, { axe })
     h.emit(player, axe, 2)
-    local recursed = false
-    h.onProcess = function()
-        if not recursed then
-            recursed = true
-            h.emit(player, axe, 1)
-        end
-    end
     h.emit(player, axe, 1, 99)
-    equal(#h.awards, 1, "failure boundary flushes only the older batch")
-    h.onProcess = nil
+    equal(#h.awards, 1, "discontinuity leaves the prior event delivered exactly once")
     h.emit(player, axe, 1)
-    source.flushAll()
     equal(#h.awards, 2, "post-boundary event remains continuous")
-    equal(h.awards[2].award.actualPositionBefore, 100,
-        "post-flush read preserves the recursive XP cursor")
+    equal(h.awards[2].award.actualPositionBefore, 99,
+        "post-boundary cursor uses the observed rebase")
 end
 
 do
@@ -1040,15 +895,16 @@ do
     local axe = { id = "Axe" }
     h.setPosition(player, axe, 0)
     source.initializePlayer(player, { axe })
-    for _ = 1, 500 do
+    for index = 1, 500 do
         h.emit(player, axe, 1)
+        local award = h.awards[index].award
+        equal(award.actualPositionBefore, index - 1, "stress prior position is sequential")
+        equal(award.actualPositionAfter, index, "stress observed position is sequential")
+        equal(award.survivorCreditBase, 0.5, "stress credit is not sampled")
     end
     equal(h.arithmeticCalls, 500, "bounded stream validates once per event")
-    equal(source.status().batchCount, 1, "bounded stream stays one batch")
-    source.flushAll()
-    equal(#h.awards, 1, "bounded stream coalesces")
-    equal(h.awards[1].award.survivorCreditBase, 250, "bounded stream credit exact")
-    equal(h.awards[1].award.actualPositionAfter, 500, "bounded stream position exact")
+    equal(#h.awards, 500, "bounded stream delivers every event immediately")
+    equal(source.flushAll().detail.flushed, 0, "bounded stream leaves zero pending work")
 end
 
 do
@@ -1058,16 +914,25 @@ do
     local axe = { id = "Axe" }
     h.setPosition(player, axe, 0)
     source.initializePlayer(player, { axe })
-    h.emit(player, axe, 2)
     h.handlerFail = true
-    equal(source.flushAll().ok, false, "handler failure reported")
-    equal(source.status().batchCount, 0, "failed batch is dropped")
-    h.handlerFail = false
-    equal(source.flushAll().detail.flushed, 0, "failed batch is not retried")
     h.emit(player, axe, 2)
+    equal(source.status().lastCode, "handler_failed", "handler failure is reported synchronously")
+    h.handlerFail = false
+    equal(source.flushAll().detail.flushed, 0, "failed event is not retried")
     h.handlerThrow = true
-    equal(source.flushAll().code, "all_flush_failed", "handler throw is reported")
-    equal(source.status().batchCount, 0, "thrown handler batch is dropped")
+    h.emit(player, axe, 2)
+    equal(source.status().lastCode, "handler_threw", "handler throw is reported synchronously")
+    h.handlerThrow = false
+    equal(source.flushAll().detail.flushed, 0, "thrown event is not retried")
+    equal(#h.awards, 2, "each failed handler is attempted only for its own event")
+    h.emit(player, axe, 2)
+    equal(#h.awards, 3, "successful event follows failed handlers")
+    equal(h.awards[3].award.actualPositionBefore, 4,
+        "failed handlers still advance the source cursor")
+    equal(h.awards[3].award.actualPositionAfter, 6,
+        "follow-up event preserves exact cursor continuity")
+    equal(source.status().lastCode, "award_processed",
+        "handler scope is cleaned after failures")
 end
 
 do
@@ -1075,15 +940,24 @@ do
     local source = h.createAndInstall()
     local player = {}
     local axe = { id = "Axe" }
-    h.setPosition(player, axe, 10)
+    h.setPosition(player, axe, 1)
     source.initializePlayer(player, { axe })
     h.emit(player, axe, 2)
-    h.handlerFail = true
-    h.emit(player, axe, -1)
-    equal(#h.awards, 2, "signed boundary attempts older positive and loss in order")
-    equal(source.status().batchCount, 0, "signed-boundary failures drop both attempts")
-    h.handlerFail = false
-    equal(source.flushAll().detail.flushed, 0, "signed-boundary failures are not retried")
+    equal(#h.awards, 1, "positive event is delivered before lifecycle boundary")
+    local byPerk = source.flushPlayerPerk(player, "Axe")
+    local unconditionalByPerk = source.flushPlayerPerk(nil, nil)
+    local byPlayer = source.flushPlayer(player)
+    local all = source.flushAll()
+    expect(byPerk.ok and unconditionalByPerk.ok and byPlayer.ok and all.ok,
+        "all flush compatibility surfaces succeed")
+    equal(byPerk.detail.flushed, 0, "perk flush has zero work")
+    equal(unconditionalByPerk.detail.flushed, 0, "perk flush is unconditionally inert")
+    equal(byPlayer.detail.flushed, 0, "player flush has zero work")
+    equal(all.detail.flushed, 0, "global flush has zero work")
+    equal(#h.awards, 1, "save or disconnect boundary cannot redispatch work")
+    local status = source.status()
+    equal(status.batchCount, nil, "status exposes no batch facts")
+    equal(status.ownsTickEvent, nil, "status exposes no tick ownership")
 end
 
 do
@@ -1095,21 +969,12 @@ do
     source.initializePlayer(player, { axe })
     h.emit(player, axe, 2)
     h.setPosition(player, axe, 20)
-    local recursed = false
-    h.onProcess = function()
-        if not recursed then
-            recursed = true
-            h.emit(player, axe, 1)
-        end
-    end
     local rebased = source.rebasePlayerPerk(player, axe)
     expect(rebased.ok, "explicit rebase succeeds")
-    equal(#h.awards, 1, "explicit rebase flushes older work")
-    h.onProcess = nil
+    equal(#h.awards, 1, "explicit rebase has no deferred work")
     h.emit(player, axe, 2)
-    source.flushAll()
-    equal(h.awards[2].award.actualPositionBefore, 21,
-        "explicit rebase snapshots after recursive flush XP")
+    equal(h.awards[2].award.actualPositionBefore, 20,
+        "explicit rebase snapshots the current position")
 end
 
 return assertions
