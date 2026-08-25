@@ -61,3 +61,6 @@ steam_appid.txt
 /console.txt
 /coop-console.txt
 /server-console.txt
+
+# Deterministic installed-Kahlua test build output
+tests/.build/
