@@ -35,6 +35,9 @@ local removedSurvivor = validState(); removedSurvivor.survivor.earned = 2; bad(r
 local removedPerk = validState(); removedPerk.perks.Axe.capabilityEpoch = 0; bad(removedPerk, "invalid_perk")
 local removedCarry = validState(); removedCarry.perks.Axe.fractionalCarry = 0; bad(removedCarry, "invalid_perk")
 local removedEpoch = validState(); removedEpoch.perks.Axe.postMaxEpoch = 0; bad(removedEpoch, "invalid_perk")
+local schemaString = validState(); schemaString.schemaVersion = "0"; bad(schemaString, "invalid_state")
+local schemaFraction = validState(); schemaFraction.schemaVersion = 0.5; bad(schemaFraction, "invalid_state")
+local schemaNegative = validState(); schemaNegative.schemaVersion = -1; bad(schemaNegative, "invalid_state")
 local newer = validState(); newer.schemaVersion = 2; local newerResult = C.decode(newer); expect(not newerResult.ok and newerResult.code == "newer_schema" and newer.schemaVersion == 2, "newer schema preserves raw")
 local legacy = validState(); legacy.schemaVersion = 0; legacy.old = true; local migrated = C.decode(legacy, { schemaMigrations = { [0] = function(raw) raw.schemaVersion = 1; raw.old = nil; return raw end } }); expect(migrated.ok, "consecutive migration")
 bad(legacy, "missing_schema_migration"); local skip = C.decode(legacy, { schemaMigrations = { [0] = function(raw) raw.schemaVersion = 2; return raw end } }); expect(not skip.ok and skip.code == "schema_migration_not_consecutive", "skip migration")
@@ -44,6 +47,8 @@ expect(C.decode(validState(), { loadedPerks = loaded }).ok, "matching active per
 local mismatch = { Axe = { adapterId = "adapter", adapterVersion = 2, curveFingerprint = "curve-a", effectiveMaximum = 10 } }
 local quarantine = C.decode(validState(), { loadedPerks = mismatch }); expect(quarantine.ok and quarantine.state.perks.Axe == nil and quarantine.state.orphanedPerks.Axe ~= nil, "changed active quarantines")
 local changed = C.decode(validState(), { loadedPerks = mismatch, perkMigrator = function(id, record, spec) record.adapterVersion = spec.adapterVersion; return record end }); expect(changed.ok and changed.state.perks.Axe.adapterVersion == 2, "changed active migration")
+local failedActiveRaw = validState(); local failedActive = C.decode(failedActiveRaw, { loadedPerks = mismatch, perkMigrator = function() error("test migration error") end }); expect(not failedActive.ok and failedActive.code == "perk_migration_failed" and failedActiveRaw.perks.Axe.adapterVersion == 1 and failedActiveRaw.orphanedPerks.Axe == nil, "failed active migration preserves input")
+local invalidActiveRaw = validState(); local invalidActive = C.decode(invalidActiveRaw, { loadedPerks = mismatch, perkMigrator = function() return {} end }); expect(not invalidActive.ok and invalidActive.code == "perk_migration_failed" and invalidActiveRaw.perks.Axe.adapterId == "adapter" and invalidActiveRaw.orphanedPerks.Axe == nil, "invalid active migration preserves input")
 local missing = C.decode(validState(), { loadedPerks = {} }); expect(missing.ok and missing.state.perks.Axe == nil and missing.state.orphanedPerks.Axe ~= nil, "missing active becomes orphan")
 local missingOrphan = C.decode(orphanedState(), { loadedPerks = {} }); expect(missingOrphan.ok and missingOrphan.state.perks.Axe == nil and missingOrphan.state.orphanedPerks.Axe ~= nil, "missing orphan remains quarantined")
 local automatic = C.decode(orphanedState(), { loadedPerks = loaded }); expect(automatic.ok and automatic.state.perks.Axe ~= nil and automatic.state.orphanedPerks.Axe == nil, "unchanged orphan auto restore")

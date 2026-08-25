@@ -202,8 +202,8 @@ local function applyCompatibility(state, options)
                 if recordError or specError then return nil, failure("perk_migration_failed", id) end
                 local ok, changed = pcall(migration, id, recordCopy, specCopy)
                 if not ok or changed == nil then return nil, failure("perk_migration_failed", id) end
-                local checked, err = validatePerk(changed)
-                if not checked then return nil, err end
+                local checked = validatePerk(changed)
+                if not checked then return nil, failure("perk_migration_failed", id) end
                 if not sameIdentity(checked, spec) then return nil, failure("perk_migration_failed", id) end
                 migrated[id] = checked
             end
@@ -221,15 +221,15 @@ local function applyCompatibility(state, options)
             else
                 local migration = options and options.perkMigrator
                 if type(migration) == "function" then
-                local recordCopy, recordError = cloneValue(record)
-                local specCopy, specError = cloneValue(spec)
-                if recordError or specError then return nil, failure("perk_migration_failed", id) end
-                local ok, restored = pcall(migration, id, recordCopy, specCopy)
-                if not ok or restored == nil then return nil, failure("perk_migration_failed", id) end
-                local checked = validatePerk(restored)
-                if not checked or not sameIdentity(checked, spec) then return nil, failure("perk_migration_failed", id) end
-                state.orphanedPerks[id] = nil
-                migrated[id] = checked
+                    local recordCopy, recordError = cloneValue(record)
+                    local specCopy, specError = cloneValue(spec)
+                    if recordError or specError then return nil, failure("perk_migration_failed", id) end
+                    local ok, restored = pcall(migration, id, recordCopy, specCopy)
+                    if not ok or restored == nil then return nil, failure("perk_migration_failed", id) end
+                    local checked = validatePerk(restored)
+                    if not checked or not sameIdentity(checked, spec) then return nil, failure("perk_migration_failed", id) end
+                    state.orphanedPerks[id] = nil
+                    migrated[id] = checked
                 end
             end
         end
@@ -268,7 +268,8 @@ function Codec.decode(raw, options)
     local cloned, cloneError = cloneChecked(raw)
     if not cloned then return cloneError end
     local schema = cloned.schemaVersion
-    if type(schema) ~= "number" then return failure("unversioned_state", "missing_version", raw) end
+    if schema == nil then return failure("unversioned_state", "missing_version", raw) end
+    if not isNonNegativeInteger(schema) then return failure("invalid_state", "schemaVersion", raw) end
     if schema > Codec.SCHEMA_VERSION then return failure("newer_schema", schema, raw) end
     while schema < Codec.SCHEMA_VERSION do
         local migrations = options and options.schemaMigrations
