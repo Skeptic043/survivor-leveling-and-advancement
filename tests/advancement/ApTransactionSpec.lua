@@ -1,0 +1,676 @@
+local assertions = 0
+
+local function fail(message)
+    error(message, 0)
+end
+
+local function assertTrue(value, message)
+    assertions = assertions + 1
+    if value ~= true then fail(message or "expected true") end
+end
+
+local function assertFalse(value, message)
+    assertions = assertions + 1
+    if value ~= false then fail(message or "expected false") end
+end
+
+local function assertEqual(actual, expected, message)
+    assertions = assertions + 1
+    if actual ~= expected then
+        fail((message or "values differ") .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+    end
+end
+
+local function clone(value, seen)
+    if type(value) ~= "table" then return value end
+    seen = seen or {}
+    if seen[value] then fail("cycle in fixture") end
+    seen[value] = true
+    local copy = {}
+    for key, child in pairs(value) do copy[clone(key, seen)] = clone(child, seen) end
+    seen[value] = nil
+    return copy
+end
+
+local function same(left, right, seen)
+    if type(left) ~= type(right) then return false end
+    if type(left) ~= "table" then return left == right end
+    seen = seen or {}
+    if seen[left] == right then return true end
+    seen[left] = right
+    for key, value in pairs(left) do
+        if not same(value, right[key], seen) then return false end
+    end
+    for key in pairs(right) do
+        if left[key] == nil then return false end
+    end
+    return true
+end
+
+local function assertSame(actual, expected, message)
+    assertions = assertions + 1
+    if not same(actual, expected) then fail(message or "tables differ") end
+end
+
+local function assertCode(result, code)
+    assertFalse(result.ok, "expected failure " .. code)
+    assertEqual(result.code, code, "failure code")
+    assertEqual(result.state, nil, "failure must not expose state")
+end
+
+local function newState(level, spent)
+    return {
+        schemaVersion = 1,
+        revision = 0,
+        survivor = { level = level or 3, xpIntoLevel = 0, spent = spent or 0 },
+        perks = {},
+        orphanedPerks = {},
+        inFlightAdvancement = nil,
+    }
+end
+
+local function newPerk(natural, high, targets, perkId)
+    perkId = perkId or "Axe"
+    return {
+        adapterId = "fake.adapter",
+        adapterVersion = 1,
+        curveFingerprint = "curve_" .. perkId,
+        effectiveMaximum = 3,
+        naturalPosition = natural or 0,
+        highWaterPosition = high or 0,
+        activeTargets = targets or {},
+        postMaxFullRateUsed = 0,
+    }
+end
+
+local function newPlayer(perkId, level, position)
+    local player = { skills = {}, behavior = {} }
+    player.skills[perkId or "Axe"] = { level = level or 0, position = position or 0 }
+    return player
+end
+
+local function addSkill(player, perkId, level, position)
+    player.skills[perkId] = { level = level or 0, position = position or 0 }
+end
+
+local function makeStore(initial, events)
+    local store = {
+        current = clone(initial),
+        loads = 0,
+        saves = 0,
+        failSaveAt = {},
+        returnAlias = false,
+        receivedOptions = nil,
+    }
+    function store.load(player, options)
+        store.loads = store.loads + 1
+        store.receivedOptions = options
+        if store.failLoad then return { ok = false, code = "fake_load", detail = "failed" } end
+        if store.returnAlias then return { ok = true, state = store.current } end
+        return { ok = true, state = clone(store.current) }
+    end
+    function store.save(player, state)
+        store.saves = store.saves + 1
+        if state.inFlightAdvancement then
+            store.scopeAtReservation = MutationScope.isActive(player, state.inFlightAdvancement.perkId)
+        else
+            store.scopeAtCommit = MutationScope.isActive(player, "Axe")
+        end
+        if store.failSaveAt[store.saves] then
+            return { ok = false, code = "fake_save", detail = "failed" }
+        end
+        store.current = clone(state)
+        if events then
+            if state.inFlightAdvancement then
+                events[#events + 1] = "reservation"
+            else
+                events[#events + 1] = "commit"
+            end
+        end
+        return { ok = true }
+    end
+    return store
+end
+
+local function makeRuntime(events)
+    local adapter = { ensureCalls = 0, scopeSeen = false }
+    local handles = {}
+    local thresholds = { [0] = 0, 100, 250, 450 }
+    local function handleFor(perkId)
+        if handles[perkId] == nil then
+            handles[perkId] = {
+                perkId = perkId,
+                adapterId = "fake.adapter",
+                adapterVersion = 1,
+                curveFingerprint = "curve_" .. perkId,
+                effectiveMaximum = 3,
+            }
+        end
+        return handles[perkId]
+    end
+    local function derivedLevel(position)
+        local level = 0
+        for candidate = 1, 3 do
+            if position >= thresholds[candidate] then level = candidate end
+        end
+        return level
+    end
+    function adapter.describe(handle)
+        return {
+            ok = true,
+            adapterId = handle.adapterId,
+            adapterVersion = handle.adapterVersion,
+            curveFingerprint = handle.curveFingerprint,
+            effectiveMaximum = handle.effectiveMaximum,
+        }
+    end
+    function adapter.inspect(handle, player)
+        local skill = player.skills[handle.perkId]
+        if not skill then return { ok = false, code = "missing_skill", detail = handle.perkId } end
+        local derived = derivedLevel(skill.position)
+        local nextLevel = nil
+        local nextPosition = nil
+        if skill.level < handle.effectiveMaximum then
+            nextLevel = skill.level + 1
+            nextPosition = thresholds[nextLevel]
+        end
+        local alignment = "aligned"
+        if skill.level < derived then alignment = "xp-ahead" elseif skill.level > derived then alignment = "level-ahead" end
+        return {
+            ok = true,
+            adapterId = handle.adapterId,
+            adapterVersion = handle.adapterVersion,
+            curveFingerprint = handle.curveFingerprint,
+            effectiveMaximum = handle.effectiveMaximum,
+            storedLevel = skill.level,
+            actualPosition = skill.position,
+            nextTargetLevel = nextLevel,
+            nextTargetPosition = nextPosition,
+            levelAligned = skill.level == derived,
+            alignment = alignment,
+        }
+    end
+    function adapter.ensureTarget(handle, player, targetLevel, targetPosition)
+        adapter.ensureCalls = adapter.ensureCalls + 1
+        adapter.scopeSeen = adapter.scopeSeen or MutationScope.isActive(player, handle.perkId)
+        if events then events[#events + 1] = "engine" end
+        local skill = player.skills[handle.perkId]
+        local behavior = player.behavior[handle.perkId] or {}
+        if behavior.failNoWrite then
+            return { ok = false, code = "fake_ensure", detail = "no_write", xpWriteInvoked = false, levelWriteInvoked = false }
+        end
+        local xpWrite = false
+        local levelWrite = false
+        if skill.position < targetPosition then
+            skill.position = targetPosition
+            xpWrite = true
+            if behavior.throwAfterXp then error("interrupted after XP") end
+            if behavior.failAfterXp then
+                return { ok = false, code = "fake_ensure", detail = "after_xp", xpWriteInvoked = true, levelWriteInvoked = false }
+            end
+        end
+        if skill.level < targetLevel then
+            skill.level = targetLevel
+            levelWrite = true
+        end
+        return {
+            ok = true,
+            xpWriteInvoked = xpWrite,
+            levelWriteInvoked = levelWrite,
+            storedLevel = skill.level,
+            actualPosition = skill.position,
+        }
+    end
+    local resolver = {
+        loadOptions = { loadedPerks = { marker = true } },
+    }
+    function resolver.resolve(perkId)
+        if perkId == "Unknown" then return { ok = false, code = "unsupported", detail = perkId } end
+        return { ok = true, adapter = adapter, handle = handleFor(perkId) }
+    end
+    return adapter, resolver, handles
+end
+
+local function dependenciesFor(store, resolver)
+    return {
+        NaturalLedger = NaturalLedger,
+        SurvivorEconomy = SurvivorEconomy,
+        Allotment = Allotment,
+        MutationScope = MutationScope,
+        store = store,
+        ActualObservation = ActualObservation,
+        resolver = resolver,
+    }
+end
+
+local function createService(store, adapter, resolver)
+    local created = ApTransaction.create(dependenciesFor(store, resolver))
+    assertTrue(created.ok, "service creation")
+    return created.service
+end
+
+local globalThree = { mode = "Global", globalLimit = 3 }
+
+-- Volatile observation semantics and validation.
+do
+    local player = {}
+    assertCode(ActualObservation.get(nil, "Axe"), "invalid_observation")
+    assertCode(ActualObservation.set(player, "bad id", 1), "invalid_observation")
+    assertCode(ActualObservation.set(player, "Axe", -1), "invalid_observation")
+    local missing = ActualObservation.get(player, "Axe")
+    assertTrue(missing.ok)
+    assertFalse(missing.present)
+    assertTrue(ActualObservation.set(player, "Axe", 12.5).ok)
+    local present = ActualObservation.get(player, "Axe")
+    assertTrue(present.present)
+    assertEqual(present.position, 12.5)
+    assertTrue(ActualObservation.clearPlayer(player).ok)
+    assertFalse(ActualObservation.get(player, "Axe").present)
+end
+
+-- Dependency failures are explicit.
+do
+    assertCode(ApTransaction.create({}), "invalid_dependencies")
+    local store = makeStore(newState(3, 0))
+    local adapter, resolver = makeRuntime()
+    local functionResolver = dependenciesFor(store, resolver)
+    functionResolver.resolver = function() return { ok = true, adapter = adapter, handle = {} } end
+    assertCode(ApTransaction.create(functionResolver), "invalid_dependencies")
+    local callableOptions = dependenciesFor(store, resolver)
+    callableOptions.resolver = { resolve = resolver.resolve, loadOptions = function() return {} end }
+    assertCode(ApTransaction.create(callableOptions), "invalid_dependencies")
+end
+do
+    local store = makeStore(newState(3, 0))
+    local adapter, resolver = makeRuntime()
+    local exact = resolver.resolve("Axe")
+    local multiReturnResolver = {}
+    function multiReturnResolver.resolve(perkId) return exact.adapter, exact.handle end
+    local created = ApTransaction.create(dependenciesFor(store, multiReturnResolver))
+    assertTrue(created.ok)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(created.service.spend(player, { perkId = "Axe", requestId = "multi_return", expectedRevision = 0 }, globalThree), "resolver_failed")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+end
+
+-- Fresh bootstrap, reservation/engine/commit order, AP effects, and scope cleanup.
+do
+    local events = {}
+    local state = newState(3, 0)
+    local store = makeStore(state, events)
+    local adapter, resolver = makeRuntime(events)
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    local request = { perkId = "Axe", requestId = "fresh_one", expectedRevision = 0 }
+    local requestBefore = clone(request)
+    local configBefore = clone(globalThree)
+    local result = service.spend(player, request, globalThree)
+    assertTrue(result.ok)
+    assertEqual(result.requestId, "fresh_one")
+    assertEqual(result.revision, 1)
+    assertEqual(result.spent, 1)
+    assertEqual(result.availableAp, 2)
+    assertTrue(result.addedTarget)
+    assertTrue(result.xpWriteInvoked)
+    assertTrue(result.levelWriteInvoked)
+    assertFalse(result.recovered)
+    assertSame(events, { "reservation", "engine", "commit" }, "atomic order")
+    assertTrue(store.scopeAtReservation, "scope must precede reservation save")
+    assertFalse(store.scopeAtCommit, "scope must finish before commit save")
+    assertTrue(adapter.scopeSeen, "engine must run inside scope")
+    assertFalse(MutationScope.isActive(player, "Axe"), "scope must be cleaned")
+    assertEqual(player.skills.Axe.level, 1)
+    assertEqual(player.skills.Axe.position, 100)
+    assertEqual(store.current.revision, 1)
+    assertEqual(store.current.survivor.spent, 1)
+    assertEqual(store.current.inFlightAdvancement, nil)
+    assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "fresh_one")
+    assertEqual(store.current.perks.Axe.naturalPosition, 0)
+    assertEqual(store.current.perks.Axe.highWaterPosition, 0)
+    assertEqual(ActualObservation.get(player, "Axe").position, 100)
+    assertSame(request, requestBefore, "request immutable")
+    assertSame(globalThree, configBefore, "config immutable")
+    assertSame(store.receivedOptions, resolver.loadOptions, "resolver options reach load")
+end
+
+-- Malformed, forged, unsupported, stale, and rejected fresh requests do not persist bootstrap state.
+do
+    local cases = {
+        { request = { perkId = "Axe", requestId = "bad", expectedRevision = 0, playerId = "forged" }, code = "invalid_request" },
+        { request = { perkId = "bad id", requestId = "bad", expectedRevision = 0 }, code = "invalid_request" },
+        { request = { perkId = "Unknown", requestId = "bad", expectedRevision = 0 }, code = "resolver_failed" },
+        { request = { perkId = "Axe", requestId = "stale", expectedRevision = 2 }, code = "stale_revision" },
+    }
+    for index = 1, #cases do
+        local store = makeStore(newState(3, 0))
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver)
+        local player = newPlayer("Axe", 0, 0)
+        local result = service.spend(player, cases[index].request, globalThree)
+        assertCode(result, cases[index].code)
+        assertEqual(store.saves, 0, "rejection save count")
+        assertEqual(store.current.perks.Axe, nil, "no rejected bootstrap")
+        assertEqual(adapter.ensureCalls, 0, "no rejected engine write")
+    end
+end
+
+-- No AP, red recovery, maximum, and adapter misalignment all fail before engine mutation.
+do
+    local scenarios = {
+        { code = "no_ap", state = newState(1, 1), level = 0, position = 0 },
+        { code = "red_recovery", state = newState(2, 0), level = 0, position = 50, natural = 50, high = 100 },
+        { code = "at_maximum", state = newState(2, 0), level = 3, position = 450 },
+        { code = "misaligned_progression", state = newState(2, 0), level = 0, position = 100 },
+    }
+    for index = 1, #scenarios do
+        local item = scenarios[index]
+        if item.natural then item.state.perks.Axe = newPerk(item.natural, item.high) end
+        local store = makeStore(item.state)
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver)
+        local player = newPlayer("Axe", item.level, item.position)
+        local result = service.spend(player, { perkId = "Axe", requestId = "blocked_" .. index, expectedRevision = 0 }, globalThree)
+        assertCode(result, item.code)
+        assertEqual(adapter.ensureCalls, 0)
+    end
+end
+
+-- Adapter identity changes quarantine an existing perk.
+do
+    local state = newState(2, 0)
+    state.perks.Axe = newPerk(0, 0)
+    state.perks.Axe.curveFingerprint = "old_curve"
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "identity", expectedRevision = 0 }, globalThree), "perk_quarantined")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+end
+
+-- Global, PerSkill, Free, invalid configuration, and exact-reboost bypass paths.
+do
+    local state = newState(3, 0)
+    state.perks.Spear = newPerk(0, 0, { { targetId = "spear_one", targetLevel = 1, targetPosition = 100 } }, "Spear")
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    addSkill(player, "Spear", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "global_full", expectedRevision = 0 }, { mode = "Global", globalLimit = 1 }), "allotment_rejected")
+    assertEqual(adapter.ensureCalls, 0)
+end
+do
+    local store = makeStore(newState(3, 0))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "per_zero", expectedRevision = 0 }, { mode = "PerSkill", perSkillDefault = 0 }), "allotment_rejected")
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "invalid_allotment", expectedRevision = 0 }, { mode = "Bogus" }), "allotment_invalid")
+    local allowed = service.spend(player, { perkId = "Axe", requestId = "per_override", expectedRevision = 0 }, { mode = "PerSkill", perSkillDefault = 0, perSkillOverrides = { Axe = 1 } })
+    assertTrue(allowed.ok)
+end
+do
+    local store = makeStore(newState(3, 0))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertTrue(service.spend(player, { perkId = "Axe", requestId = "free_one", expectedRevision = 0 }, { mode = "Free" }).ok)
+end
+do
+    local state = newState(2, 1)
+    state.perks.Axe = newPerk(0, 0, { { targetId = "original_target", targetLevel = 1, targetPosition = 100 } })
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    local result = service.spend(player, { perkId = "Axe", requestId = "reboost", expectedRevision = 0 }, { mode = "Global", globalLimit = 0 })
+    assertTrue(result.ok)
+    assertFalse(result.addedTarget)
+    assertEqual(result.spent, 2)
+    assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "original_target")
+end
+
+-- Unexplained positive progress clears targets without reward/revision; negative progress creates red recovery.
+do
+    local state = newState(3, 0)
+    state.survivor.xpIntoLevel = 77
+    state.perks.Axe = newPerk(0, 0, { { targetId = "natural_clear", targetLevel = 1, targetPosition = 100 } })
+    state.perks.Axe.postMaxFullRateUsed = 12
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    ActualObservation.set(player, "Axe", 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "after_external", expectedRevision = 9 }, globalThree), "stale_revision")
+    assertEqual(store.saves, 1)
+    assertEqual(store.current.revision, 0)
+    assertEqual(store.current.survivor.spent, 0)
+    assertEqual(store.current.survivor.xpIntoLevel, 77)
+    assertEqual(store.current.perks.Axe.postMaxFullRateUsed, 12)
+    assertEqual(#store.current.perks.Axe.activeTargets, 0)
+    assertEqual(store.current.perks.Axe.naturalPosition, 100)
+    assertEqual(store.current.perks.Axe.highWaterPosition, 100)
+    assertEqual(adapter.ensureCalls, 0)
+end
+do
+    local state = newState(3, 0)
+    state.perks.Axe = newPerk(100, 100)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 50)
+    ActualObservation.set(player, "Axe", 100)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "after_loss", expectedRevision = 0 }, globalThree), "red_recovery")
+    assertEqual(store.current.perks.Axe.naturalPosition, 50)
+    assertEqual(store.current.perks.Axe.highWaterPosition, 100)
+    assertEqual(store.current.revision, 0)
+    assertEqual(adapter.ensureCalls, 0)
+end
+
+-- Aliased state returned by a fake store remains untouched on rejection.
+do
+    local store = makeStore(newState(3, 0))
+    store.returnAlias = true
+    local before = clone(store.current)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "alias_stale", expectedRevision = 3 }, globalThree), "stale_revision")
+    assertSame(store.current, before, "load alias immutable")
+end
+
+-- Load, reservation, scope, and commit failures preserve the correct boundary.
+do
+    local store = makeStore(newState(3, 0))
+    store.failLoad = true
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "load_fail", expectedRevision = 0 }, globalThree), "store_load_failed")
+    assertEqual(adapter.ensureCalls, 0)
+end
+do
+    local store = makeStore(newState(3, 0))
+    store.failSaveAt[1] = true
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "reserve_fail", expectedRevision = 0 }, globalThree), "reservation_save_failed")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.current.inFlightAdvancement, nil)
+    assertTrue(store.scopeAtReservation, "reservation failure occurs inside acquired scope")
+    assertFalse(MutationScope.isActive(player, "Axe"), "reservation failure cleans scope")
+end
+do
+    local store = makeStore(newState(3, 0))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    local held = MutationScope.begin(player, "Axe")
+    assertTrue(held.ok)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "scope_fail", expectedRevision = 0 }, globalThree), "scope_begin_failed")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0, "scope collision must precede reservation write")
+    assertEqual(store.current.inFlightAdvancement, nil)
+    assertTrue(MutationScope.finish(held.handle).ok)
+end
+do
+    local store = makeStore(newState(3, 0))
+    store.failSaveAt[2] = true
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "commit_fail", expectedRevision = 0 }, globalThree), "commit_save_failed")
+    assertEqual(player.skills.Axe.level, 1)
+    assertEqual(player.skills.Axe.position, 100)
+    assertEqual(store.current.inFlightAdvancement.requestId, "commit_fail")
+    assertEqual(store.current.survivor.spent, 0)
+    assertEqual(store.current.revision, 0)
+    assertFalse(MutationScope.isActive(player, "Axe"))
+end
+
+local function reservationState(options)
+    options = options or {}
+    local state = newState(3, options.committed and 1 or 0)
+    state.revision = options.committed and 1 or 0
+    state.perks.Axe = newPerk(options.prePosition or 0, options.prePosition or 0, options.targets or {})
+    state.inFlightAdvancement = {
+        requestId = options.requestId or "recover_one",
+        perkId = "Axe",
+        preRevision = 0,
+        preSpent = 0,
+        preLevel = options.preLevel or 0,
+        prePosition = options.prePosition or 0,
+        targetLevel = options.targetLevel or 1,
+        targetPosition = options.targetPosition or 100,
+        adapterId = "fake.adapter",
+        adapterVersion = 1,
+        curveFingerprint = options.fingerprint or "curve_Axe",
+        effectiveMaximum = 3,
+    }
+    return state
+end
+
+-- XP-only interruption leaves a recoverable reservation; recovery completes once and cleans scope.
+do
+    local store = makeStore(newState(3, 0))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    player.behavior.Axe = { failAfterXp = true }
+    local failed = service.spend(player, { perkId = "Axe", requestId = "xp_only", expectedRevision = 0 }, globalThree)
+    assertCode(failed, "engine_mutation_failed")
+    assertEqual(player.skills.Axe.level, 0)
+    assertEqual(player.skills.Axe.position, 100)
+    assertEqual(store.current.inFlightAdvancement.requestId, "xp_only")
+    assertFalse(MutationScope.isActive(player, "Axe"), "error scope cleanup")
+    assertEqual(ActualObservation.get(player, "Axe").position, 100)
+    player.behavior.Axe = nil
+    local recovered = service.recover(player)
+    assertTrue(recovered.ok)
+    assertTrue(recovered.recovered)
+    assertFalse(recovered.xpWriteInvoked)
+    assertTrue(recovered.levelWriteInvoked)
+    assertEqual(player.skills.Axe.level, 1)
+    assertEqual(store.current.inFlightAdvancement, nil)
+    assertEqual(store.current.revision, 1)
+    assertEqual(store.current.survivor.spent, 1)
+    assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertFalse(MutationScope.isActive(player, "Axe"))
+end
+
+-- Already-complete and committed-but-not-cleared reservations normalize without duplicate writes/targets.
+do
+    local store = makeStore(reservationState())
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    local result = service.recover(player)
+    assertTrue(result.ok)
+    assertTrue(result.recovered)
+    assertFalse(result.xpWriteInvoked)
+    assertFalse(result.levelWriteInvoked)
+    assertTrue(result.addedTarget)
+    assertEqual(store.current.revision, 1)
+    assertEqual(store.current.survivor.spent, 1)
+end
+do
+    local target = { targetId = "recover_one", targetLevel = 1, targetPosition = 100 }
+    local store = makeStore(reservationState({ committed = true, targets = { target } }))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    local result = service.recover(player)
+    assertTrue(result.ok)
+    assertFalse(result.addedTarget)
+    assertEqual(store.current.revision, 1)
+    assertEqual(store.current.survivor.spent, 1)
+    assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    local second = service.recover(player)
+    assertTrue(second.ok)
+    assertFalse(second.recovered)
+    assertEqual(store.saves, 1, "idempotent no-reservation recovery performs no write")
+end
+
+-- Recovery identity mismatch, target conflict, downward state, and save failure quarantine the reservation.
+do
+    local store = makeStore(reservationState({ fingerprint = "old_curve" }))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.recover(player), "recovery_quarantined")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+    assertEqual(store.current.inFlightAdvancement.fingerprint, nil)
+    assertEqual(store.current.inFlightAdvancement.curveFingerprint, "old_curve")
+end
+do
+    local conflict = { targetId = "recover_one", targetLevel = 2, targetPosition = 250 }
+    local store = makeStore(reservationState({ targets = { conflict } }))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.recover(player), "recovery_quarantined")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.current.inFlightAdvancement.requestId, "recover_one")
+end
+do
+    local store = makeStore(reservationState({ prePosition = 50, targetPosition = 100 }))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.recover(player), "recovery_quarantined")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+end
+do
+    local store = makeStore(reservationState())
+    store.failSaveAt[1] = true
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    assertCode(service.recover(player), "recovery_quarantined")
+    assertEqual(store.current.inFlightAdvancement.requestId, "recover_one")
+    assertEqual(store.current.revision, 0)
+    assertEqual(store.current.survivor.spent, 0)
+end
+
+-- spend() recovers a prior commit before validating the new request revision.
+do
+    local store = makeStore(reservationState())
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    local result = service.spend(player, { perkId = "Axe", requestId = "new_after_recovery", expectedRevision = 0 }, globalThree)
+    assertCode(result, "stale_revision")
+    assertEqual(store.current.inFlightAdvancement, nil)
+    assertEqual(store.current.revision, 1)
+    assertEqual(store.current.survivor.spent, 1)
+end
+
+return assertions
