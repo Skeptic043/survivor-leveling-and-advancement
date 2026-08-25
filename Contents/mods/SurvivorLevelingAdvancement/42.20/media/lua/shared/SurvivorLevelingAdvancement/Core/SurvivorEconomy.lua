@@ -98,9 +98,9 @@ function SurvivorEconomy.applyXp(state, gain)
     return { ok = true, state = nextState, effects = effects }
 end
 
-function SurvivorEconomy.computeAward(baseAward, normalization, survivorMultiplier, eligibleRatio)
-    if not finite(baseAward) or baseAward < 0 then
-        return failure("invalid_award", "baseAward must be finite and nonnegative")
+function SurvivorEconomy.computeAward(survivorCreditBase, normalization, survivorMultiplier, eligibleRatio)
+    if not finite(survivorCreditBase) or survivorCreditBase < 0 then
+        return failure("invalid_award", "survivorCreditBase must be finite and nonnegative")
     end
     if not finite(normalization) or normalization <= 0 then
         return failure("invalid_normalization", "normalization must be finite and positive")
@@ -112,7 +112,7 @@ function SurvivorEconomy.computeAward(baseAward, normalization, survivorMultipli
         return failure("invalid_eligible_ratio", "eligibleRatio must be between zero and one")
     end
 
-    local eligibleBase = baseAward * eligibleRatio
+    local eligibleBase = survivorCreditBase * eligibleRatio
     local normalizedBase = eligibleBase * normalization
     local survivorXp = normalizedBase * survivorMultiplier
     if not finite(eligibleBase) or not finite(normalizedBase) or not finite(survivorXp) then
