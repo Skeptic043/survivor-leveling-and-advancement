@@ -250,21 +250,30 @@ do
 end
 
 do
-    local event = newEvent("store_then_throw")
-    local harness = newHarness({ event = event })
+    local eventA = newEvent("store_then_throw")
+    local harness = newHarness({ event = eventA })
     local first = harness.source.install()
     equal(first.code, "observer_registration_ambiguous", "ambiguous registration code")
-    equal(event.addCalls, 1, "ambiguous registration attempted once")
+    equal(eventA.addCalls, 1, "ambiguous registration attempted once")
     equal(harness.globals.addXp, harness.originalAddXp, "ambiguous add leaves global")
     equal(harness.source.status().observerRegistration, "ambiguous", "ambiguous status")
     local second = harness.source.install()
     equal(second.code, "observer_registration_ambiguous", "ambiguous retry rejected")
-    equal(event.addCalls, 1, "ambiguous event not retried")
-    local replacement = newEvent()
-    harness.globals.Events.AddXP = replacement
+    equal(eventA.addCalls, 1, "ambiguous event not retried")
+    local eventB = newEvent("store_then_throw")
+    harness.globals.Events.AddXP = eventB
+    equal(harness.source.install().code, "observer_registration_ambiguous",
+        "replacement event can become independently ambiguous")
+    equal(eventB.addCalls, 1, "replacement ambiguity attempted once")
+    harness.globals.Events.AddXP = eventA
+    equal(harness.source.install().code, "observer_registration_ambiguous",
+        "return to first ambiguous event is never retried")
+    equal(eventA.addCalls, 1, "first ambiguous event remains non-retryable")
+    local eventC = newEvent()
+    harness.globals.Events.AddXP = eventC
     equal(harness.source.install().code, "installed",
-        "replacement event can be attempted after ambiguity")
-    equal(replacement.addCalls, 1, "replacement event is registered once")
+        "fresh event can still install successfully")
+    equal(eventC.addCalls, 1, "fresh event is registered once")
 end
 
 do
