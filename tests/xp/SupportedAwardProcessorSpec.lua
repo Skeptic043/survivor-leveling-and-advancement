@@ -85,7 +85,7 @@ end
 local function award(base, applied, before, after, effective)
     local value = {
         perkId = "Aiming",
-        baseAward = base,
+        survivorCreditBase = base,
         appliedDelta = applied,
         actualPositionBefore = before,
         actualPositionAfter = after,
@@ -248,6 +248,10 @@ do
     local malformed = award(1, 1, 0, 1)
     malformed.extra = true
     equal(env.service.process(env.player, malformed, settings()).code, "invalid_award", "unexpected envelope field")
+    local legacy = award(1, 1, 0, 1)
+    legacy.survivorCreditBase = nil
+    legacy.baseAward = 1
+    equal(env.service.process(env.player, legacy, settings()).code, "invalid_award", "legacy baseAward envelope field rejected")
     equal(env.service.process(env.player, award(1, -1, 1, 0), settings()).code, "invalid_award", "positive base negative movement")
     local badSettings = settings()
     badSettings.normalization = 0
@@ -385,7 +389,7 @@ do
     state = freshState()
     state.perks.Aiming = perkRecord(20, 20)
     local negative = makeEnvironment({ state = state, observed = 20, position = 15, level = 1 })
-    local negativeResult = negative.service.process(negative.player, award(-5, -5, 20, 15), settings())
+    local negativeResult = negative.service.process(negative.player, award(0, -5, 20, 15), settings())
     expect(negativeResult.ok, "ordinary negative succeeds")
     equal(negative.store.state.perks.Aiming.naturalPosition, 15, "ordinary negative lowers natural")
     equal(negative.store.state.perks.Aiming.highWaterPosition, 20, "ordinary negative preserves high water")
@@ -473,7 +477,7 @@ do
     local maxLoss = makeEnvironment({ state = state, observed = 100, position = 90, level = 10 })
     local maxLossResult = maxLoss.service.process(
         maxLoss.player,
-        award(-10, -10, 100, 90),
+        award(0, -10, 100, 90),
         settings(1, 1, true, 100, 0.5)
     )
     expect(maxLossResult.ok, "signed max loss remains ordinary")

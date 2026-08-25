@@ -69,7 +69,7 @@ local function validateAward(award)
     if type(award) ~= "table" then return failure("invalid_award", "award_not_table") end
     local allowed = {
         perkId = true,
-        baseAward = true,
+        survivorCreditBase = true,
         appliedDelta = true,
         actualPositionBefore = true,
         actualPositionAfter = true,
@@ -81,7 +81,9 @@ local function validateAward(award)
         end
     end
     if not isSafeId(award.perkId) then return failure("invalid_award", "perkId") end
-    if not isFinite(award.baseAward) then return failure("invalid_award", "baseAward") end
+    if not isFinite(award.survivorCreditBase) or award.survivorCreditBase < 0 then
+        return failure("invalid_award", "survivorCreditBase")
+    end
     if not isFinite(award.appliedDelta) then return failure("invalid_award", "appliedDelta") end
     if not isFinite(award.actualPositionBefore) or award.actualPositionBefore < 0 then
         return failure("invalid_award", "actualPositionBefore")
@@ -93,7 +95,7 @@ local function validateAward(award)
         and (not isFinite(award.effectiveDelta) or award.effectiveDelta < 0) then
         return failure("invalid_award", "effectiveDelta")
     end
-    if award.baseAward > 0 and award.appliedDelta < 0 then
+    if award.survivorCreditBase > 0 and award.appliedDelta < 0 then
         return failure("invalid_award", "positive_base_negative_movement")
     end
     return { ok = true }
@@ -276,10 +278,10 @@ local function zeroAward()
     return { eligibleBase = 0, normalizedBase = 0, survivorXp = 0 }
 end
 
-local function computeAward(deps, baseAward, settings, ratio, multiplier)
-    if ratio == 0 or baseAward <= 0 then return { ok = true, award = zeroAward() } end
+local function computeAward(deps, survivorCreditBase, settings, ratio, multiplier)
+    if ratio == 0 or survivorCreditBase <= 0 then return { ok = true, award = zeroAward() } end
     local computed = deps.SurvivorEconomy.computeAward(
-        baseAward,
+        survivorCreditBase,
         settings.normalization,
         multiplier,
         ratio
@@ -305,8 +307,8 @@ local function processOrdinary(deps, record, award, settings)
     local nextRecord, recordError = applyLedger(record, transitioned.state)
     if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
     local ratio = 0
-    if award.baseAward > 0 then ratio = transitioned.effect.eligibleRatio end
-    local natural = computeAward(deps, award.baseAward, settings, ratio, settings.survivorMultiplier)
+    if award.survivorCreditBase > 0 then ratio = transitioned.effect.eligibleRatio end
+    local natural = computeAward(deps, award.survivorCreditBase, settings, ratio, settings.survivorMultiplier)
     if not natural.ok then return natural end
     return {
         ok = true,
@@ -369,9 +371,9 @@ local function processAtMaximum(deps, record, award, settings, maximumPosition)
         end
     end
 
-    local natural = computeAward(deps, award.baseAward, settings, naturalRatio, settings.survivorMultiplier)
+    local natural = computeAward(deps, award.survivorCreditBase, settings, naturalRatio, settings.survivorMultiplier)
     if not natural.ok then return natural end
-    local postMax = computeAward(deps, award.baseAward, settings, postMaxRatio, 1)
+    local postMax = computeAward(deps, award.survivorCreditBase, settings, postMaxRatio, 1)
     if not postMax.ok then return postMax end
 
     local postMaxApplied = { state = { fullRateUsed = nextRecord.postMaxFullRateUsed }, effect = { survivorXp = 0 } }
