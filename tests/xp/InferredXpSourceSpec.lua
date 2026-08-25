@@ -98,7 +98,7 @@ local function makeFixture(options)
     local authorityCalls = 0
     local calls = {
         claims = {}, enabled = 0, identities = {}, positions = {}, multipliers = {},
-        clocks = 0, handlers = {}, order = {},
+        arithmetic = {}, clocks = 0, handlers = {}, order = {},
     }
     local globals = {
         Events = { AddXP = addXpEvent, OnTick = onTickEvent },
@@ -174,6 +174,25 @@ local function makeFixture(options)
                     return { ok = false }
                 end
                 return { ok = true, position = playerPositions[perkId] }
+            end,
+        },
+        positionArithmetic = {
+            previous = function(positionAfter, eventAmount)
+                calls.arithmetic[#calls.arithmetic + 1] = {
+                    positionAfter = positionAfter,
+                    eventAmount = eventAmount,
+                }
+                calls.order[#calls.order + 1] = "arithmetic"
+                if options.arithmeticThrow then
+                    error("arithmetic failed")
+                end
+                if options.arithmeticResult ~= nil then
+                    return options.arithmeticResult
+                end
+                if options.arithmetic then
+                    return options.arithmetic(positionAfter, eventAmount)
+                end
+                return { ok = true, positionBefore = positionAfter - eventAmount }
             end,
         },
         enabledSetting = {
@@ -297,6 +316,8 @@ do
         function(d) d.perkIdentity.resolve = nil end,
         function(d) d.positionReader = nil end,
         function(d) d.positionReader.read = nil end,
+        function(d) d.positionArithmetic = nil end,
+        function(d) d.positionArithmetic.previous = nil end,
         function(d) d.enabledSetting = nil end,
         function(d) d.enabledSetting.read = nil end,
         function(d) d.sandboxMultiplier = nil end,
@@ -548,6 +569,14 @@ do
         { positionResult = { ok = true, position = 0 / 0 }, code = "position-failed" },
         { positionResult = { ok = true, position = math.huge }, code = "position-failed" },
         { positionThrow = true, code = "position-threw" },
+        { arithmeticResult = false, code = "position-arithmetic-failed" },
+        { arithmeticResult = {}, code = "position-arithmetic-failed" },
+        { arithmeticResult = { ok = false }, code = "position-arithmetic-failed" },
+        { arithmeticResult = { ok = true }, code = "position-arithmetic-failed" },
+        { arithmeticResult = { ok = true, positionBefore = -1 }, code = "position-arithmetic-failed" },
+        { arithmeticResult = { ok = true, positionBefore = 0 / 0 }, code = "position-arithmetic-failed" },
+        { arithmeticResult = { ok = true, positionBefore = math.huge }, code = "position-arithmetic-failed" },
+        { arithmeticThrow = true, code = "position-arithmetic-threw" },
         { multiplierResult = false, code = "multiplier-failed" },
         { multiplierResult = { ok = true, multiplier = 0 }, code = "multiplier-failed" },
         { multiplierResult = { ok = true, multiplier = -1 }, code = "multiplier-failed" },
@@ -604,6 +633,48 @@ do
     assertNil(award.effectiveDelta)
     assertNil(award.modId)
     assertNil(award.recipe)
+end
+
+-- Version-pinned arithmetic preserves Java-float boundaries across consecutive awards.
+do
+    local eventAmount = 0.10000000149011612
+    local observedPositions = { 100.0999984741211, 100.19999694824219 }
+    local expectedPrevious = { 100, 100.0999984741211 }
+    local readIndex = 0
+    local arithmeticIndex = 0
+    local fixture = makeFixture({
+        arithmetic = function(positionAfter, amount)
+            arithmeticIndex = arithmeticIndex + 1
+            assertEqual(observedPositions[arithmeticIndex], positionAfter,
+                "binary32 arithmetic receives exact after position")
+            assertEqual(eventAmount, amount, "binary32 arithmetic receives exact event amount")
+            return { ok = true, positionBefore = expectedPrevious[arithmeticIndex] }
+        end,
+    })
+    fixture.dependencies.positionReader.read = function(owner, perkId)
+        readIndex = readIndex + 1
+        assertEqual(fixture.playerA, owner)
+        assertEqual("Carpentry", perkId)
+        return { ok = true, position = observedPositions[readIndex] }
+    end
+    local source = InferredXpSource.create(fixture.dependencies)
+    assertTrue(source.install().ok)
+    fixture.addXpEvent.fire(fixture.playerA, fixture.perkA, eventAmount)
+    fixture.addXpEvent.fire(fixture.playerA, fixture.perkA, eventAmount)
+    assertEqual(2, readIndex)
+    assertEqual(2, arithmeticIndex)
+    assertEqual(2, #fixture.calls.arithmetic)
+    assertEqual(1, source.status().pendingBatches, "exact float boundary remains contiguous")
+    assertEqual(0, #fixture.calls.handlers)
+    local outcome = source.flushAll()
+    assertTrue(outcome.ok)
+    assertEqual(1, outcome.flushed)
+    assertEqual(1, #fixture.calls.handlers)
+    local award = fixture.calls.handlers[1].award
+    assertEqual(eventAmount / 3 + eventAmount / 3, award.baseAward)
+    assertEqual(observedPositions[2] - 100, award.appliedDelta)
+    assertEqual(100, award.actualPositionBefore)
+    assertEqual(observedPositions[2], award.actualPositionAfter)
 end
 
 -- Contiguous events coalesce until the real-time deadline; empty ticks are constant work.
@@ -692,7 +763,7 @@ do
     assertTrue(source.install().ok)
     fixture.addXpEvent.fire(fixture.playerA, fixture.perkA, 2)
     assertEqual(0, source.status().pendingBatches)
-    assertEqual("invalid-boundary", source.status().lastCode)
+    assertEqual("position-arithmetic-failed", source.status().lastCode)
 
     fixture = makeFixture()
     fixture.positionsByPlayer[fixture.playerA].Carpentry = 1e30

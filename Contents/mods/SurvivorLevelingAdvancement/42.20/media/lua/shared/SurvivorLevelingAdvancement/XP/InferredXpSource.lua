@@ -44,6 +44,7 @@ function InferredXpSource.create(dependencies)
     local claims = requireTable(dependencies.exactXpClaims, "exactXpClaims")
     local perkIdentity = requireTable(dependencies.perkIdentity, "perkIdentity")
     local positionReader = requireTable(dependencies.positionReader, "positionReader")
+    local positionArithmetic = requireTable(dependencies.positionArithmetic, "positionArithmetic")
     local enabledSetting = requireTable(dependencies.enabledSetting, "enabledSetting")
     local multiplierResolver = requireTable(dependencies.sandboxMultiplier, "sandboxMultiplier")
     local awardHandler = requireTable(dependencies.awardHandler, "awardHandler")
@@ -53,6 +54,7 @@ function InferredXpSource.create(dependencies)
     requireFunction(claims.consume, "exactXpClaims.consume")
     requireFunction(perkIdentity.resolve, "perkIdentity.resolve")
     requireFunction(positionReader.read, "positionReader.read")
+    requireFunction(positionArithmetic.previous, "positionArithmetic.previous")
     requireFunction(enabledSetting.read, "enabledSetting.read")
     requireFunction(multiplierResolver.resolve, "sandboxMultiplier.resolve")
     requireFunction(awardHandler.process, "awardHandler.process")
@@ -284,6 +286,16 @@ function InferredXpSource.create(dependencies)
         return value.position
     end
 
+    local function previousPosition(positionAfter, eventAmount)
+        local called, value = pcall(positionArithmetic.previous, positionAfter, eventAmount)
+        if not called or type(value) ~= "table" or value.ok ~= true
+            or not isFinite(value.positionBefore) or value.positionBefore < 0 then
+            state.lastCode = called and "position-arithmetic-failed" or "position-arithmetic-threw"
+            return nil
+        end
+        return value.positionBefore
+    end
+
     local function resolveMultiplier(player, perkId)
         local called, value = pcall(multiplierResolver.resolve, player, perkId)
         if not called or type(value) ~= "table" or value.ok ~= true
@@ -374,7 +386,10 @@ function InferredXpSource.create(dependencies)
             return
         end
         local inferredBase = amount / multiplier
-        local firstPosition = position - amount
+        local firstPosition = previousPosition(position, amount)
+        if firstPosition == nil then
+            return
+        end
         local movement = position - firstPosition
         if not isFinite(inferredBase) or inferredBase <= 0
             or not isFinite(firstPosition) or firstPosition < 0
