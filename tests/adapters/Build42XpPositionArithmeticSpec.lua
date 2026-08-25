@@ -44,7 +44,14 @@ local function buildWithClamp(clampFloat)
     })
 end
 
-local function assertRoutedMovement(positionAfter, eventAmount, expectedArgument, expectedBefore, message)
+local function assertRoutedTransition(
+    positionBefore,
+    eventAmount,
+    expectedArgument,
+    expectedAfter,
+    expectedMoved,
+    message
+)
     local calls = 0
     local observedValue = nil
     local observedMinimum = nil
@@ -54,14 +61,15 @@ local function assertRoutedMovement(positionAfter, eventAmount, expectedArgument
         observedValue = value
         observedMinimum = minimum
         observedMaximum = maximum
-        return expectedBefore
+        return expectedAfter
     end)
     assertTrue(built.ok, message .. " should create")
-    local result = built.arithmetic.previous(positionAfter, eventAmount)
-    assertTrue(result.ok, message .. " should reconstruct")
-    assertEqual(result.positionBefore, expectedBefore, message .. " should return the exact routed value")
+    local result = built.arithmetic.add(positionBefore, eventAmount)
+    assertTrue(result.ok, message .. " should evaluate")
+    assertEqual(result.positionAfter, expectedAfter, message .. " should return the exact routed value")
+    assertEqual(result.moved, expectedMoved, message .. " should report movement")
     assertEqual(calls, 1, message .. " should call clampFloat exactly once")
-    assertEqual(observedValue, expectedArgument, message .. " should route the exact subtraction")
+    assertEqual(observedValue, expectedArgument, message .. " should route the exact addition")
     assertEqual(observedMinimum, -FLOAT_MAX, message .. " should route the exact lower bound")
     assertEqual(observedMaximum, FLOAT_MAX, message .. " should route the exact upper bound")
 end
@@ -73,44 +81,48 @@ assertTrue(created.ok, "complete capability should create")
 local description = created.arithmetic.describe()
 assertTrue(description.ok, "description should succeed")
 assertEqual(description.adapterId, "sla.pz42-xp-position", "adapter ID should be stable")
-assertEqual(description.adapterVersion, 1, "adapter version should be stable")
+assertEqual(description.adapterVersion, 2, "adapter version should be stable")
 assertEqual(description.representation, "java-binary32", "representation should be stable")
+assertEqual(created.arithmetic.previous, nil, "obsolete reverse interface should be absent")
 
-assertRoutedMovement(
-    100.09999847412109,
-    0.10000000149011612,
-    99.99999847263098,
+assertRoutedTransition(
     100,
+    0.10000000149011612,
+    100.10000000149012,
+    100.09999847412109,
+    true,
     "100f plus 0.1f"
 )
-assertRoutedMovement(
-    100.19999694824219,
-    0.10000000149011612,
-    100.09999694675207,
+assertRoutedTransition(
     100.09999847412109,
+    0.10000000149011612,
+    100.19999847561121,
+    100.19999694824219,
+    true,
     "second consecutive 0.1f award"
 )
-assertRoutedMovement(
-    100.29999542236328,
-    0.10000000149011612,
-    100.19999542087317,
-    100.19999694824219,
-    "third consecutive 0.1f award"
+assertRoutedTransition(
+    100.09999847412109,
+    -0.10000000149011612,
+    99.99999847263098,
+    100,
+    true,
+    "negative 0.1f transition"
 )
-assertRoutedMovement(
+assertRoutedTransition(
+    0,
     0.10000000149011612,
     0.10000000149011612,
-    0,
-    0,
+    0.10000000149011612,
+    true,
     "zero-origin movement"
 )
-assertRoutedMovement(
-    100,
-    0.0500030517578125,
-    99.94999694824219,
-    99.94999694824219,
-    "cap-adjusted movement"
-)
+assertRoutedTransition(42, 0, 42, 42, false, "zero award")
+assertRoutedTransition(33554432, 1, 33554433, 33554432, false, "sub-ULP award")
+
+-- Both valid prior floats reach the same result, so reverse subtraction is ambiguous.
+assertRoutedTransition(16777215, 1, 16777216, 16777216, true, "lower ambiguous prior")
+assertRoutedTransition(16777216, 1, 16777217, 16777216, false, "upper ambiguous prior")
 
 assertFailure(Adapter.create(nil), "invalid-dependencies", "nil dependencies should fail")
 assertFailure(Adapter.create({}), "invalid-dependencies", "missing environment should fail")
@@ -141,17 +153,16 @@ local inputBuilt = buildWithClamp(function(value)
     inputCalls = inputCalls + 1
     return value
 end)
-assertFailure(inputBuilt.arithmetic.previous(nil, 1), "invalid-position-after", "nil position should fail")
-assertFailure(inputBuilt.arithmetic.previous("1", 1), "invalid-position-after", "nonnumeric position should fail")
-assertFailure(inputBuilt.arithmetic.previous(-1, 1), "invalid-position-after", "negative position should fail")
-assertFailure(inputBuilt.arithmetic.previous(0 / 0, 1), "invalid-position-after", "NaN position should fail")
-assertFailure(inputBuilt.arithmetic.previous(math.huge, 1), "invalid-position-after", "infinite position should fail")
-assertFailure(inputBuilt.arithmetic.previous(1, nil), "invalid-event-amount", "nil amount should fail")
-assertFailure(inputBuilt.arithmetic.previous(1, "1"), "invalid-event-amount", "nonnumeric amount should fail")
-assertFailure(inputBuilt.arithmetic.previous(1, 0), "invalid-event-amount", "zero amount should fail")
-assertFailure(inputBuilt.arithmetic.previous(1, -1), "invalid-event-amount", "negative amount should fail")
-assertFailure(inputBuilt.arithmetic.previous(1, 0 / 0), "invalid-event-amount", "NaN amount should fail")
-assertFailure(inputBuilt.arithmetic.previous(1, math.huge), "invalid-event-amount", "infinite amount should fail")
+assertFailure(inputBuilt.arithmetic.add(nil, 1), "invalid-position-before", "nil position should fail")
+assertFailure(inputBuilt.arithmetic.add("1", 1), "invalid-position-before", "nonnumeric position should fail")
+assertFailure(inputBuilt.arithmetic.add(-1, 1), "invalid-position-before", "negative position should fail")
+assertFailure(inputBuilt.arithmetic.add(0 / 0, 1), "invalid-position-before", "NaN position should fail")
+assertFailure(inputBuilt.arithmetic.add(math.huge, 1), "invalid-position-before", "infinite position should fail")
+assertFailure(inputBuilt.arithmetic.add(1, nil), "invalid-event-amount", "nil amount should fail")
+assertFailure(inputBuilt.arithmetic.add(1, "1"), "invalid-event-amount", "nonnumeric amount should fail")
+assertFailure(inputBuilt.arithmetic.add(1, 0 / 0), "invalid-event-amount", "NaN amount should fail")
+assertFailure(inputBuilt.arithmetic.add(1, math.huge), "invalid-event-amount", "infinite amount should fail")
+assertFailure(inputBuilt.arithmetic.add(1, -math.huge), "invalid-event-amount", "negative infinity should fail")
 assertEqual(inputCalls, 0, "invalid inputs should not call clampFloat")
 
 local throwingCalls = 0
@@ -159,8 +170,18 @@ local throwing = buildWithClamp(function()
     throwingCalls = throwingCalls + 1
     error("mock clamp failure")
 end)
-assertFailure(throwing.arithmetic.previous(1, 0.5), "capability-error", "throwing capability should fail")
+assertFailure(throwing.arithmetic.add(1, -0.5), "capability-error", "throwing capability should fail")
 assertEqual(throwingCalls, 1, "throwing capability should be invoked exactly once")
+
+local negativeResult = buildWithClamp(function(value)
+    assertEqual(value, -0.25, "negative transition should route the exact addition")
+    return value
+end)
+assertFailure(
+    negativeResult.arithmetic.add(0.25, -0.5),
+    "invalid-result",
+    "negative resulting position should fail"
+)
 
 local invalidResults = {
     { value = nil, label = "nil result" },
@@ -168,7 +189,7 @@ local invalidResults = {
     { value = 0 / 0, label = "NaN result" },
     { value = math.huge, label = "infinite result" },
     { value = -1, label = "negative result" },
-    { value = 2, label = "result above positionAfter" },
+    { value = FLOAT_MAX * 2, label = "out-of-range finite result" },
 }
 for _, fixture in ipairs(invalidResults) do
     local calls = 0
@@ -176,23 +197,8 @@ for _, fixture in ipairs(invalidResults) do
         calls = calls + 1
         return fixture.value
     end)
-    assertFailure(built.arithmetic.previous(1, 0.5), "invalid-result", fixture.label .. " should fail")
+    assertFailure(built.arithmetic.add(1, 0.5), "invalid-result", fixture.label .. " should fail")
     assertEqual(calls, 1, fixture.label .. " should call clampFloat exactly once")
 end
-
-local stationaryCalls = 0
-local stationary = buildWithClamp(function(value, minimum, maximum)
-    stationaryCalls = stationaryCalls + 1
-    assertEqual(value, 33554431, "small large-position award should route exact subtraction")
-    assertEqual(minimum, -FLOAT_MAX, "stationary case should route exact lower bound")
-    assertEqual(maximum, FLOAT_MAX, "stationary case should route exact upper bound")
-    return 33554432
-end)
-assertFailure(
-    stationary.arithmetic.previous(33554432, 1),
-    "no-representable-movement",
-    "amount too small to move a large stored float should fail"
-)
-assertEqual(stationaryCalls, 1, "stationary reconstruction should call clampFloat exactly once")
 
 return assertions
