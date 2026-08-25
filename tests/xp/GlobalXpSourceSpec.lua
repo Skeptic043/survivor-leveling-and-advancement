@@ -61,7 +61,10 @@ local function newHarness(options)
     if authorityState == nil then
         authorityState = true
     end
-    local calls = { addXp = {}, addXpNoMultiplier = {}, awards = {}, authority = 0 }
+    local calls = {
+        addXp = {}, addXpNoMultiplier = {}, awards = {}, authority = 0,
+        claims = {}, releases = {},
+    }
     local globals = { Events = { AddXP = event } }
     local player = { positions = { Axe = 10, Cooking = 20 } }
     local perk = { id = "Axe" }
@@ -154,6 +157,30 @@ local function newHarness(options)
                 return { ok = true }
             end,
         },
+        exactXpClaims = {
+            claim = function(token, owner, exactPerk, amount)
+                calls.claims[#calls.claims + 1] = {
+                    token = token, owner = owner, perk = exactPerk, amount = amount,
+                }
+                if options.claimThrow then
+                    error("claim boom")
+                elseif options.claimFalse then
+                    return false
+                elseif options.claimFailure then
+                    return { ok = false }
+                end
+                return { ok = true }
+            end,
+            release = function(token)
+                calls.releases[#calls.releases + 1] = token
+                if options.releaseThrow then
+                    error("release boom")
+                elseif options.releaseFailure then
+                    return { ok = false }
+                end
+                return { ok = true }
+            end,
+        },
     }
     local source, creationFailure = GlobalXpSource.create(dependencies)
     return {
@@ -197,6 +224,14 @@ do
             perkIdentity = { resolve = function() end },
             positionReader = { read = function() end },
             awardHandler = {},
+        },
+        {
+            environment = { globals = {} },
+            authority = { isAuthoritative = function() end },
+            perkIdentity = { resolve = function() end },
+            positionReader = { read = function() end },
+            awardHandler = { process = function() end },
+            exactXpClaims = {},
         },
     }
     for index = 1, #invalid do
@@ -355,6 +390,7 @@ do
     equal(called[1], false, "prior error preserved")
     equal(called[2], baseline[2], "prior error value preserved")
     equal(#harness.calls.awards, 0, "prior error has no envelope")
+    equal(#harness.calls.releases, 1, "prior error releases transaction token")
     equal(harness.source.status().lastCode, "prior_threw", "prior error status")
 end
 
@@ -516,6 +552,9 @@ do
     equal(harness.calls.authority, 2, "authority is checked on reinstall")
     harness.globals.addXp(harness.player, harness.perk, 1)
     equal(harness.calls.authority, 2, "authority remains off the hot path after reinstall")
+    equal(#harness.calls.claims, 3, "repeated same-tuple events are claimed separately")
+    truthy(harness.calls.claims[1].token ~= harness.calls.claims[2].token,
+        "repeated calls use distinct transaction tokens")
 end
 
 do
@@ -543,6 +582,11 @@ do
     equal(harness.calls.awards[2].award.baseAward, 2, "outer exact base")
     equal(harness.calls.awards[2].award.actualPositionBefore, 10, "outer before isolated")
     equal(harness.calls.awards[2].award.actualPositionAfter, 12, "outer after isolated")
+    equal(#harness.calls.claims, 2, "nested events both claimed")
+    truthy(harness.calls.claims[1].token ~= harness.calls.claims[2].token,
+        "nested transactions use distinct claim tokens")
+    equal(harness.calls.releases[1], harness.calls.claims[1].token, "inner token released first")
+    equal(harness.calls.releases[2], harness.calls.claims[2].token, "outer token released second")
 end
 
 do
@@ -609,6 +653,67 @@ do
     equal(secondStatus.lastCode, "installed", "status mutation is isolated")
     harness.event.fire(harness.player, harness.perk, 99)
     equal(#harness.calls.awards, 0, "event outside a transaction is inert")
+end
+
+do
+    local harness = newHarness()
+    harness.source.install()
+    local returned = pack(harness.globals.addXp(harness.player, harness.perk, 2, nil, "tail"))
+    equal(returned.n, 4, "successful claim preserves return arity")
+    equal(#harness.calls.claims, 1, "event is claimed synchronously")
+    equal(harness.calls.claims[1].owner, harness.player, "claim owner is exact")
+    equal(harness.calls.claims[1].perk, harness.perk, "claim perk is exact")
+    equal(harness.calls.claims[1].amount, 2, "claim amount is exact")
+    equal(#harness.calls.releases, 1, "successful prior releases token")
+    equal(harness.calls.releases[1], harness.calls.claims[1].token, "claim and release share token")
+    equal(#harness.calls.awards, 1, "successful claim retains envelope")
+    equal(harness.calls.awards[1].award.baseAward, 2, "envelope base is unchanged")
+    equal(harness.calls.awards[1].award.appliedDelta, 2, "envelope delta is unchanged")
+end
+
+do
+    local variants = {
+        { claimFalse = true, code = "claim_failed" },
+        { claimFailure = true, code = "claim_failed" },
+        { claimThrow = true, code = "claim_threw" },
+    }
+    for index = 1, #variants do
+        local harness = newHarness(variants[index])
+        harness.source.install()
+        equal(harness.globals.addXp(harness.player, harness.perk, 1), "addXp",
+            "claim failure preserves return " .. index)
+        equal(#harness.calls.awards, 0, "claim failure suppresses envelope " .. index)
+        equal(#harness.calls.releases, 1, "claim failure still releases " .. index)
+        equal(harness.source.status().lastCode, variants[index].code, "claim failure status " .. index)
+    end
+end
+
+do
+    local errorToken = "claim release prior failure"
+    local harness = newHarness({
+        priorBehavior = function(kind, globals, event, args)
+            event.fire(args[1], args[2], args[3])
+            error(errorToken)
+        end,
+    })
+    harness.source.install()
+    local ok, thrown = pcall(harness.globals.addXp, harness.player, harness.perk, 1)
+    equal(ok, false, "prior error preserved")
+    equal(#harness.calls.releases, 1, "prior error releases token")
+    equal(#harness.calls.awards, 0, "prior error suppresses envelope")
+end
+
+do
+    local variants = { { releaseFailure = true }, { releaseThrow = true } }
+    for index = 1, #variants do
+        local harness = newHarness(variants[index])
+        harness.source.install()
+        equal(harness.globals.addXp(harness.player, harness.perk, 1), "addXp",
+            "release failure preserves vanilla return " .. index)
+        equal(#harness.calls.awards, 1, "release failure retains envelope " .. index)
+        equal(harness.source.status().lastCode, "claim_release_failed",
+            "release failure is bounded " .. index)
+    end
 end
 
 return assertions

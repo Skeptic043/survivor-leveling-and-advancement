@@ -47,12 +47,19 @@ local function validateDependencies(dependencies)
         or type(dependencies.awardHandler.process) ~= "function" then
         return nil, result(false, "invalid_dependencies", "awardHandler")
     end
+    if type(dependencies.exactXpClaims) ~= "table"
+        or type(dependencies.exactXpClaims.claim) ~= "function"
+        or type(dependencies.exactXpClaims.release) ~= "function" then
+        return nil, result(false, "invalid_dependencies", "exactXpClaims")
+    end
     return {
         globals = dependencies.environment.globals,
         isAuthoritative = dependencies.authority.isAuthoritative,
         resolvePerk = dependencies.perkIdentity.resolve,
         readPosition = dependencies.positionReader.read,
         processAward = dependencies.awardHandler.process,
+        claimXp = dependencies.exactXpClaims.claim,
+        releaseClaims = dependencies.exactXpClaims.release,
     }, nil
 end
 
@@ -67,6 +74,8 @@ function GlobalXpSource.create(dependencies)
     local resolvePerk = validated.resolvePerk
     local readPosition = validated.readPosition
     local processAward = validated.processAward
+    local claimXp = validated.claimXp
+    local releaseClaims = validated.releaseClaims
     local transactions = {}
     local installed = false
     local captureEnabled = false
@@ -140,8 +149,7 @@ function GlobalXpSource.create(dependencies)
             transaction.invalidCode = "mismatched_event"
             return
         end
-        transaction.eventCount = transaction.eventCount + 1
-        if transaction.eventCount > 1 then
+        if transaction.eventCount ~= 0 then
             transaction.invalidCode = "multiple_events"
             return
         end
@@ -149,6 +157,16 @@ function GlobalXpSource.create(dependencies)
             transaction.invalidCode = "invalid_applied_delta"
             return
         end
+        local claimed = callSafely(claimXp, transaction, owner, perk, appliedDelta)
+        if not claimed[1] then
+            transaction.invalidCode = "claim_threw"
+            return
+        end
+        if type(claimed[2]) ~= "table" or claimed[2].ok ~= true then
+            transaction.invalidCode = "claim_failed"
+            return
+        end
+        transaction.eventCount = 1
         transaction.appliedDelta = appliedDelta
     end
 
@@ -225,12 +243,18 @@ function GlobalXpSource.create(dependencies)
 
         if transaction then
             transactions[#transactions] = nil
+            local released = callSafely(releaseClaims, transaction)
+            local releaseFailed = not released[1]
+                or type(released[2]) ~= "table" or released[2].ok ~= true
             if called[1] and captureEnabled then
                 handleAward(transaction)
             else
                 if not called[1] then
                     setLast("prior_threw")
                 end
+            end
+            if releaseFailed then
+                setLast("claim_release_failed")
             end
         end
 

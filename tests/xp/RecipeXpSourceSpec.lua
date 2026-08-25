@@ -81,6 +81,8 @@ local function newFixture(authoritative)
         readCalls = {},
         positions = {},
         priorArgs = {},
+        claims = {},
+        releases = {},
     }
 
     local function positionTable(player)
@@ -177,6 +179,30 @@ local function newFixture(authoritative)
                 end
                 if fixture.handlerFails then
                     return { ok = false, code = "private_detail" }
+                end
+                return { ok = true }
+            end,
+        },
+        exactXpClaims = {
+            claim = function(token, player, perk, amount)
+                fixture.claims[#fixture.claims + 1] = {
+                    token = token, player = player, perk = perk, amount = amount,
+                }
+                if fixture.claimThrows then
+                    error("claim failed")
+                elseif fixture.claimFalse then
+                    return false
+                elseif fixture.claimFails then
+                    return { ok = false }
+                end
+                return { ok = true }
+            end,
+            release = function(token)
+                fixture.releases[#fixture.releases + 1] = token
+                if fixture.releaseThrows then
+                    error("release failed")
+                elseif fixture.releaseFails then
+                    return { ok = false }
                 end
                 return { ok = true }
             end,
@@ -527,6 +553,7 @@ do
     assertFalse(ok)
     assertEqual("prior exact failure", thrown)
     assertEqual(0, #fixture.handled)
+    assertEqual(1, #fixture.releases, "prior error releases transaction token")
     assertEqual("prior_failed", fixture.source.status().lastCode)
 end
 
@@ -553,6 +580,11 @@ do
     assertEqual(1.5, fixture.handled[1].envelope.appliedDelta)
     assertEqual("Carpentry", fixture.handled[2].envelope.perkId)
     assertEqual(2.5, fixture.handled[2].envelope.appliedDelta)
+    assertEqual(2, #fixture.claims, "nested events both claimed")
+    assertTrue(fixture.claims[1].token ~= fixture.claims[2].token,
+        "nested actions use distinct claim tokens")
+    assertEqual(fixture.claims[1].token, fixture.releases[1], "inner token released first")
+    assertEqual(fixture.claims[2].token, fixture.releases[2], "outer token released second")
 end
 
 do
@@ -754,6 +786,91 @@ do
     assertEqual(originalGetPerk, metadata.getPerk)
     assertEqual("perk", perk.marker)
     assertEqual(2, metadata:getAmount())
+end
+
+do
+    local fixture = newFixture(true)
+    local player = {}
+    local perk = { id = "Cooking" }
+    fixture.setPosition(player, perk.id, 4)
+    fixture.source.install()
+    local value = action("handcraft", player, recipe({ award(perk, 2), award(perk, 2) }))
+    value.priorBehavior = function(self)
+        fixture.emit(player, perk, 2)
+        fixture.emit(player, perk, 2)
+        return "one", nil, "three"
+    end
+    local returned = pack(fixture.globals.ISHandcraftAction.performRecipe(value))
+    assertEqual(3, returned.n, "successful claims preserve return arity")
+    assertEqual(2, #fixture.claims, "repeated same-tuple events are distinct claims")
+    assertEqual(fixture.claims[1].token, fixture.claims[2].token, "action claims share token")
+    assertEqual(1, #fixture.releases, "successful action releases once")
+    assertEqual(fixture.claims[1].token, fixture.releases[1], "released token is exact")
+    assertEqual(1, #fixture.handled, "successful claims retain aggregate envelope")
+    assertEqual(4, fixture.handled[1].envelope.baseAward, "aggregate base unchanged")
+    assertEqual(4, fixture.handled[1].envelope.appliedDelta, "aggregate delta unchanged")
+end
+
+do
+    local variants = {
+        { field = "claimFalse", code = "claim_failed" },
+        { field = "claimFails", code = "claim_failed" },
+        { field = "claimThrows", code = "claim_threw" },
+    }
+    for index = 1, #variants do
+        local fixture = newFixture(true)
+        fixture[variants[index].field] = true
+        local player = {}
+        local perk = { id = "Cooking" }
+        fixture.source.install()
+        local value = action("build", player, recipe({ award(perk, 1) }))
+        value.priorBehavior = function(self)
+            fixture.emit(player, perk, 1)
+            return "vanilla"
+        end
+        assertEqual("vanilla", fixture.globals.ISBuildIsoEntity.create(value),
+            "claim failure preserves return " .. index)
+        assertEqual(0, #fixture.handled, "claim failure suppresses envelope " .. index)
+        assertEqual(1, #fixture.releases, "claim failure releases " .. index)
+        assertEqual(variants[index].code, fixture.source.status().lastCode, "claim status " .. index)
+    end
+end
+
+do
+    local fixture = newFixture(true)
+    local errorToken = "claim release prior failure"
+    local player = {}
+    local perk = { id = "Cooking" }
+    fixture.source.install()
+    local value = action("handcraft", player, recipe({ award(perk, 1) }))
+    value.priorBehavior = function(self)
+        fixture.emit(player, perk, 1)
+        error(errorToken)
+    end
+    local ok, thrown = pcall(fixture.globals.ISHandcraftAction.performRecipe, value)
+    assertFalse(ok, "prior error preserved")
+    assertTrue(string.find(tostring(thrown), errorToken, 1, true) ~= nil, "prior error preserved exactly")
+    assertEqual(1, #fixture.releases, "prior error releases")
+    assertEqual(0, #fixture.handled, "prior error suppresses envelope")
+end
+
+do
+    local variants = { "releaseFails", "releaseThrows" }
+    for index = 1, #variants do
+        local fixture = newFixture(true)
+        fixture[variants[index]] = true
+        local player = {}
+        local perk = { id = "Cooking" }
+        fixture.source.install()
+        local value = action("handcraft", player, recipe({ award(perk, 1) }))
+        value.priorBehavior = function(self)
+            fixture.emit(player, perk, 1)
+            return "vanilla"
+        end
+        assertEqual("vanilla", fixture.globals.ISHandcraftAction.performRecipe(value))
+        assertEqual(1, #fixture.handled, "release failure retains envelope " .. index)
+        assertEqual("claim_release_failed", fixture.source.status().lastCode)
+    end
 end
 
 return assertions

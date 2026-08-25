@@ -136,6 +136,9 @@ function ExerciseXpSource.create(dependencies)
     local readPosition = requireFunction(positionReader.read, "positionReader.read")
     local awardHandler = requireTable(dependencies.awardHandler, "awardHandler")
     local processAward = requireFunction(awardHandler.process, "awardHandler.process")
+    local exactXpClaims = requireTable(dependencies.exactXpClaims, "exactXpClaims")
+    local claimXp = requireFunction(exactXpClaims.claim, "exactXpClaims.claim")
+    local releaseClaims = requireFunction(exactXpClaims.release, "exactXpClaims.release")
 
     local state = {
         authorityKnown = false,
@@ -319,6 +322,18 @@ function ExerciseXpSource.create(dependencies)
             return
         end
 
+        local claimed = pack(pcall(claimXp, top, owner, perk, appliedDelta))
+        if not claimed[1] then
+            top.invalid = true
+            top.claimCode = "claim-threw"
+            return
+        end
+        if type(claimed[2]) ~= "table" or claimed[2].ok ~= true then
+            top.invalid = true
+            top.claimCode = "claim-failed"
+            return
+        end
+
         award.eventSeen = true
         award.appliedDelta = appliedDelta
         if expectedIndex == 2 then
@@ -352,7 +367,7 @@ function ExerciseXpSource.create(dependencies)
 
     local function completeTransaction(transaction)
         if transaction.invalid then
-            setLast("repeat-ambiguous")
+            setLast(transaction.claimCode or "repeat-ambiguous")
             return
         end
 
@@ -433,13 +448,19 @@ function ExerciseXpSource.create(dependencies)
         state.stack[#state.stack + 1] = transaction
         local priorResult = pack(pcall(prior, unpackValues(arguments, 1, arguments.n)))
         state.stack[#state.stack] = nil
+        local released = pack(pcall(releaseClaims, transaction))
+        local releaseFailed = not released[1]
+            or type(released[2]) ~= "table" or released[2].ok ~= true
 
         if not priorResult[1] then
-            setLast("prior-threw")
+            setLast(releaseFailed and "claim-release-failed" or "prior-threw")
             error(priorResult[2], 0)
         end
 
         completeTransaction(transaction)
+        if releaseFailed then
+            setLast("claim-release-failed")
+        end
         return unpackValues(priorResult, 2, priorResult.n)
     end
 

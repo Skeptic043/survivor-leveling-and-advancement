@@ -110,6 +110,11 @@ function RecipeXpSource.create(dependencies)
             or type(dependenciesValue.awardHandler.process) ~= "function" then
             return false
         end
+        if type(dependenciesValue.exactXpClaims) ~= "table"
+            or type(dependenciesValue.exactXpClaims.claim) ~= "function"
+            or type(dependenciesValue.exactXpClaims.release) ~= "function" then
+            return false
+        end
         return true
     end
 
@@ -232,6 +237,23 @@ function RecipeXpSource.create(dependencies)
             transaction.invalidEvent = true
             return
         end
+        local claimed, claimResult = pcall(
+            state.dependencies.exactXpClaims.claim,
+            transaction,
+            owner,
+            perk,
+            appliedDelta
+        )
+        if not claimed then
+            transaction.invalidEvent = true
+            transaction.claimCode = "claim_threw"
+            return
+        end
+        if type(claimResult) ~= "table" or claimResult.ok ~= true then
+            transaction.invalidEvent = true
+            transaction.claimCode = "claim_failed"
+            return
+        end
         expected.aggregate.appliedDelta = newApplied
         transaction.eventCount = nextIndex
     end
@@ -246,7 +268,7 @@ function RecipeXpSource.create(dependencies)
             return
         end
         if transaction.invalidEvent or transaction.eventCount ~= #transaction.expected then
-            setLast("event_pair_ambiguous")
+            setLast(transaction.claimCode or "event_pair_ambiguous")
             return
         end
 
@@ -303,15 +325,21 @@ function RecipeXpSource.create(dependencies)
         state.stack[#state.stack + 1] = transaction
         local priorResult = pack(pcall(prior, ...))
         state.stack[#state.stack] = nil
+        local released, releaseResult = pcall(state.dependencies.exactXpClaims.release, transaction)
+        local releaseFailed = not released
+            or type(releaseResult) ~= "table" or releaseResult.ok ~= true
 
         if not priorResult[1] then
-            setLast("prior_failed")
+            setLast(releaseFailed and "claim_release_failed" or "prior_failed")
             error(priorResult[2], 0)
         end
 
         local finished = pcall(finishTransaction, transaction)
         if not finished then
             setLast("capture_failed")
+        end
+        if releaseFailed then
+            setLast("claim_release_failed")
         end
         return unpackValues(priorResult, 2, priorResult.n)
     end
