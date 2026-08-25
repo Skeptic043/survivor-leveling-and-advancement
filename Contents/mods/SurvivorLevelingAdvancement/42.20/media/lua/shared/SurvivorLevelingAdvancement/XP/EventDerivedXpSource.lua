@@ -94,6 +94,11 @@ local function validateDependencies(dependencies)
         or type(dependencies.awardHandler.process) ~= "function" then
         return nil, result(false, "invalid_dependencies", "awardHandler.process")
     end
+    if type(dependencies.maximumProbe) ~= "table"
+        or type(dependencies.maximumProbe.begin) ~= "function"
+        or type(dependencies.maximumProbe.complete) ~= "function" then
+        return nil, result(false, "invalid_dependencies", "maximumProbe")
+    end
 
     return {
         globals = dependencies.environment.globals,
@@ -106,6 +111,8 @@ local function validateDependencies(dependencies)
         resolveSandboxMultiplier = dependencies.sandboxMultiplier.resolve,
         isMutationActive = dependencies.mutationScope.isActive,
         processAward = dependencies.awardHandler.process,
+        beginMaximumProbe = dependencies.maximumProbe.begin,
+        completeMaximumProbe = dependencies.maximumProbe.complete,
     }, nil
 end
 
@@ -309,6 +316,22 @@ function EventDerivedXpSource.create(dependencies)
         end
     end
 
+    local function processEnvelope(player, award)
+        pushHandlerScope(player, award.perkId)
+        local called = callSafely(validated.processAward, player, award)
+        popHandlerScope(player, award.perkId)
+        if not called[1] then
+            setLast("handler_threw")
+            return result(false, "handler_threw", nil)
+        end
+        if type(called[2]) ~= "table" or called[2].ok ~= true then
+            setLast("handler_failed")
+            return result(false, "handler_failed", nil)
+        end
+        setLast("award_processed")
+        return result(true, "award_processed", nil)
+    end
+
     local function deliver(player, batch)
         local appliedDelta = batch.actualPositionAfter - batch.actualPositionBefore
         local positiveCredit = isFinite(batch.survivorCreditBase)
@@ -320,26 +343,36 @@ function EventDerivedXpSource.create(dependencies)
             setLast("invalid_batch_movement")
             return result(false, "invalid_batch_movement", nil)
         end
-        local award = {
+        return processEnvelope(player, {
             perkId = batch.perkId,
             survivorCreditBase = batch.survivorCreditBase,
             appliedDelta = appliedDelta,
             actualPositionBefore = batch.actualPositionBefore,
             actualPositionAfter = batch.actualPositionAfter,
+        })
+    end
+
+    local function maximumEnvelope(answer)
+        if type(answer) ~= "table" or answer.ok ~= true
+            or not isSafePerkId(answer.perkId)
+            or not isFinite(answer.survivorCreditBase)
+            or answer.survivorCreditBase <= 0
+            or answer.appliedDelta ~= 0
+            or not isPosition(answer.actualPositionBefore)
+            or answer.actualPositionAfter ~= answer.actualPositionBefore
+            or not isFinite(answer.effectiveDelta)
+            or answer.effectiveDelta <= 0 then
+            setLast("maximum_probe_failed")
+            return nil
+        end
+        return {
+            perkId = answer.perkId,
+            survivorCreditBase = answer.survivorCreditBase,
+            appliedDelta = 0,
+            actualPositionBefore = answer.actualPositionBefore,
+            actualPositionAfter = answer.actualPositionAfter,
+            effectiveDelta = answer.effectiveDelta,
         }
-        pushHandlerScope(player, batch.perkId)
-        local called = callSafely(validated.processAward, player, award)
-        popHandlerScope(player, batch.perkId)
-        if not called[1] then
-            setLast("handler_threw")
-            return result(false, "handler_threw", nil)
-        end
-        if type(called[2]) ~= "table" or called[2].ok ~= true then
-            setLast("handler_failed")
-            return result(false, "handler_failed", nil)
-        end
-        setLast("award_processed")
-        return result(true, "award_processed", nil)
     end
 
     local function flushOne(player, perkId)
@@ -530,6 +563,13 @@ function EventDerivedXpSource.create(dependencies)
     end
 
     local function observe(owner, perk, eventAmount)
+        for index = #routeFrames, 1, -1 do
+            local frame = routeFrames[index]
+            if frame.player == owner and frame.perk == perk then
+                frame.eventSeen = true
+                break
+            end
+        end
         if not capturing then
             return
         end
@@ -665,18 +705,79 @@ function EventDerivedXpSource.create(dependencies)
         end
     end
 
-    local function callPrior(prior, route, ...)
+    local function callPrior(prior, route, useMultipliers, ...)
         local args = pack(...)
-        routeFrames[#routeFrames + 1] = {
+        local frame = {
             player = args[1],
             perk = args[2],
             route = route,
+            eventSeen = false,
+            ambiguous = false,
+            scopeBlocked = true,
         }
+        for index = 1, #routeFrames do
+            local parent = routeFrames[index]
+            if parent.player == frame.player and parent.perk == frame.perk then
+                parent.ambiguous = true
+            end
+        end
+
+        local begun = callSafely(
+            validated.beginMaximumProbe,
+            frame.player,
+            frame.perk,
+            args[3],
+            useMultipliers
+        )
+        local beginAnswer = begun[1] and begun[2] or nil
+        if type(beginAnswer) == "table" and beginAnswer.ok == true
+            and type(beginAnswer.candidate) == "function" then
+            frame.candidate = beginAnswer.candidate
+        end
+
+        local perkId = resolve(frame.perk)
+        if perkId then
+            frame.perkId = perkId
+            local active = mutationIsActive(frame.player, perkId)
+            if active == false then
+                frame.scopeBlocked = false
+            end
+        end
+
+        routeFrames[#routeFrames + 1] = frame
         local called = pack(pcall(prior, unpack(args, 1, args.n)))
         routeFrames[#routeFrames] = nil
         if not called[1] then
             setLast("prior_threw")
             error(called[2], 0)
+        end
+
+        local events = globals.Events
+        local captureOwned = installed and capturing and ownershipReason == nil
+            and globals[RELOAD_SENTINEL_KEY] == reloadSentinel
+            and type(events) == "table"
+            and type(events.AddXP) == "table"
+            and events.AddXP[RELOAD_SENTINEL_KEY] == reloadSentinel
+            and globals.addXp == wrappedAddXp
+            and globals.addXpNoMultiplier == wrappedAddXpNoMultiplier
+            and events.AddXP == registrationAddXpEvent
+            and events.OnTick == registrationTickEvent
+        if captureOwned and frame.candidate and not frame.eventSeen
+            and not frame.ambiguous and not frame.scopeBlocked then
+            local active = mutationIsActive(frame.player, frame.perkId)
+            if active == false then
+                local completed = callSafely(validated.completeMaximumProbe, frame.candidate)
+                local maximum = completed[1] and completed[2] or nil
+                local award = maximumEnvelope(maximum)
+                if award and award.perkId == frame.perkId then
+                    local flushed = flushOne(frame.player, frame.perkId)
+                    if flushed.ok then
+                        processEnvelope(frame.player, award)
+                    else
+                        setLast("maximum_dropped_after_flush_failure")
+                    end
+                end
+            end
         end
         return unpack(called, 2, called.n)
     end
@@ -834,10 +935,10 @@ function EventDerivedXpSource.create(dependencies)
         priorAddXp = candidateAddXp
         priorAddXpNoMultiplier = candidateNoMultiplier
         wrappedAddXp = function(...)
-            return callPrior(priorAddXp, "sandbox", ...)
+            return callPrior(priorAddXp, "sandbox", true, ...)
         end
         wrappedAddXpNoMultiplier = function(...)
-            return callPrior(priorAddXpNoMultiplier, "no_multiplier", ...)
+            return callPrior(priorAddXpNoMultiplier, "no_multiplier", false, ...)
         end
         registrationAddXpEvent = addXpEvent
         registrationTickEvent = tickEvent
