@@ -28,6 +28,7 @@ local function assertFailure(result, reason, message)
     assertFalse(result.ok, (message or reason) .. " status")
     assertEqual(result.reason, reason, (message or reason) .. " reason")
     assertEqual(result.effectiveDelta, nil, (message or reason) .. " hides values")
+    assertEqual(result.survivorCreditBase, nil, (message or reason) .. " hides credit base")
 end
 
 local function pick(config, name, default)
@@ -261,7 +262,7 @@ do
     local description = fixture.created.evaluator.describe()
     assertTrue(description.ok, "adapter status")
     assertEqual(description.adapterId, "sla.pz42-max-award", "adapter identity")
-    assertEqual(description.adapterVersion, 1, "adapter version")
+    assertEqual(description.adapterVersion, 2, "adapter version")
     assertEqual(description.representation, "java-binary32", "adapter representation")
 end
 
@@ -362,6 +363,7 @@ do
     local result, fixture = evaluate({ boost = THROW }, "Axe", 8, false)
     assertTrue(result.ok, "disabled multipliers succeed")
     assertEqual(result.effectiveDelta, 8, "disabled multipliers preserve base")
+    assertEqual(result.survivorCreditBase, 8, "disabled multipliers preserve credit base")
     assertEqual(#fixture.state.traitReads, 0, "disabled multipliers skip traits")
     assertEqual(fixture.state.sandboxGlobalReads, 0, "disabled multipliers skip sandbox")
 end
@@ -370,6 +372,7 @@ do
     local result = evaluate({}, "Fitness", 8, false)
     assertTrue(result.ok, "fitness eligible")
     assertEqual(result.effectiveDelta, 8, "fitness eligible value")
+    assertEqual(result.survivorCreditBase, 8, "fitness credit base")
     result = evaluate({ canAddFitnessXp = false }, "Fitness", 8, false)
     assertFailure(result, "fitness.ineligible")
     result = evaluate({ nutrition = NULL }, "Fitness", 8, false)
@@ -386,6 +389,7 @@ do
     local result = evaluate({ proteins = 51 }, "Strength", 8, false)
     assertTrue(result.ok, "strength positive proteins")
     assertEqual(result.effectiveDelta, 12, "strength positive factor")
+    assertEqual(result.survivorCreditBase, 12, "strength positive credit base")
     result = evaluate({ proteins = 299.999 }, "Strength", 8, false)
     assertEqual(result.effectiveDelta, 12, "strength upper interior")
     result = evaluate({ proteins = -301 }, "Strength", 10, false)
@@ -415,6 +419,7 @@ do
         end,
     }, "Strength", 7.25, false)
     assertEqual(result.effectiveDelta, 5.074999809265137, "strength exact binary32 result")
+    assertEqual(result.survivorCreditBase, 5.074999809265137, "strength exact credit base")
     assertEqual(nextRoute, #expectedRoutes, "strength exact route count")
     result = evaluate({
         proteins = 51,
@@ -482,6 +487,17 @@ for index, boost in ipairs({ -1, 1.5, math.huge, 0 / 0, THROW, NULL }) do
 end
 
 do
+    local result = evaluate({
+        boost = 1,
+        clampFloat = function(value, minimum, maximum, call)
+            if call >= 3 then return 0 end
+            return value
+        end,
+    }, "Axe", 8, true)
+    assertFailure(result, "award.credit-base", "zero pre-sandbox result")
+end
+
+do
     local fast = { FAST_LEARNER = true }
     local result = evaluate({ boost = 1, traits = fast }, "Axe", 10, true)
     assertEqual(result.effectiveDelta, 13, "fast learner applies")
@@ -540,6 +556,7 @@ end
 do
     local result = evaluate({ boost = 1, bookMultiplier = 2 }, "Axe", 8, true)
     assertEqual(result.effectiveDelta, 16, "book multiplier applies above one")
+    assertEqual(result.survivorCreditBase, 16, "book multiplier enters credit base")
     for _, multiplier in ipairs({ 0, 0.5, 1 }) do
         result = evaluate({ boost = 1, bookMultiplier = multiplier }, "Axe", 8, true)
         assertEqual(result.effectiveDelta, 8, "book boundary " .. tostring(multiplier))
@@ -553,6 +570,7 @@ end
 do
     local result, fixture = evaluate({ boost = 1, globalMultiplier = 1.5 }, "Axe", 8, true)
     assertEqual(result.effectiveDelta, 12, "global sandbox multiplier")
+    assertEqual(result.survivorCreditBase, 8, "global sandbox excluded from credit base")
     assertEqual(fixture.state.sandboxGlobalReads, 1, "global sandbox read")
     assertEqual(fixture.state.sandboxPerkReads, 0, "global branch skips per-perk")
     for index, value in ipairs({ -1, math.huge, 0 / 0, NULL, THROW }) do
@@ -574,6 +592,7 @@ do
         perkMultiplierText = "1.5",
     }, "Axe", 8, true)
     assertEqual(result.effectiveDelta, 12, "per-perk sandbox multiplier")
+    assertEqual(result.survivorCreditBase, 8, "per-perk sandbox excluded from credit base")
     assertEqual(fixture.state.optionNames[1], "MultiplierConfig.Axe", "canonical sandbox option")
     assertEqual(fixture.state.parsed[1].value, "1.5", "sandbox string parsed")
     assertEqual(fixture.state.parsed[1].fallback, -1, "sandbox parse fallback")
@@ -611,6 +630,7 @@ do
     result = fixture.created.evaluator.evaluate(fixture.player, fixture.perks.Axe, 8, true)
     assertTrue(result.ok, "per-perk nonexact pipeline succeeds")
     assertEqual(result.effectiveDelta, 9.600000381469727, "per-perk exact binary32 result")
+    assertEqual(result.survivorCreditBase, 8, "per-perk exact credit base")
     assertEqual(nextRoute, #expectedRoutes, "per-perk exact route count")
     assertEqual(#fixture.state.parsed, 1, "per-perk parse count")
 
@@ -683,6 +703,7 @@ do
     local result = fixture.created.evaluator.evaluate(fixture.player, fixture.perks.SmallBlade, 7.25, true)
     assertTrue(result.ok, "combined multiplier pipeline succeeds")
     assertEqual(result.effectiveDelta, 32.03416061401367, "combined exact binary32 result")
+    assertEqual(result.survivorCreditBase, 26.695133209228516, "combined exact credit base")
     assertEqual(nextRoute, #expectedRoutes, "combined route count")
     assertEqual(#fixture.state.traitReads, 4, "combined trait order count")
     assertEqual(fixture.state.traitReads[1], "FAST_LEARNER", "fast learner order")

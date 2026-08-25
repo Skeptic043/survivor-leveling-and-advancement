@@ -245,7 +245,7 @@ function Build42MaxAwardEvaluator.create(dependencies)
         return {
             ok = true,
             adapterId = "sla.pz42-max-award",
-            adapterVersion = 1,
+            adapterVersion = 2,
             representation = "java-binary32",
         }
     end
@@ -334,7 +334,11 @@ function Build42MaxAwardEvaluator.create(dependencies)
         end
 
         if not useMultipliers then
-            return { ok = true, effectiveDelta = baseAward }
+            return {
+                ok = true,
+                effectiveDelta = baseAward,
+                survivorCreditBase = baseAward,
+            }
         end
 
         local boostOk, boost = callMethod(xp, "getPerkBoost", perk)
@@ -424,6 +428,10 @@ function Build42MaxAwardEvaluator.create(dependencies)
                 return failure("award.book")
             end
         end
+        if effectiveDelta <= 0 then
+            return failure("award.credit-base")
+        end
+        local survivorCreditBase = effectiveDelta
 
         local sandboxMultiplier, sandboxFailure = readSandboxMultiplier(canonicalPerk)
         if sandboxFailure then return sandboxFailure end
@@ -432,7 +440,11 @@ function Build42MaxAwardEvaluator.create(dependencies)
             return failure("award.effective")
         end
 
-        return { ok = true, effectiveDelta = effectiveDelta }
+        return {
+            ok = true,
+            effectiveDelta = effectiveDelta,
+            survivorCreditBase = survivorCreditBase,
+        }
     end
 
     return { ok = true, evaluator = evaluator }

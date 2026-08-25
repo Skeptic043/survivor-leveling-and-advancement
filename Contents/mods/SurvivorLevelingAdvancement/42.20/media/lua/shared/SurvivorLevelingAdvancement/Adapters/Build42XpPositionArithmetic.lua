@@ -37,41 +37,39 @@ function Build42XpPositionArithmetic.create(dependencies)
         return {
             ok = true,
             adapterId = "sla.pz42-xp-position",
-            adapterVersion = 1,
+            adapterVersion = 2,
             representation = "java-binary32",
         }
     end
 
-    function arithmetic.previous(positionAfter, eventAmount)
-        if not isFinite(positionAfter) or positionAfter < 0 then
-            return failure("invalid-position-after", "positionAfter must be finite and nonnegative")
+    function arithmetic.add(positionBefore, eventAmount)
+        if not isFinite(positionBefore) or positionBefore < 0 then
+            return failure("invalid-position-before", "positionBefore must be finite and nonnegative")
         end
-        if not isFinite(eventAmount) or eventAmount <= 0 then
-            return failure("invalid-event-amount", "eventAmount must be finite and positive")
+        if not isFinite(eventAmount) then
+            return failure("invalid-event-amount", "eventAmount must be finite")
         end
 
-        local callOK, positionBefore = pcall(
+        local callOK, positionAfter = pcall(
             clampFloat,
-            positionAfter - eventAmount,
+            positionBefore + eventAmount,
             -FLOAT_MAX,
             FLOAT_MAX
         )
         if not callOK then
             return failure("capability-error", "PZMath.clampFloat failed")
         end
-        if not isFinite(positionBefore) then
+        if not isFinite(positionAfter) then
             return failure("invalid-result", "PZMath.clampFloat returned a non-finite value")
         end
-        if positionBefore < 0 or positionBefore > positionAfter then
-            return failure("invalid-result", "PZMath.clampFloat returned an invalid prior position")
-        end
-        if positionBefore >= positionAfter then
-            return failure("no-representable-movement", "eventAmount did not move the stored float")
+        if positionAfter < 0 or positionAfter > FLOAT_MAX then
+            return failure("invalid-result", "PZMath.clampFloat returned an invalid position")
         end
 
         return {
             ok = true,
-            positionBefore = positionBefore,
+            positionAfter = positionAfter,
+            moved = positionAfter ~= positionBefore,
         }
     end
 
