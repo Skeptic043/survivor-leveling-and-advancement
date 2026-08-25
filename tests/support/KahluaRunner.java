@@ -4,6 +4,13 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 public final class KahluaRunner {
+    private static void require(boolean condition, String message) {
+        if (!condition) throw new IllegalArgumentException(message);
+    }
+    private static String count(Object assertions) {
+        if (assertions instanceof Number && ((Number) assertions).doubleValue() == ((Number) assertions).longValue()) return Long.toString(((Number) assertions).longValue());
+        return String.valueOf(assertions);
+    }
     private static Method method(Class<?> type, String name, int parameterCount) {
         for (Method candidate : type.getMethods()) {
             if (candidate.getName().equals(name) && candidate.getParameterTypes().length == parameterCount) return candidate;
@@ -24,6 +31,9 @@ public final class KahluaRunner {
         return result.length > 1 ? result[1] : null;
     }
     public static void main(String[] args) throws Exception {
+        require(args.length >= 4 && (args.length - 2) % 2 == 0, "usage: KahluaRunner <label> <spec> <global> <source> [...]");
+        require(!args[0].isEmpty() && !args[1].isEmpty(), "label and spec are required");
+        for (int i = 2; i < args.length; i += 2) require(!args[i].isEmpty() && !args[i + 1].isEmpty(), "global names and source paths are required");
         Class<?> platformClass = Class.forName("se.krka.kahlua.j2se.J2SEPlatform");
         Object platform = platformClass.getConstructor().newInstance();
         Object environment = method(platformClass, "newEnvironment", 0).invoke(platform);
@@ -40,10 +50,17 @@ public final class KahluaRunner {
         debugOwner.set(thread, Thread.currentThread());
         Class<?> compiler = Class.forName("se.krka.kahlua.luaj.compiler.LuaCompiler");
         Method loadis = compiler.getMethod("loadis", java.io.Reader.class, String.class, tableClass);
-        Object codec = loadis.invoke(null, new FileReader(args[0]), "StateCodec", environment);
-        rawsetMethod(environment.getClass()).invoke(environment, "StateCodec", run(thread, codec, "codec"));
-        Object spec = loadis.invoke(null, new FileReader(args[1]), "StateCodecSpec", environment);
-        Object assertions = run(thread, spec, "spec");
-        System.out.println("B3 StateCodec: 1 suite, " + assertions + " assertions");
+        Method rawset = rawsetMethod(environment.getClass());
+        for (int i = 2; i < args.length; i += 2) {
+            try (FileReader source = new FileReader(args[i + 1])) {
+                Object closure = loadis.invoke(null, source, args[i], environment);
+                rawset.invoke(environment, args[i], run(thread, closure, args[i]));
+            }
+        }
+        try (FileReader specReader = new FileReader(args[1])) {
+            Object spec = loadis.invoke(null, specReader, args[0], environment);
+            Object assertions = run(thread, spec, args[0]);
+            System.out.println(args[0] + ": 1 suite, " + count(assertions) + " assertions");
+        }
     }
 }
