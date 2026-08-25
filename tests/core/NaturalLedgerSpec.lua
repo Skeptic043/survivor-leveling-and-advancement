@@ -172,6 +172,34 @@ sameLedger(externalClear.state, ledger(130, 130), "external final synchronizatio
 equal(externalClear.effect.eligibleApplied, 0, "external synchronization is ineligible")
 equal(externalClear.effect.clearedTargetIds[1], "external", "external clear reports target")
 
+local masteryInput = ledger(25, 50, {
+    target("first-mastery", 2, 100),
+    target("second-mastery", 3, 200),
+})
+local mastery = NaturalLedger.master(masteryInput, 450)
+equal(mastery.ok, true, "mastery succeeds")
+sameLedger(mastery.state, ledger(450, 450), "mastery exact maximum")
+equal(mastery.effect.recoveryApplied, 0, "mastery has no recovery")
+equal(mastery.effect.eligibleApplied, 0, "mastery has no eligibility")
+equal(mastery.effect.eligibleRatio, 0, "mastery has zero ratio")
+equal(#mastery.effect.clearedTargetIds, 2, "mastery clears complete chain")
+equal(mastery.effect.clearedTargetIds[1], "first-mastery", "mastery preserves first clear order")
+equal(mastery.effect.clearedTargetIds[2], "second-mastery", "mastery preserves second clear order")
+sameLedger(masteryInput, ledger(25, 50, {
+    target("first-mastery", 2, 100),
+    target("second-mastery", 3, 200),
+}), "mastery leaves caller unchanged")
+check(mastery.state ~= masteryInput, "mastery returns a new state")
+check(mastery.effect.clearedTargetIds ~= masteryInput.activeTargets, "mastery clear IDs do not alias targets")
+local emptyMastery = NaturalLedger.master(ledger(4, 4), 9)
+equal(emptyMastery.ok, true, "empty mastery succeeds")
+sameLedger(emptyMastery.state, ledger(9, 9), "empty mastery exact maximum")
+equal(#emptyMastery.effect.clearedTargetIds, 0, "empty mastery clears nothing")
+failed(NaturalLedger.master(nil, 9), "MALFORMED_STATE", "mastery missing state")
+failed(NaturalLedger.master(ledger(0, 0), -1), "INCONSISTENT_POSITION", "mastery negative maximum")
+failed(NaturalLedger.master(ledger(0, 0), math.huge), "NON_FINITE_NUMBER", "mastery infinite maximum")
+failed(NaturalLedger.master(ledger(50, 100), 99), "POSITION_BEHIND_HIGH_WATER", "mastery cannot lower high water")
+
 failed(NaturalLedger.applySupported(baseline.state, 10, 115), "INCONSISTENT_POSITION", "inconsistent delta and position")
 failed(NaturalLedger.applySupported(ledger(100, 100, { target("ahead", 2, 200) }), 20, 110), "POSITION_BEHIND_HIGH_WATER", "actual behind earned high water")
 failed(NaturalLedger.applySupported(ledger(80, 100, { target("ahead", 2, 200) }), 10, 85), "INCONSISTENT_POSITION", "active recovery position behind movement")

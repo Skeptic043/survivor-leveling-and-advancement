@@ -311,7 +311,10 @@ do
     assertEqual(result.revision, 1)
     assertEqual(result.spent, 1)
     assertEqual(result.availableAp, 2)
+    assertEqual(result.apCost, 1)
+    assertFalse(result.mastered)
     assertTrue(result.addedTarget)
+    assertEqual(#result.clearedTargetIds, 0)
     assertTrue(result.xpWriteInvoked)
     assertTrue(result.levelWriteInvoked)
     assertFalse(result.recovered)
@@ -333,6 +336,148 @@ do
     assertSame(request, requestBefore, "request immutable")
     assertSame(globalThree, configBefore, "config immutable")
     assertSame(store.receivedOptions, resolver.loadOptions, "resolver options reach load")
+end
+
+-- Final-level mastery derives a two-AP cost, bypasses positive capacity, and collapses the full target chain.
+do
+    local state = newState(2, 0)
+    state.survivor.xpIntoLevel = 33
+    state.perks.Axe = newPerk(0, 0, {
+        { targetId = "chain_one", targetLevel = 1, targetPosition = 100 },
+        { targetId = "chain_two", targetLevel = 2, targetPosition = 250 },
+    })
+    state.perks.Axe.postMaxFullRateUsed = 12
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    local result = service.spend(player, { perkId = "Axe", requestId = "master_exact", expectedRevision = 0 }, { mode = "Global", globalLimit = 2 })
+    assertTrue(result.ok, "exact mastery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
+    assertEqual(result.apCost, 2)
+    assertTrue(result.mastered)
+    assertFalse(result.addedTarget)
+    assertSame(result.clearedTargetIds, { "chain_one", "chain_two" }, "mastery clear order")
+    assertEqual(result.spent, 2)
+    assertEqual(result.availableAp, 0)
+    assertEqual(result.revision, 1)
+    assertEqual(adapter.ensureCalls, 1)
+    assertEqual(player.skills.Axe.level, 3)
+    assertEqual(player.skills.Axe.position, 450)
+    assertEqual(store.current.perks.Axe.naturalPosition, 450)
+    assertEqual(store.current.perks.Axe.highWaterPosition, 450)
+    assertEqual(#store.current.perks.Axe.activeTargets, 0)
+    assertEqual(store.current.survivor.xpIntoLevel, 33)
+    assertEqual(store.current.perks.Axe.postMaxFullRateUsed, 12)
+    assertEqual(store.current.inFlightAdvancement, nil)
+end
+do
+    local state = newState(4, 1)
+    state.perks.Axe = newPerk(0, 0, {
+        { targetId = "one", targetLevel = 1, targetPosition = 100 },
+        { targetId = "two", targetLevel = 2, targetPosition = 250 },
+    })
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    local result = service.spend(player, { perkId = "Axe", requestId = "master_extra", expectedRevision = 0 }, { mode = "PerSkill", perSkillDefault = 2 })
+    assertTrue(result.ok, "extra AP mastery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
+    assertEqual(result.apCost, 2)
+    assertEqual(result.spent, 3)
+    assertEqual(result.availableAp, 1)
+end
+do
+    local state = newState(3, 0)
+    state.perks.Axe = newPerk(0, 0)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    local result = service.spend(player, { perkId = "Axe", requestId = "master_free", expectedRevision = 0 }, { mode = "Free" })
+    assertTrue(result.ok, "free mastery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
+end
+
+-- One AP and zero-limit configurations reject final mastery without reservation or engine mutation.
+do
+    local cases = {
+        { state = newState(2, 1), config = globalThree, code = "no_ap" },
+        { state = newState(3, 0), config = { mode = "Global", globalLimit = 0 }, code = "allotment_rejected" },
+        { state = newState(3, 0), config = { mode = "PerSkill", perSkillDefault = 0 }, code = "allotment_rejected" },
+        { state = newState(3, 0), config = { mode = "PerSkill", perSkillDefault = 1, perSkillOverrides = { Axe = 0 } }, code = "allotment_rejected" },
+    }
+    for index = 1, #cases do
+        cases[index].state.perks.Axe = newPerk(0, 0)
+        local store = makeStore(cases[index].state)
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver)
+        local player = newPlayer("Axe", 2, 250)
+        local result = service.spend(player, { perkId = "Axe", requestId = "master_blocked_" .. index, expectedRevision = 0 }, cases[index].config)
+        assertCode(result, cases[index].code)
+        if index == 1 then assertEqual(result.detail, "insufficient_ap_for_advancement") end
+        assertEqual(adapter.ensureCalls, 0)
+        assertEqual(store.saves, 0)
+        assertEqual(player.skills.Axe.level, 2)
+        assertEqual(player.skills.Axe.position, 250)
+    end
+end
+
+-- Final mastery remains fail-closed for red, stale, and misaligned state.
+do
+    local scenarios = {
+        { code = "red_recovery", natural = 200, high = 250, expected = 0, position = 250 },
+        { code = "stale_revision", natural = 250, high = 250, expected = 1, position = 250 },
+        { code = "misaligned_progression", natural = 200, high = 200, expected = 0, position = 200 },
+    }
+    for index = 1, #scenarios do
+        local item = scenarios[index]
+        local state = newState(3, 0)
+        state.perks.Axe = newPerk(item.natural, item.high)
+        local store = makeStore(state)
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver)
+        local player = newPlayer("Axe", 2, item.position)
+        assertCode(service.spend(player, { perkId = "Axe", requestId = "master_fail_" .. index, expectedRevision = item.expected }, globalThree), item.code)
+        assertEqual(adapter.ensureCalls, 0)
+        assertEqual(store.saves, 0)
+    end
+end
+
+-- A final engine or commit failure leaves the upward mutation/reservation available for recovery and never refunds AP.
+do
+    local state = newState(3, 0)
+    state.perks.Axe = newPerk(0, 0, { { targetId = "prior", targetLevel = 2, targetPosition = 250 } })
+    local store = makeStore(state)
+    store.failSaveAt[2] = true
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "master_commit_fail", expectedRevision = 0 }, globalThree), "commit_save_failed")
+    assertEqual(player.skills.Axe.level, 3)
+    assertEqual(player.skills.Axe.position, 450)
+    assertEqual(store.current.survivor.spent, 0)
+    assertEqual(store.current.inFlightAdvancement.targetLevel, 3)
+    assertEqual(store.current.inFlightAdvancement.effectiveMaximum, 3)
+    local recovered = service.recover(player)
+    assertTrue(recovered.ok, "commit failure mastery recovers: " .. tostring(recovered.code) .. ":" .. tostring(recovered.detail))
+    assertEqual(recovered.apCost, 2)
+    assertTrue(recovered.mastered)
+    assertEqual(recovered.spent, 2)
+    assertEqual(#store.current.perks.Axe.activeTargets, 0)
+    assertEqual(player.skills.Axe.level, 3)
+end
+do
+    local state = newState(3, 0)
+    state.perks.Axe = newPerk(0, 0)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    player.behavior.Axe = { failNoWrite = true }
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "master_engine_fail", expectedRevision = 0 }, globalThree), "engine_mutation_failed")
+    assertEqual(player.skills.Axe.level, 2)
+    assertEqual(player.skills.Axe.position, 250)
+    assertEqual(store.current.survivor.spent, 0)
+    assertEqual(store.current.inFlightAdvancement.requestId, "master_engine_fail")
 end
 
 -- Malformed, forged, unsupported, stale, and rejected fresh requests do not persist bootstrap state.
@@ -536,18 +681,20 @@ end
 
 local function reservationState(options)
     options = options or {}
-    local state = newState(3, options.committed and 1 or 0)
+    local apCost = options.final and 2 or 1
+    local state = newState(3, options.committed and apCost or 0)
     state.revision = options.committed and 1 or 0
-    state.perks.Axe = newPerk(options.prePosition or 0, options.prePosition or 0, options.targets or {})
+    local prePosition = options.prePosition or (options.final and 250 or 0)
+    state.perks.Axe = newPerk(options.natural or prePosition, options.high or options.natural or prePosition, options.targets or {})
     state.inFlightAdvancement = {
         requestId = options.requestId or "recover_one",
         perkId = "Axe",
         preRevision = 0,
         preSpent = 0,
-        preLevel = options.preLevel or 0,
-        prePosition = options.prePosition or 0,
-        targetLevel = options.targetLevel or 1,
-        targetPosition = options.targetPosition or 100,
+        preLevel = options.preLevel or (options.final and 2 or 0),
+        prePosition = prePosition,
+        targetLevel = options.targetLevel or (options.final and 3 or 1),
+        targetPosition = options.targetPosition or (options.final and 450 or 100),
         adapterId = "fake.adapter",
         adapterVersion = 1,
         curveFingerprint = options.fingerprint or "curve_Axe",
@@ -574,6 +721,9 @@ do
     local recovered = service.recover(player)
     assertTrue(recovered.ok)
     assertTrue(recovered.recovered)
+    assertEqual(recovered.apCost, 1)
+    assertFalse(recovered.mastered)
+    assertEqual(#recovered.clearedTargetIds, 0)
     assertFalse(recovered.xpWriteInvoked)
     assertTrue(recovered.levelWriteInvoked)
     assertEqual(player.skills.Axe.level, 1)
@@ -582,6 +732,109 @@ do
     assertEqual(store.current.survivor.spent, 1)
     assertEqual(#store.current.perks.Axe.activeTargets, 1)
     assertFalse(MutationScope.isActive(player, "Axe"))
+end
+
+-- Final recovery derives two AP in reservation, engine-complete, and committed phases and remains idempotent.
+do
+    local targets = {
+        { targetId = "old_one", targetLevel = 1, targetPosition = 100 },
+        { targetId = "old_two", targetLevel = 2, targetPosition = 250 },
+    }
+    local store = makeStore(reservationState({ final = true, natural = 0, high = 0, targets = targets }))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    local result = service.recover(player)
+    assertTrue(result.ok, "pre-mutation final recovery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
+    assertTrue(result.recovered)
+    assertEqual(result.apCost, 2)
+    assertTrue(result.mastered)
+    assertFalse(result.addedTarget)
+    assertSame(result.clearedTargetIds, { "old_one", "old_two" }, "recovery mastery clear order")
+    assertTrue(result.xpWriteInvoked)
+    assertTrue(result.levelWriteInvoked)
+    assertEqual(result.spent, 2)
+    assertEqual(store.current.revision, 1)
+    assertEqual(store.current.perks.Axe.naturalPosition, 450)
+    assertEqual(store.current.perks.Axe.highWaterPosition, 450)
+    assertEqual(#store.current.perks.Axe.activeTargets, 0)
+    assertEqual(store.current.inFlightAdvancement, nil)
+    local repeated = service.recover(player)
+    assertTrue(repeated.ok, "repeated final recovery succeeds: " .. tostring(repeated.code) .. ":" .. tostring(repeated.detail))
+    assertFalse(repeated.recovered)
+    assertEqual(store.saves, 1)
+end
+do
+    local store = makeStore(reservationState({ final = true, natural = 0, high = 0, targets = { { targetId = "old", targetLevel = 2, targetPosition = 250 } } }))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 3, 450)
+    local result = service.recover(player)
+    assertTrue(result.ok, "engine-complete final recovery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
+    assertEqual(result.apCost, 2)
+    assertTrue(result.mastered)
+    assertFalse(result.xpWriteInvoked)
+    assertFalse(result.levelWriteInvoked)
+    assertEqual(result.spent, 2)
+    assertEqual(#store.current.perks.Axe.activeTargets, 0)
+end
+do
+    local state = reservationState({ final = true, committed = true })
+    state.perks.Axe.naturalPosition = 450
+    state.perks.Axe.highWaterPosition = 450
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 3, 450)
+    local result = service.recover(player)
+    assertTrue(result.ok, "committed final recovery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
+    assertEqual(result.apCost, 2)
+    assertTrue(result.mastered)
+    assertEqual(result.spent, 2)
+    assertEqual(result.revision, 1)
+    assertEqual(store.current.inFlightAdvancement, nil)
+end
+
+-- A recorded final target whose adapter maximum changes is quarantined without mutation.
+do
+    local store = makeStore(reservationState({ final = true }))
+    local adapter, resolver, handles = makeRuntime()
+    resolver.resolve("Axe")
+    handles.Axe.effectiveMaximum = 4
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    assertCode(service.recover(player), "recovery_quarantined")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+    assertEqual(store.current.inFlightAdvancement.effectiveMaximum, 3)
+end
+do
+    local state = reservationState({ final = true })
+    state.survivor.level = 1
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    assertCode(service.recover(player), "recovery_quarantined")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+    assertEqual(store.current.inFlightAdvancement.requestId, "recover_one")
+end
+do
+    local state = reservationState({ final = true, natural = 200, high = 450 })
+    local before = clone(state)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    local result = service.recover(player)
+    assertCode(result, "recovery_quarantined")
+    assertEqual(result.detail, "natural_recovery_required")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+    assertEqual(player.skills.Axe.level, 2)
+    assertEqual(player.skills.Axe.position, 250)
+    assertSame(store.current, before, "red final reservation remains unchanged")
 end
 
 -- Already-complete and committed-but-not-cleared reservations normalize without duplicate writes/targets.

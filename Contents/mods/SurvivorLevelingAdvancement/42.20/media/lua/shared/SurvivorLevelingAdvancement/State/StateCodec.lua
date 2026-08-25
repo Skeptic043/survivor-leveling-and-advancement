@@ -198,11 +198,12 @@ local function validateV1(raw)
     local inFlight, inFlightError = validateInFlight(raw.inFlightAdvancement)
     if inFlightError then return nil, inFlightError end
     if inFlight ~= nil then
+        local apCost = inFlight.targetLevel == inFlight.effectiveMaximum and 2 or 1
         if inFlight.preSpent > survivor.level then return nil, failure("invalid_in_flight_advancement", "preSpent_above_survivor_level") end
         if raw.revision ~= inFlight.preRevision and raw.revision ~= inFlight.preRevision + 1 then
             return nil, failure("invalid_in_flight_advancement", "revision_outside_reservation")
         end
-        if survivor.spent ~= inFlight.preSpent and survivor.spent ~= inFlight.preSpent + 1 then
+        if survivor.spent ~= inFlight.preSpent and survivor.spent ~= inFlight.preSpent + apCost then
             return nil, failure("invalid_in_flight_advancement", "spent_outside_reservation")
         end
     end
