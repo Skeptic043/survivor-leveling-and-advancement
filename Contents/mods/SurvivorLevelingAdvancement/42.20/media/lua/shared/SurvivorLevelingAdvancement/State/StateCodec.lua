@@ -198,7 +198,10 @@ local function applyCompatibility(state, options)
                 state.orphanedPerks[id] = record
                 state.perks[id] = nil
             else
-                local ok, changed = pcall(migration, id, cloneValue(record), cloneValue(spec))
+                local recordCopy, recordError = cloneValue(record)
+                local specCopy, specError = cloneValue(spec)
+                if recordError or specError then return nil, failure("perk_migration_failed", id) end
+                local ok, changed = pcall(migration, id, recordCopy, specCopy)
                 if not ok or changed == nil then return nil, failure("perk_migration_failed", id) end
                 local checked, err = validatePerk(changed)
                 if not checked then return nil, err end
@@ -212,10 +215,13 @@ local function applyCompatibility(state, options)
         local id = orphanedIds[index]
         local record = state.orphanedPerks[id]
         local spec = loaded[id]
-        if type(spec) == "table" and sameIdentity(record, spec) then
+        if type(spec) == "table" then
             local migration = options and options.perkMigrator
             if type(migration) == "function" then
-                local ok, restored = pcall(migration, id, cloneValue(record), cloneValue(spec))
+                local recordCopy, recordError = cloneValue(record)
+                local specCopy, specError = cloneValue(spec)
+                if recordError or specError then return nil, failure("perk_migration_failed", id) end
+                local ok, restored = pcall(migration, id, recordCopy, specCopy)
                 if not ok or restored == nil then return nil, failure("perk_migration_failed", id) end
                 local checked = validatePerk(restored)
                 if not checked or not sameIdentity(checked, spec) then return nil, failure("perk_migration_failed", id) end
