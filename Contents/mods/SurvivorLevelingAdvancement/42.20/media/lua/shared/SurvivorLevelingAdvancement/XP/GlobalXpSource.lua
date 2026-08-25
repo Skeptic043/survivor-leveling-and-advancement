@@ -72,7 +72,7 @@ function GlobalXpSource.create(dependencies)
     local captureEnabled = false
     local observerState = "not_attempted"
     local registrationEvent = nil
-    local ambiguousEvent = nil
+    local ambiguousEvents = setmetatable({}, { __mode = "k" })
     local priorAddXp = nil
     local priorAddXpNoMultiplier = nil
     local wrappedAddXp = nil
@@ -319,14 +319,14 @@ function GlobalXpSource.create(dependencies)
             setLast("missing_Events_AddXP_Add")
             return result(false, "missing_seam", "Events.AddXP.Add")
         end
-        if ambiguousEvent == event then
+        if ambiguousEvents[event] then
             setLast("observer_registration_ambiguous")
             return result(false, "observer_registration_ambiguous", nil)
         end
 
         local registered = callSafely(event.Add, observe)
         if not registered[1] then
-            ambiguousEvent = event
+            ambiguousEvents[event] = true
             observerState = "ambiguous"
             captureEnabled = false
             setLast("observer_registration_ambiguous")
