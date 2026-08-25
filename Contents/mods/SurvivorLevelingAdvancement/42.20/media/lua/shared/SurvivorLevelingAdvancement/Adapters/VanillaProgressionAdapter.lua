@@ -83,15 +83,16 @@ local function numberToken(value)
     if value == 0 then
         return "0"
     end
-    return string.format("%.17g", value)
+    return string.format("%.17g", value):gsub("%+", "p")
 end
 
 local function fingerprintFor(thresholds, maximum)
-    local parts = { "sla.vanilla.v1", tostring(maximum) }
+    local parts = { "sla.vanilla.v1", "m" .. tostring(maximum) }
     for level = 0, maximum do
-        parts[#parts + 1] = tostring(level) .. "=" .. numberToken(thresholds[level])
+        parts[#parts + 1] = "l" .. tostring(level)
+        parts[#parts + 1] = "n" .. numberToken(thresholds[level])
     end
-    return table.concat(parts, ";")
+    return table.concat(parts, ":")
 end
 
 local function privateFor(handle)

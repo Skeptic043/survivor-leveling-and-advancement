@@ -103,6 +103,7 @@ assertEqual(handle.adapterId, "sla.vanilla", "adapter ID should be stable")
 assertEqual(handle.adapterVersion, 1, "adapter version should be stable")
 assertEqual(handle.effectiveMaximum, 3, "maximum should come from the first negative sentinel")
 assertTrue(type(handle.curveFingerprint) == "string" and handle.curveFingerprint ~= "", "fingerprint should be nonempty")
+assertTrue(handle.curveFingerprint:match("^[-A-Za-z0-9._:]+$") ~= nil, "fingerprint should contain only StateCodec-safe ID characters")
 
 local sameCurve = Adapter.build(makePerk(
     { [1] = 8, [2] = 9, [3] = 10 },
@@ -121,6 +122,22 @@ local differentCurve = Adapter.build(makePerk(
 ))
 assertTrue(differentCurve.ok, "different curve should build")
 assertTrue(differentCurve.handle.curveFingerprint ~= handle.curveFingerprint, "different cumulative threshold should change fingerprint")
+
+local exponentToken = string.format("%.17g", 1e20)
+assertTrue(string.find(exponentToken, "+", 1, true) ~= nil, "exponent fixture should exercise a plus sign")
+local exponentCurveA = Adapter.build(makePerk(
+    { [1] = 1, [2] = 1 },
+    { [1] = 1e20, [2] = 2e20 }
+))
+local exponentCurveB = Adapter.build(makePerk(
+    { [1] = 1, [2] = 1 },
+    { [1] = 1e20, [2] = 3e20 }
+))
+assertTrue(exponentCurveA.ok and exponentCurveB.ok, "finite exponent-plus curves should build")
+assertTrue(exponentCurveA.handle.curveFingerprint:match("^[-A-Za-z0-9._:]+$") ~= nil, "exponent-plus fingerprint should remain StateCodec-safe")
+assertTrue(exponentCurveB.handle.curveFingerprint:match("^[-A-Za-z0-9._:]+$") ~= nil, "second exponent-plus fingerprint should remain StateCodec-safe")
+assertTrue(string.find(exponentCurveA.handle.curveFingerprint, "+", 1, true) == nil, "encoded exponent should not retain unsafe plus")
+assertTrue(exponentCurveA.handle.curveFingerprint ~= exponentCurveB.handle.curveFingerprint, "different exponent-plus thresholds should remain distinguishable")
 
 local description = Adapter.describe(handle)
 assertTrue(description.ok, "valid handle should describe")
