@@ -80,7 +80,10 @@ local function makeFixture(options)
     local fitnessPerk = {}
     local event = options.event or makeEvent()
     local positions = { Strength = 100, Fitness = 200 }
-    local calls = { handlers = {}, prior = {}, round = {}, reads = {}, resolves = {} }
+    local calls = {
+        handlers = {}, prior = {}, round = {}, reads = {}, resolves = {},
+        claims = {}, releases = {},
+    }
     local hosted = {}
     for name, definition in pairs(DEFINITIONS) do
         hosted[name] = shallowCopy(definition)
@@ -206,6 +209,30 @@ local function makeFixture(options)
                 end
                 if options.handlerFail then
                     return { ok = false, code = "rejected" }
+                end
+                return { ok = true }
+            end,
+        },
+        exactXpClaims = {
+            claim = function(token, owner, perk, amount)
+                calls.claims[#calls.claims + 1] = {
+                    token = token, owner = owner, perk = perk, amount = amount,
+                }
+                if options.claimThrow then
+                    error("claim failed")
+                elseif options.claimFalse then
+                    return false
+                elseif options.claimFail then
+                    return { ok = false }
+                end
+                return { ok = true }
+            end,
+            release = function(token)
+                calls.releases[#calls.releases + 1] = token
+                if options.releaseThrow then
+                    error("release failed")
+                elseif options.releaseFail then
+                    return { ok = false }
                 end
                 return { ok = true }
             end,
@@ -583,6 +610,11 @@ do
     assertEqual(203, fixture.calls.handlers[1].award.actualPositionAfter)
     assertEqual(200, fixture.calls.handlers[2].award.actualPositionBefore)
     assertEqual(205, fixture.calls.handlers[2].award.actualPositionAfter)
+    assertEqual(2, #fixture.calls.claims, "nested events both claimed")
+    assertTrue(fixture.calls.claims[1].token ~= fixture.calls.claims[2].token,
+        "nested repeats use distinct claim tokens")
+    assertEqual(fixture.calls.claims[1].token, fixture.calls.releases[1], "inner token released first")
+    assertEqual(fixture.calls.claims[2].token, fixture.calls.releases[2], "outer token released second")
 end
 
 -- Unsupported nested passthrough is ignored while an outer supported repeat is suspended.
@@ -830,6 +862,71 @@ do
     assertFalse(source.verifyOwnership().ok)
     fixture.actionTable.exeLooped(fixture.action)
     assertEqual(2, #fixture.calls.handlers)
+end
+
+do
+    local fixture = makeFixture()
+    local source = ExerciseXpSource.create(fixture.dependencies)
+    assertTrue(source.install().ok)
+    local returned = packValues(fixture.actionTable.exeLooped(fixture.action, nil, "tail"))
+    assertEqual(3, returned.n, "successful claims preserve return arity")
+    assertEqual(2, #fixture.calls.claims, "both exact events are claimed")
+    assertEqual(fixture.calls.claims[1].token, fixture.calls.claims[2].token, "repeat claims share token")
+    assertEqual(1, #fixture.calls.releases, "successful repeat releases once")
+    assertEqual(fixture.calls.claims[1].token, fixture.calls.releases[1], "released token is exact")
+    assertEqual(2, #fixture.calls.handlers, "successful claims retain envelopes")
+    assertEqual(1.25, fixture.calls.handlers[1].award.appliedDelta, "strength envelope unchanged")
+    assertEqual(2.5, fixture.calls.handlers[2].award.appliedDelta, "fitness envelope unchanged")
+    local firstToken = fixture.calls.claims[1].token
+    fixture.actionTable.exeLooped(fixture.action)
+    assertEqual(4, #fixture.calls.claims, "repeated same-tuple events are claimed separately")
+    assertTrue(firstToken ~= fixture.calls.claims[3].token, "repeated calls use distinct tokens")
+    assertEqual(2, #fixture.calls.releases, "repeated calls each release")
+end
+
+do
+    local variants = {
+        { claimFalse = true, code = "claim-failed" },
+        { claimFail = true, code = "claim-failed" },
+        { claimThrow = true, code = "claim-threw" },
+    }
+    for index = 1, #variants do
+        local fixture = makeFixture(variants[index])
+        local source = ExerciseXpSource.create(fixture.dependencies)
+        assertTrue(source.install().ok)
+        local first, second, third = fixture.actionTable.exeLooped(fixture.action)
+        assertEqual("first", first, "claim failure preserves first return " .. index)
+        assertNil(second, "claim failure preserves nil return " .. index)
+        assertEqual("third", third, "claim failure preserves third return " .. index)
+        assertEqual(0, #fixture.calls.handlers, "claim failure suppresses envelopes " .. index)
+        assertEqual(1, #fixture.calls.releases, "claim failure releases " .. index)
+        assertEqual(variants[index].code, source.status().lastCode, "claim status " .. index)
+    end
+end
+
+do
+    local errorToken = {}
+    local fixture = makeFixture({ priorError = errorToken })
+    local source = ExerciseXpSource.create(fixture.dependencies)
+    assertTrue(source.install().ok)
+    local ok, thrown = pcall(fixture.actionTable.exeLooped, fixture.action)
+    assertFalse(ok, "prior error preserved")
+    assertEqual(errorToken, thrown, "prior error identity preserved")
+    assertEqual(1, #fixture.calls.releases, "prior error releases")
+end
+
+do
+    local variants = { { releaseFail = true }, { releaseThrow = true } }
+    for index = 1, #variants do
+        local fixture = makeFixture(variants[index])
+        local source = ExerciseXpSource.create(fixture.dependencies)
+        assertTrue(source.install().ok)
+        assertEqual("first", fixture.actionTable.exeLooped(fixture.action),
+            "release failure preserves return " .. index)
+        assertEqual(2, #fixture.calls.handlers, "release failure retains envelopes " .. index)
+        assertEqual("claim-release-failed", source.status().lastCode,
+            "release failure is bounded " .. index)
+    end
 end
 
 return assertions
