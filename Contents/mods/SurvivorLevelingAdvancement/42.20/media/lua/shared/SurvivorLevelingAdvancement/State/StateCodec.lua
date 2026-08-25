@@ -182,7 +182,10 @@ local function applyCompatibility(state, options)
     if loaded == nil then return state end
     if type(loaded) ~= "table" then return nil, failure("invalid_options", "loadedPerks") end
     local migrated = {}
-    for id, record in pairs(state.perks) do
+    local activeIds = sortedKeys(state.perks)
+    for index = 1, #activeIds do
+        local id = activeIds[index]
+        local record = state.perks[id]
         local spec = loaded[id]
         if type(spec) ~= "table" then
             state.orphanedPerks[id] = record
@@ -204,24 +207,49 @@ local function applyCompatibility(state, options)
             end
         end
     end
-    for id, record in pairs(state.orphanedPerks) do
+    local orphanedIds = sortedKeys(state.orphanedPerks)
+    for index = 1, #orphanedIds do
+        local id = orphanedIds[index]
+        local record = state.orphanedPerks[id]
         local spec = loaded[id]
         if type(spec) == "table" and sameIdentity(record, spec) then
             local migration = options and options.perkMigrator
             if type(migration) == "function" then
                 local ok, restored = pcall(migration, id, cloneValue(record), cloneValue(spec))
-                if ok and restored ~= nil then
-                    local checked = validatePerk(restored)
-                    if checked and sameIdentity(checked, spec) then
-                        state.orphanedPerks[id] = nil
-                        migrated[id] = checked
-                    end
-                end
+                if not ok or restored == nil then return nil, failure("perk_migration_failed", id) end
+                local checked = validatePerk(restored)
+                if not checked or not sameIdentity(checked, spec) then return nil, failure("perk_migration_failed", id) end
+                state.orphanedPerks[id] = nil
+                migrated[id] = checked
             end
         end
     end
-    for id, record in pairs(migrated) do state.perks[id] = record end
+    local migratedIds = sortedKeys(migrated)
+    for index = 1, #migratedIds do
+        local id = migratedIds[index]
+        state.perks[id] = migrated[id]
+    end
     return state
+end
+
+local function canonical(state)
+    local function number(value)
+        if value == 0 then return "0" end
+        return string.format("%.17g", value)
+    end
+    local function target(value) return "{" .. value.targetId .. ":" .. value.targetLevel .. ":" .. number(value.targetPosition) .. "}" end
+    local function perk(value)
+        local parts = { value.adapterId, value.adapterVersion, value.capabilityEpoch, value.curveFingerprint, value.effectiveMaximum,
+            number(value.naturalPosition), number(value.highWaterPosition), number(value.fractionalCarry), number(value.postMaxFullRateUsed), value.postMaxEpoch }
+        for index = 1, #value.activeTargets do parts[#parts + 1] = target(value.activeTargets[index]) end
+        return table.concat(parts, "|")
+    end
+    local function map(value)
+        local parts, keys = {}, sortedKeys(value)
+        for index = 1, #keys do parts[index] = keys[index] .. "=" .. perk(value[keys[index]]) end
+        return table.concat(parts, ";")
+    end
+    return table.concat({ state.schemaVersion, state.writerVersion, state.revision, state.survivor.level, number(state.survivor.xpIntoLevel), state.survivor.earned, state.survivor.spent, map(state.perks), map(state.orphanedPerks) }, "#")
 end
 
 function Codec.decode(raw, options)
@@ -255,24 +283,7 @@ end
 function Codec.encode(state)
     local checked, err = validateV1(state)
     if not checked then return err end
-    return { ok = true, state = checked, canonical = Codec.canonical(checked) }
-end
-
-function Codec.canonical(state)
-    local function number(value) return string.format("%.17g", value) end
-    local function target(value) return "{" .. value.targetId .. ":" .. value.targetLevel .. ":" .. number(value.targetPosition) .. "}" end
-    local function perk(value)
-        local parts = { value.adapterId, value.adapterVersion, value.capabilityEpoch, value.curveFingerprint, value.effectiveMaximum,
-            number(value.naturalPosition), number(value.highWaterPosition), number(value.fractionalCarry), number(value.postMaxFullRateUsed), value.postMaxEpoch }
-        for index = 1, #value.activeTargets do parts[#parts + 1] = target(value.activeTargets[index]) end
-        return table.concat(parts, "|")
-    end
-    local function map(value)
-        local parts, keys = {}, sortedKeys(value)
-        for index = 1, #keys do parts[index] = keys[index] .. "=" .. perk(value[keys[index]]) end
-        return table.concat(parts, ";")
-    end
-    return table.concat({ state.schemaVersion, state.writerVersion, state.revision, state.survivor.level, number(state.survivor.xpIntoLevel), state.survivor.earned, state.survivor.spent, map(state.perks), map(state.orphanedPerks) }, "#")
+    return { ok = true, state = checked, canonical = canonical(checked) }
 end
 
 function Codec.fresh()

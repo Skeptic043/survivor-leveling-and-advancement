@@ -1,6 +1,7 @@
 local C = StateCodec
 local assertions = 0
 local function expect(condition, message) assertions = assertions + 1; if not condition then error(message or "assertion failed") end end
+expect(C.canonical == nil, "canonical is not public")
 local function validPerk(seed)
     return { adapterId = "adapter", adapterVersion = 1, capabilityEpoch = 2, curveFingerprint = "curve-" .. seed,
         effectiveMaximum = 10, naturalPosition = 4.5, highWaterPosition = 5, fractionalCarry = 0.25,
@@ -33,10 +34,13 @@ local quarantine = C.decode(validState(), { loadedPerks = mismatch }); expect(qu
 local changed = C.decode(validState(), { loadedPerks = mismatch, perkMigrator = function(id, record, spec) record.adapterVersion = spec.adapterVersion; return record end }); expect(changed.ok and changed.state.perks.Axe.adapterVersion == 2, "explicit perk migration")
 local missing = C.decode(validState(), { loadedPerks = {} }); expect(missing.ok and missing.state.orphanedPerks.Axe ~= nil, "missing moves orphan")
 local restoreRaw = validState(); restoreRaw.orphanedPerks.Axe = restoreRaw.perks.Axe; restoreRaw.perks.Axe = nil; local restore = C.decode(restoreRaw, { loadedPerks = loaded, perkMigrator = function(id, record) return record end }); expect(restore.ok and restore.state.perks.Axe ~= nil and restore.state.orphanedPerks.Axe == nil, "explicit restore")
+local restoreErrorRaw = validState(); restoreErrorRaw.orphanedPerks.Axe = restoreErrorRaw.perks.Axe; restoreErrorRaw.perks.Axe = nil; local restoreError = C.decode(restoreErrorRaw, { loadedPerks = loaded, perkMigrator = function() error("test migrator failure") end }); expect(not restoreError.ok and restoreError.code == "perk_migration_failed" and restoreErrorRaw.orphanedPerks.Axe.adapterId == "adapter" and restoreErrorRaw.perks.Axe == nil, "restore exception preserves input")
+local restoreInvalidRaw = validState(); restoreInvalidRaw.orphanedPerks.Axe = restoreInvalidRaw.perks.Axe; restoreInvalidRaw.perks.Axe = nil; local restoreInvalid = C.decode(restoreInvalidRaw, { loadedPerks = loaded, perkMigrator = function() return {} end }); expect(not restoreInvalid.ok and restoreInvalid.code == "perk_migration_failed" and restoreInvalidRaw.orphanedPerks.Axe.adapterVersion == 1 and restoreInvalidRaw.perks.Axe == nil, "invalid restore preserves input")
 local targetOrder = validState(); targetOrder.perks.Axe.activeTargets[1].targetPosition = 2; targetOrder.perks.Axe.activeTargets[2] = { targetId = "t2", targetLevel = 7, targetPosition = 2 }; bad(targetOrder, "invalid_perk")
 local high = validState(); high.perks.Axe.highWaterPosition = 4; bad(high, "invalid_perk")
 local ap = validState(); ap.survivor.spent = 3; bad(ap, "invalid_survivor")
 local carry = validState(); carry.perks.Axe.fractionalCarry = 1; bad(carry, "invalid_perk")
 local post = validState(); post.perks.Axe.postMaxEpoch = -1; bad(post, "invalid_perk")
 local orderedA = validState(); orderedA.perks.B = validPerk("b"); local orderedB = validState(); orderedB.perks = {}; orderedB.perks.B = validPerk("b"); orderedB.perks.Axe = validPerk("a"); expect(C.encode(orderedA).canonical == C.encode(orderedB).canonical, "canonical map order")
+local negativeZero = validState(); negativeZero.perks.Axe.fractionalCarry = -0.0; local positiveZero = validState(); positiveZero.perks.Axe.fractionalCarry = 0; expect(C.encode(negativeZero).canonical == C.encode(positiveZero).canonical, "canonical zero")
 return assertions
