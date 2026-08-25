@@ -1,6 +1,5 @@
 local EventDerivedXpSource = {}
 
-local BATCH_WINDOW_MS = 1000
 local RELOAD_SENTINEL_KEY = "__SLA_EventDerivedXpSource_42_20_v1_7F2C9D4A"
 local RELOAD_SENTINEL_SIGNATURE = "sla.event-derived-xp-source/42.20/v1/7f2c9d4a"
 local ambiguousEvents = setmetatable({}, { __mode = "k" })
@@ -62,10 +61,6 @@ local function validateDependencies(dependencies)
         or type(dependencies.authority.describe) ~= "function" then
         return nil, result(false, "invalid_dependencies", "authority.describe")
     end
-    if type(dependencies.clock) ~= "table"
-        or type(dependencies.clock.now) ~= "function" then
-        return nil, result(false, "invalid_dependencies", "clock.now")
-    end
     if type(dependencies.playerIdentity) ~= "table"
         or type(dependencies.playerIdentity.isPlayer) ~= "function" then
         return nil, result(false, "invalid_dependencies", "playerIdentity.isPlayer")
@@ -97,7 +92,6 @@ local function validateDependencies(dependencies)
     return {
         globals = dependencies.environment.globals,
         describeAuthority = dependencies.authority.describe,
-        now = dependencies.clock.now,
         isPlayer = dependencies.playerIdentity.isPlayer,
         resolvePerk = dependencies.perkIdentity.resolve,
         readPosition = dependencies.positionReader.read,
@@ -136,21 +130,18 @@ function EventDerivedXpSource.create(dependencies)
 
     local cursors = setmetatable({}, { __mode = "k" })
     local handleIds = setmetatable({}, { __mode = "k" })
-    local batches = setmetatable({}, { __mode = "k" })
     local handlerScopes = setmetatable({}, { __mode = "k" })
     local routeFrames = {}
     local installed = false
     local capturing = false
     local observerState = "not_attempted"
     local registrationAddXpEvent = nil
-    local registrationTickEvent = nil
     local anchorAddXpEvent = type(initialAddXpEvent) == "table" and initialAddXpEvent or nil
     local priorAddXp = nil
     local priorAddXpNoMultiplier = nil
     local wrappedAddXp = nil
     local wrappedAddXpNoMultiplier = nil
     local ownershipReason = nil
-    local lastClock = nil
     local lastCode = "created"
     local instance = {}
     -- Dual anchors let a fresh source chunk find the owner after one anchor is lost.
@@ -232,29 +223,6 @@ function EventDerivedXpSource.create(dependencies)
         return answer.position, nil
     end
 
-    local function clockNow()
-        local called = callSafely(validated.now)
-        if not called[1] then
-            return nil, "clock_threw"
-        end
-        local answer = called[2]
-        local milliseconds = answer
-        if type(answer) == "table" and answer.ok == true then
-            milliseconds = answer.milliseconds
-            if milliseconds == nil then
-                milliseconds = answer.now
-            end
-        end
-        if not isFinite(milliseconds) or milliseconds < 0 then
-            return nil, "clock_failed"
-        end
-        if lastClock ~= nil and milliseconds < lastClock then
-            return nil, "clock_regressed"
-        end
-        lastClock = milliseconds
-        return milliseconds, nil
-    end
-
     local function sandboxDivisor(player, perkId)
         local called = callSafely(validated.resolveSandboxMultiplier, player, perkId)
         if not called[1] then
@@ -308,27 +276,27 @@ function EventDerivedXpSource.create(dependencies)
         end
     end
 
-    local function deliver(player, batch)
-        local appliedDelta = batch.actualPositionAfter - batch.actualPositionBefore
-        local positiveCredit = isFinite(batch.survivorCreditBase)
-            and batch.survivorCreditBase > 0
+    local function deliver(player, envelope)
+        local appliedDelta = envelope.actualPositionAfter - envelope.actualPositionBefore
+        local positiveCredit = isFinite(envelope.survivorCreditBase)
+            and envelope.survivorCreditBase > 0
         local validMovement = isFinite(appliedDelta) and appliedDelta ~= 0
             and ((positiveCredit and appliedDelta > 0)
-                or (batch.survivorCreditBase == 0 and appliedDelta < 0))
+                or (envelope.survivorCreditBase == 0 and appliedDelta < 0))
         if not validMovement then
-            setLast("invalid_batch_movement")
-            return result(false, "invalid_batch_movement", nil)
+            setLast("invalid_event_movement")
+            return result(false, "invalid_event_movement", nil)
         end
         local award = {
-            perkId = batch.perkId,
-            survivorCreditBase = batch.survivorCreditBase,
+            perkId = envelope.perkId,
+            survivorCreditBase = envelope.survivorCreditBase,
             appliedDelta = appliedDelta,
-            actualPositionBefore = batch.actualPositionBefore,
-            actualPositionAfter = batch.actualPositionAfter,
+            actualPositionBefore = envelope.actualPositionBefore,
+            actualPositionAfter = envelope.actualPositionAfter,
         }
-        pushHandlerScope(player, batch.perkId)
+        pushHandlerScope(player, envelope.perkId)
         local called = callSafely(validated.processAward, player, award)
-        popHandlerScope(player, batch.perkId)
+        popHandlerScope(player, envelope.perkId)
         if not called[1] then
             setLast("handler_threw")
             return result(false, "handler_threw", nil)
@@ -339,58 +307,6 @@ function EventDerivedXpSource.create(dependencies)
         end
         setLast("award_processed")
         return result(true, "award_processed", nil)
-    end
-
-    local function flushOne(player, perkId)
-        local playerBatches = batches[player]
-        local batch = playerBatches and playerBatches[perkId] or nil
-        if not batch then
-            return result(true, "no_pending_award", nil), false
-        end
-        playerBatches[perkId] = nil
-        if isEmpty(playerBatches) then
-            batches[player] = nil
-        end
-        return deliver(player, batch), true
-    end
-
-    local function flushPlayerInternal(player)
-        local playerBatches = batches[player]
-        if not playerBatches then
-            return 0, 0
-        end
-        local perkIds = {}
-        for perkId in pairs(playerBatches) do
-            perkIds[#perkIds + 1] = perkId
-        end
-        table.sort(perkIds)
-        local flushed = 0
-        local failed = 0
-        for index = 1, #perkIds do
-            local answer, hadWork = flushOne(player, perkIds[index])
-            if hadWork then
-                flushed = flushed + 1
-                if not answer.ok then
-                    failed = failed + 1
-                end
-            end
-        end
-        return flushed, failed
-    end
-
-    local function flushAllInternal()
-        local players = {}
-        for player in pairs(batches) do
-            players[#players + 1] = player
-        end
-        local flushed = 0
-        local failed = 0
-        for index = 1, #players do
-            local playerFlushed, playerFailed = flushPlayerInternal(players[index])
-            flushed = flushed + playerFlushed
-            failed = failed + playerFailed
-        end
-        return flushed, failed
     end
 
     local function rebase(player, perkId, perk, position)
@@ -423,15 +339,14 @@ function EventDerivedXpSource.create(dependencies)
         end
     end
 
-    local function refreshAfterFlush(player, perkId, perk, phase)
-        local flushed = flushOne(player, perkId)
+    local function refreshCursor(player, perkId, perk, phase)
         local position, readFailure = read(player, perkId, phase)
         if not position then
             clearCursor(player, perkId)
-            return nil, readFailure, flushed
+            return nil, readFailure
         end
         rebase(player, perkId, perk, position)
-        return position, nil, flushed
+        return position, nil
     end
 
     local function routeFor(player, perk)
@@ -444,18 +359,6 @@ function EventDerivedXpSource.create(dependencies)
         return "sandbox"
     end
 
-    local function makePositiveBatch(perk, perkId, divisor, before, after, credit, startedAt)
-        return {
-            perk = perk,
-            perkId = perkId,
-            divisor = divisor,
-            actualPositionBefore = before,
-            actualPositionAfter = after,
-            survivorCreditBase = credit,
-            startedAt = startedAt,
-        }
-    end
-
     local function handlePositive(player, perk, perkId, before, after, eventAmount)
         local route = routeFor(player, perk)
         local divisor = 1
@@ -464,62 +367,24 @@ function EventDerivedXpSource.create(dependencies)
             divisor, divisorFailure = sandboxDivisor(player, perkId)
         end
         if not divisor then
-            flushOne(player, perkId)
             setLast(divisorFailure)
             return
         end
 
         local credit = eventAmount / divisor
         if not isFinite(credit) or credit <= 0 then
-            flushOne(player, perkId)
             setLast("invalid_survivor_credit")
             return
         end
-
-        local now, clockFailure = clockNow()
-        if not now then
-            flushOne(player, perkId)
-            deliver(player, makePositiveBatch(
-                perk, perkId, divisor, before, after, credit, 0
-            ))
-            setLast(clockFailure)
-            return
-        end
-
-        local playerBatches = mapFor(batches, player, true)
-        local batch = playerBatches[perkId]
-        if batch and (batch.perk ~= perk
-            or batch.divisor ~= divisor
-            or now - batch.startedAt >= BATCH_WINDOW_MS) then
-            flushOne(player, perkId)
-            playerBatches = mapFor(batches, player, true)
-            batch = nil
-        end
-
-        if batch then
-            local survivorCreditBase = batch.survivorCreditBase + credit
-            if not isFinite(survivorCreditBase) then
-                flushOne(player, perkId)
-                deliver(player, makePositiveBatch(
-                    perk, perkId, divisor, before, after, credit, now
-                ))
-                setLast("batch_sum_failed")
-                return
-            end
-            batch.survivorCreditBase = survivorCreditBase
-            batch.actualPositionAfter = after
-            setLast("positive_coalesced")
-            return
-        end
-
-        playerBatches[perkId] = makePositiveBatch(
-            perk, perkId, divisor, before, after, credit, now
-        )
-        setLast("positive_batched")
+        deliver(player, {
+            perkId = perkId,
+            actualPositionBefore = before,
+            actualPositionAfter = after,
+            survivorCreditBase = credit,
+        })
     end
 
     local function handleNegative(player, perkId, before, after)
-        flushOne(player, perkId)
         deliver(player, {
             perkId = perkId,
             actualPositionBefore = before,
@@ -544,7 +409,7 @@ function EventDerivedXpSource.create(dependencies)
         local perkId, identityFailure = resolve(perk)
         if not perkId then
             if cachedPerkId then
-                local _, boundaryFailure = refreshAfterFlush(
+                local _, boundaryFailure = refreshCursor(
                     owner, cachedPerkId, perk, "identity_boundary"
                 )
                 setLast(boundaryFailure or (identityFailure .. "_rebased"))
@@ -556,7 +421,7 @@ function EventDerivedXpSource.create(dependencies)
 
         local after, readFailure = read(owner, perkId, "after")
         if not after then
-            local _, boundaryFailure = refreshAfterFlush(
+            local _, boundaryFailure = refreshCursor(
                 owner, perkId, perk, "failure_boundary"
             )
             setLast(boundaryFailure or (readFailure .. "_rebased"))
@@ -565,9 +430,8 @@ function EventDerivedXpSource.create(dependencies)
 
         local priorPerkId = playerHandleIds and playerHandleIds[perk] or nil
         if priorPerkId and priorPerkId ~= perkId then
-            flushOne(owner, priorPerkId)
             clearCursor(owner, priorPerkId)
-            local _, boundaryFailure = refreshAfterFlush(
+            local _, boundaryFailure = refreshCursor(
                 owner, perkId, perk, "id_boundary"
             )
             setLast(boundaryFailure or "id_discontinuity_rebased")
@@ -577,7 +441,7 @@ function EventDerivedXpSource.create(dependencies)
         local playerCursors = cursors[owner]
         local cursor = playerCursors and playerCursors[perkId] or nil
         local function stopAtBoundary(code)
-            local _, boundaryFailure = refreshAfterFlush(
+            local _, boundaryFailure = refreshCursor(
                 owner, perkId, perk, "failure_boundary"
             )
             setLast(boundaryFailure or code)
@@ -623,7 +487,6 @@ function EventDerivedXpSource.create(dependencies)
         local before = cursor.position
         rebase(owner, perkId, perk, after)
         if not transition.moved or eventAmount == 0 then
-            flushOne(owner, perkId)
             setLast("zero_movement_rebased")
             return
         end
@@ -631,36 +494,6 @@ function EventDerivedXpSource.create(dependencies)
             handlePositive(owner, perk, perkId, before, after, eventAmount)
         else
             handleNegative(owner, perkId, before, after)
-        end
-    end
-
-    local function onTick()
-        if not capturing then
-            return
-        end
-        if isEmpty(batches) then
-            return
-        end
-        local now, clockFailure = clockNow()
-        if not now then
-            flushAllInternal()
-            setLast(clockFailure)
-            return
-        end
-
-        local due = {}
-        for player, playerBatches in pairs(batches) do
-            for perkId, batch in pairs(playerBatches) do
-                if now - batch.startedAt >= BATCH_WINDOW_MS then
-                    due[#due + 1] = { player = player, perkId = perkId }
-                end
-            end
-        end
-        for index = 1, #due do
-            flushOne(due[index].player, due[index].perkId)
-        end
-        if #due > 0 then
-            setLast("deadline_flushed")
         end
     end
 
@@ -683,7 +516,7 @@ function EventDerivedXpSource.create(dependencies)
 
     local function ownershipDetail()
         if not installed then
-            return false, false, false, false, false, false
+            return false, false, false, false, false
         end
         local events = globals.Events
         return globals[RELOAD_SENTINEL_KEY] == reloadSentinel,
@@ -691,8 +524,7 @@ function EventDerivedXpSource.create(dependencies)
                 and events.AddXP[RELOAD_SENTINEL_KEY] == reloadSentinel,
             globals.addXp == wrappedAddXp,
             globals.addXpNoMultiplier == wrappedAddXpNoMultiplier,
-            type(events) == "table" and events.AddXP == registrationAddXpEvent,
-            type(events) == "table" and events.OnTick == registrationTickEvent
+            type(events) == "table" and events.AddXP == registrationAddXpEvent
     end
 
     function instance.verifyOwnership()
@@ -706,7 +538,7 @@ function EventDerivedXpSource.create(dependencies)
         end
 
         local ownsGlobalsSentinel, ownsEventSentinel, ownsAddXp, ownsNoMultiplier,
-            ownsAddXpEvent, ownsTickEvent = ownershipDetail()
+            ownsAddXpEvent = ownershipDetail()
         if not ownsGlobalsSentinel then
             ownershipReason = "reloadRegistry.globals"
         elseif not ownsEventSentinel then
@@ -717,12 +549,9 @@ function EventDerivedXpSource.create(dependencies)
             ownershipReason = "addXpNoMultiplier"
         elseif not ownsAddXpEvent then
             ownershipReason = "Events.AddXP"
-        elseif not ownsTickEvent then
-            ownershipReason = "Events.OnTick"
         end
         if ownershipReason then
             capturing = false
-            flushAllInternal()
             setLast("ownership_lost")
             return result(false, "ownership_lost", ownershipReason)
         end
@@ -791,7 +620,6 @@ function EventDerivedXpSource.create(dependencies)
         local candidateNoMultiplier = globals.addXpNoMultiplier
         local events = globals.Events
         local addXpEvent = type(events) == "table" and events.AddXP or nil
-        local tickEvent = type(events) == "table" and events.OnTick or nil
         if type(candidateAddXp) ~= "function" then
             setLast("missing_addXp")
             return result(false, "missing_seam", "addXp")
@@ -804,11 +632,7 @@ function EventDerivedXpSource.create(dependencies)
             setLast("missing_Events_AddXP_Add")
             return result(false, "missing_seam", "Events.AddXP.Add")
         end
-        if type(tickEvent) ~= "table" or type(tickEvent.Add) ~= "function" then
-            setLast("missing_Events_OnTick_Add")
-            return result(false, "missing_seam", "Events.OnTick.Add")
-        end
-        if ambiguousEvents[addXpEvent] or ambiguousEvents[tickEvent] then
+        if ambiguousEvents[addXpEvent] then
             setLast("observer_registration_ambiguous")
             return result(false, "observer_registration_ambiguous", nil)
         end
@@ -821,16 +645,6 @@ function EventDerivedXpSource.create(dependencies)
             setLast("observer_registration_ambiguous")
             return result(false, "observer_registration_ambiguous", "Events.AddXP")
         end
-        local tickRegistered = callSafely(tickEvent.Add, onTick)
-        if not tickRegistered[1] then
-            ambiguousEvents[addXpEvent] = true
-            ambiguousEvents[tickEvent] = true
-            observerState = "ambiguous"
-            capturing = false
-            setLast("observer_registration_ambiguous")
-            return result(false, "observer_registration_ambiguous", "Events.OnTick")
-        end
-
         priorAddXp = candidateAddXp
         priorAddXpNoMultiplier = candidateNoMultiplier
         wrappedAddXp = function(...)
@@ -840,7 +654,6 @@ function EventDerivedXpSource.create(dependencies)
             return callPrior(priorAddXpNoMultiplier, "no_multiplier", ...)
         end
         registrationAddXpEvent = addXpEvent
-        registrationTickEvent = tickEvent
         observerState = "registered"
         globals.addXp = wrappedAddXp
         globals.addXpNoMultiplier = wrappedAddXpNoMultiplier
@@ -878,15 +691,6 @@ function EventDerivedXpSource.create(dependencies)
             return result(false, "invalid_perks", nil)
         end
 
-        local flushed, failed = flushPlayerInternal(player)
-        local remainingBatches = batches[player]
-        if remainingBatches and not isEmpty(remainingBatches) then
-            setLast("initialization_pending_work")
-            return result(false, "initialization_pending_work", {
-                flushed = flushed,
-                flushFailed = failed,
-            })
-        end
         cursors[player] = nil
         handleIds[player] = nil
         local initialized = 0
@@ -910,8 +714,6 @@ function EventDerivedXpSource.create(dependencies)
         return result(true, "player_initialized", {
             initialized = initialized,
             skipped = skipped,
-            flushed = flushed,
-            flushFailed = failed,
         })
     end
 
@@ -927,69 +729,51 @@ function EventDerivedXpSource.create(dependencies)
             return result(false, identityFailure, nil)
         end
 
-        local position, readFailure, flushed = refreshAfterFlush(
+        local position, readFailure = refreshCursor(
             player, perkId, perk, "rebase"
         )
         if not position then
             setLast(readFailure)
-            return result(false, readFailure, { flushed = flushed.ok })
+            return result(false, readFailure, nil)
         end
         setLast("player_perk_rebased")
         return result(true, "player_perk_rebased", {
             perkId = perkId,
             position = position,
-            flushOk = flushed.ok,
         })
     end
 
     function instance.flushPlayerPerk(player, perkId)
-        if not isSafePerkId(perkId) then
-            setLast("invalid_perk_id")
-            return result(false, "invalid_perk_id", nil)
-        end
-        local answer, hadWork = flushOne(player, perkId)
-        if not answer.ok then
-            return answer
-        end
-        setLast(hadWork and "player_perk_flushed" or "no_pending_award")
-        return result(true, hadWork and "player_perk_flushed" or "no_pending_award", {
-            flushed = hadWork and 1 or 0,
+        setLast("no_pending_award")
+        return result(true, "no_pending_award", {
+            flushed = 0,
+            failed = 0,
         })
     end
 
     function instance.flushPlayer(player)
-        local flushed, failed = flushPlayerInternal(player)
-        local ok = failed == 0
-        setLast(ok and "player_flushed" or "player_flush_failed")
-        return result(ok, ok and "player_flushed" or "player_flush_failed", {
-            flushed = flushed,
-            failed = failed,
+        setLast("no_pending_award")
+        return result(true, "no_pending_award", {
+            flushed = 0,
+            failed = 0,
         })
     end
 
     function instance.flushAll()
-        local flushed, failed = flushAllInternal()
-        local ok = failed == 0
-        setLast(ok and "all_flushed" or "all_flush_failed")
-        return result(ok, ok and "all_flushed" or "all_flush_failed", {
-            flushed = flushed,
-            failed = failed,
+        setLast("no_pending_award")
+        return result(true, "no_pending_award", {
+            flushed = 0,
+            failed = 0,
         })
     end
 
     function instance.status()
         local ownsGlobalsSentinel, ownsEventSentinel, ownsAddXp, ownsNoMultiplier,
-            ownsAddXpEvent, ownsTickEvent = ownershipDetail()
+            ownsAddXpEvent = ownershipDetail()
         local cursorCount = 0
-        local batchCount = 0
         for _, playerCursors in pairs(cursors) do
             for _ in pairs(playerCursors) do
                 cursorCount = cursorCount + 1
-            end
-        end
-        for _, playerBatches in pairs(batches) do
-            for _ in pairs(playerBatches) do
-                batchCount = batchCount + 1
             end
         end
         return {
@@ -1001,9 +785,7 @@ function EventDerivedXpSource.create(dependencies)
             ownsAddXp = ownsAddXp,
             ownsAddXpNoMultiplier = ownsNoMultiplier,
             ownsAddXpEvent = ownsAddXpEvent,
-            ownsTickEvent = ownsTickEvent,
             cursorCount = cursorCount,
-            batchCount = batchCount,
             lastCode = lastCode,
             ownershipReason = ownershipReason,
         }

@@ -1,7 +1,7 @@
 $root = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $sourcePath = Join-Path $root "Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/XP/EventDerivedXpSource.lua"
 $sourceText = [IO.File]::ReadAllText($sourcePath)
-$forbidden = "InferredXpSource|ExactXpClaims|exactXpClaims|isEnabled|baseAward|rawBase|print\s*\(|ModData|sendClientCommand|sendServerCommand|ISUI|\bprevious\b|(?:positionAfter|after)\s*-\s*eventAmount|batch\.appliedDelta"
+$forbidden = "InferredXpSource|ExactXpClaims|exactXpClaims|isEnabled|baseAward|rawBase|print\s*\(|ModData|sendClientCommand|sendServerCommand|ISUI|\bprevious\b|(?:positionAfter|after)\s*-\s*eventAmount|clock|OnTick|batch|deadline|coalesc|timer|journal|retry|PostMax|Maximum|PlayerStateStore"
 if ($sourceText -match $forbidden) {
     throw "C8R2 source contains a forbidden legacy or out-of-scope mechanism"
 }
