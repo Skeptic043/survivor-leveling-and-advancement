@@ -1,14 +1,12 @@
 local Codec = {}
 
 Codec.SCHEMA_VERSION = 1
-Codec.WRITER_VERSION = 1
-
-local ROOT_FIELDS = { schemaVersion = true, writerVersion = true, revision = true, survivor = true, perks = true, orphanedPerks = true }
-local SURVIVOR_FIELDS = { level = true, xpIntoLevel = true, earned = true, spent = true }
+local ROOT_FIELDS = { schemaVersion = true, revision = true, survivor = true, perks = true, orphanedPerks = true }
+local SURVIVOR_FIELDS = { level = true, xpIntoLevel = true, spent = true }
 local PERK_FIELDS = {
-    adapterId = true, adapterVersion = true, capabilityEpoch = true, curveFingerprint = true,
+    adapterId = true, adapterVersion = true, curveFingerprint = true,
     effectiveMaximum = true, naturalPosition = true, highWaterPosition = true,
-    fractionalCarry = true, activeTargets = true, postMaxFullRateUsed = true, postMaxEpoch = true,
+    activeTargets = true, postMaxFullRateUsed = true,
 }
 local TARGET_FIELDS = { targetId = true, targetLevel = true, targetPosition = true }
 
@@ -81,12 +79,13 @@ local function cloneChecked(raw)
     return copy
 end
 
-local function validateTarget(target)
+local function validateTarget(target, effectiveMaximum)
     if type(target) ~= "table" then return nil, failure("invalid_target", "not_table") end
     local fields, key = hasOnlyFields(target, TARGET_FIELDS)
     if not fields then return nil, failure("invalid_target", "unknown_field:" .. tostring(key)) end
     if not isSafeId(target.targetId) then return nil, failure("invalid_target", "targetId") end
     if not isPositiveInteger(target.targetLevel) then return nil, failure("invalid_target", "targetLevel") end
+    if target.targetLevel > effectiveMaximum then return nil, failure("invalid_target", "targetLevel_above_maximum") end
     if not (isFiniteNumber(target.targetPosition) and target.targetPosition >= 0) then return nil, failure("invalid_target", "targetPosition") end
     return { targetId = target.targetId, targetLevel = target.targetLevel, targetPosition = target.targetPosition }
 end
@@ -97,20 +96,21 @@ local function validatePerk(perk)
     if not fields then return nil, failure("invalid_perk", "unknown_field:" .. tostring(key)) end
     if not isSafeId(perk.adapterId) then return nil, failure("invalid_perk", "adapterId") end
     if not isNonNegativeInteger(perk.adapterVersion) then return nil, failure("invalid_perk", "adapterVersion") end
-    if not isNonNegativeInteger(perk.capabilityEpoch) then return nil, failure("invalid_perk", "capabilityEpoch") end
     if not isSafeId(perk.curveFingerprint) then return nil, failure("invalid_perk", "curveFingerprint") end
     if not isPositiveInteger(perk.effectiveMaximum) then return nil, failure("invalid_perk", "effectiveMaximum") end
     if not (isFiniteNumber(perk.naturalPosition) and perk.naturalPosition >= 0) then return nil, failure("invalid_perk", "naturalPosition") end
     if not (isFiniteNumber(perk.highWaterPosition) and perk.highWaterPosition >= perk.naturalPosition) then return nil, failure("invalid_perk", "highWaterPosition") end
-    if not (isFiniteNumber(perk.fractionalCarry) and perk.fractionalCarry >= 0 and perk.fractionalCarry < 1) then return nil, failure("invalid_perk", "fractionalCarry") end
     if not (isFiniteNumber(perk.postMaxFullRateUsed) and perk.postMaxFullRateUsed >= 0) then return nil, failure("invalid_perk", "postMaxFullRateUsed") end
-    if not isNonNegativeInteger(perk.postMaxEpoch) then return nil, failure("invalid_perk", "postMaxEpoch") end
     if type(perk.activeTargets) ~= "table" then return nil, failure("invalid_perk", "activeTargets") end
-    local targets, lastPosition = {}, -1
+    local targets, targetIds, lastLevel, lastPosition = {}, {}, 0, -1
     for index = 1, #perk.activeTargets do
-        local target, targetError = validateTarget(perk.activeTargets[index])
+        local target, targetError = validateTarget(perk.activeTargets[index], perk.effectiveMaximum)
         if not target then return nil, targetError end
+        if targetIds[target.targetId] then return nil, failure("invalid_perk", "duplicate_target_id") end
+        if target.targetLevel <= lastLevel then return nil, failure("invalid_perk", "target_level_order") end
         if target.targetPosition <= lastPosition then return nil, failure("invalid_perk", "target_order") end
+        targetIds[target.targetId] = true
+        lastLevel = target.targetLevel
         lastPosition = target.targetPosition
         targets[index] = target
     end
@@ -120,11 +120,10 @@ local function validatePerk(perk)
         end
     end
     return {
-        adapterId = perk.adapterId, adapterVersion = perk.adapterVersion, capabilityEpoch = perk.capabilityEpoch,
+        adapterId = perk.adapterId, adapterVersion = perk.adapterVersion,
         curveFingerprint = perk.curveFingerprint, effectiveMaximum = perk.effectiveMaximum,
         naturalPosition = perk.naturalPosition, highWaterPosition = perk.highWaterPosition,
-        fractionalCarry = perk.fractionalCarry, activeTargets = targets,
-        postMaxFullRateUsed = perk.postMaxFullRateUsed, postMaxEpoch = perk.postMaxEpoch,
+        activeTargets = targets, postMaxFullRateUsed = perk.postMaxFullRateUsed,
     }
 end
 
@@ -144,14 +143,14 @@ local function validateV1(raw)
     if type(raw) ~= "table" then return nil, failure("invalid_state", "not_table") end
     local fields, key = hasOnlyFields(raw, ROOT_FIELDS)
     if not fields then return nil, failure("invalid_state", "unknown_field:" .. tostring(key)) end
-    if raw.schemaVersion ~= Codec.SCHEMA_VERSION or raw.writerVersion ~= Codec.WRITER_VERSION then return nil, failure("invalid_state", "version") end
+    if raw.schemaVersion ~= Codec.SCHEMA_VERSION then return nil, failure("invalid_state", "version") end
     if not isNonNegativeInteger(raw.revision) then return nil, failure("invalid_state", "revision") end
     if type(raw.survivor) ~= "table" then return nil, failure("invalid_survivor", "not_table") end
     local survivorFields, survivorKey = hasOnlyFields(raw.survivor, SURVIVOR_FIELDS)
     if not survivorFields then return nil, failure("invalid_survivor", "unknown_field:" .. tostring(survivorKey)) end
     local survivor = raw.survivor
     if not isNonNegativeInteger(survivor.level) or not (isFiniteNumber(survivor.xpIntoLevel) and survivor.xpIntoLevel >= 0) then return nil, failure("invalid_survivor", "level_or_xp") end
-    if not isNonNegativeInteger(survivor.earned) or not isNonNegativeInteger(survivor.spent) or survivor.spent > survivor.earned then return nil, failure("invalid_survivor", "ap") end
+    if not isNonNegativeInteger(survivor.spent) or survivor.spent > survivor.level then return nil, failure("invalid_survivor", "ap") end
     local perks, perkError = validateMap(raw.perks, "perks")
     if not perks then return nil, perkError end
     local orphaned, orphanError = validateMap(raw.orphanedPerks, "orphaned_perks")
@@ -160,20 +159,20 @@ local function validateV1(raw)
         if orphaned[id] then return nil, failure("invalid_state", "duplicate_perk:" .. id) end
     end
     return {
-        schemaVersion = Codec.SCHEMA_VERSION, writerVersion = Codec.WRITER_VERSION, revision = raw.revision,
-        survivor = { level = survivor.level, xpIntoLevel = survivor.xpIntoLevel, earned = survivor.earned, spent = survivor.spent },
+        schemaVersion = Codec.SCHEMA_VERSION, revision = raw.revision,
+        survivor = { level = survivor.level, xpIntoLevel = survivor.xpIntoLevel, spent = survivor.spent },
         perks = perks, orphanedPerks = orphaned,
     }
 end
 
 local function freshState()
-    return { schemaVersion = Codec.SCHEMA_VERSION, writerVersion = Codec.WRITER_VERSION, revision = 0,
-        survivor = { level = 0, xpIntoLevel = 0, earned = 0, spent = 0 }, perks = {}, orphanedPerks = {} }
+    return { schemaVersion = Codec.SCHEMA_VERSION, revision = 0,
+        survivor = { level = 0, xpIntoLevel = 0, spent = 0 }, perks = {}, orphanedPerks = {} }
 end
 
 local function sameIdentity(record, spec)
     return record.adapterId == spec.adapterId and record.adapterVersion == spec.adapterVersion
-        and record.capabilityEpoch == spec.capabilityEpoch and record.curveFingerprint == spec.curveFingerprint
+        and record.curveFingerprint == spec.curveFingerprint
         and record.effectiveMaximum == spec.effectiveMaximum
 end
 
@@ -216,8 +215,12 @@ local function applyCompatibility(state, options)
         local record = state.orphanedPerks[id]
         local spec = loaded[id]
         if type(spec) == "table" then
-            local migration = options and options.perkMigrator
-            if type(migration) == "function" then
+            if sameIdentity(record, spec) then
+                state.orphanedPerks[id] = nil
+                migrated[id] = record
+            else
+                local migration = options and options.perkMigrator
+                if type(migration) == "function" then
                 local recordCopy, recordError = cloneValue(record)
                 local specCopy, specError = cloneValue(spec)
                 if recordError or specError then return nil, failure("perk_migration_failed", id) end
@@ -227,6 +230,7 @@ local function applyCompatibility(state, options)
                 if not checked or not sameIdentity(checked, spec) then return nil, failure("perk_migration_failed", id) end
                 state.orphanedPerks[id] = nil
                 migrated[id] = checked
+                end
             end
         end
     end
@@ -245,8 +249,8 @@ local function canonical(state)
     end
     local function target(value) return "{" .. value.targetId .. ":" .. value.targetLevel .. ":" .. number(value.targetPosition) .. "}" end
     local function perk(value)
-        local parts = { value.adapterId, value.adapterVersion, value.capabilityEpoch, value.curveFingerprint, value.effectiveMaximum,
-            number(value.naturalPosition), number(value.highWaterPosition), number(value.fractionalCarry), number(value.postMaxFullRateUsed), value.postMaxEpoch }
+        local parts = { value.adapterId, value.adapterVersion, value.curveFingerprint, value.effectiveMaximum,
+            number(value.naturalPosition), number(value.highWaterPosition), number(value.postMaxFullRateUsed) }
         for index = 1, #value.activeTargets do parts[#parts + 1] = target(value.activeTargets[index]) end
         return table.concat(parts, "|")
     end
@@ -255,7 +259,7 @@ local function canonical(state)
         for index = 1, #keys do parts[index] = keys[index] .. "=" .. perk(value[keys[index]]) end
         return table.concat(parts, ";")
     end
-    return table.concat({ state.schemaVersion, state.writerVersion, state.revision, state.survivor.level, number(state.survivor.xpIntoLevel), state.survivor.earned, state.survivor.spent, map(state.perks), map(state.orphanedPerks) }, "#")
+    return table.concat({ state.schemaVersion, state.revision, state.survivor.level, number(state.survivor.xpIntoLevel), state.survivor.spent, map(state.perks), map(state.orphanedPerks) }, "#")
 end
 
 function Codec.decode(raw, options)
@@ -264,10 +268,8 @@ function Codec.decode(raw, options)
     local cloned, cloneError = cloneChecked(raw)
     if not cloned then return cloneError end
     local schema = cloned.schemaVersion
-    local writer = cloned.writerVersion
-    if type(schema) ~= "number" or type(writer) ~= "number" then return failure("unversioned_state", "missing_version", raw) end
+    if type(schema) ~= "number" then return failure("unversioned_state", "missing_version", raw) end
     if schema > Codec.SCHEMA_VERSION then return failure("newer_schema", schema, raw) end
-    if writer > Codec.WRITER_VERSION then return failure("newer_writer", writer, raw) end
     while schema < Codec.SCHEMA_VERSION do
         local migrations = options and options.schemaMigrations
         local migration = migrations and migrations[schema]
