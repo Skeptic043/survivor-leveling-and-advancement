@@ -142,6 +142,10 @@ local function sameIdentity(record, identity)
         and record.effectiveMaximum == identity.effectiveMaximum
 end
 
+local function advancementCost(targetLevel, effectiveMaximum)
+    return targetLevel == effectiveMaximum and 2 or 1
+end
+
 local function ledgerFromPerk(record)
     return {
         naturalPosition = record.naturalPosition,
@@ -361,9 +365,10 @@ local function recoverLoaded(deps, player, state)
     end
     local reservationValid = validateReservation(reservation)
     if not reservationValid.ok then return reservationValid end
+    local apCost = advancementCost(reservation.targetLevel, reservation.effectiveMaximum)
     if (state.revision ~= reservation.preRevision and state.revision ~= reservation.preRevision + 1)
-        or (state.survivor.spent ~= reservation.preSpent and state.survivor.spent ~= reservation.preSpent + 1)
-        or reservation.preSpent > state.survivor.level then
+        or (state.survivor.spent ~= reservation.preSpent and state.survivor.spent ~= reservation.preSpent + apCost)
+        or reservation.preSpent + apCost > state.survivor.level then
         return failure("recovery_quarantined", "reservation_state_inconsistent")
     end
 
@@ -391,14 +396,28 @@ local function recoverLoaded(deps, player, state)
         record = perkFromBaseline(identity, baseline.state)
     end
 
-    local appended = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
-        targetId = reservation.requestId,
-        targetLevel = reservation.targetLevel,
-        targetPosition = reservation.targetPosition,
-    }, reservation.effectiveMaximum)
-    if type(appended) ~= "table" or not appended.ok then
-        return failure("recovery_quarantined", "target_" .. detailOf(appended))
+    local mastered = reservation.targetLevel == reservation.effectiveMaximum
+    local ledgerResult
+    if mastered then
+        local ledgerInspection = deps.NaturalLedger.inspect(ledgerFromPerk(record))
+        if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
+            return failure("recovery_quarantined", "ledger_" .. detailOf(ledgerInspection))
+        end
+        if ledgerInspection.red then
+            return failure("recovery_quarantined", "natural_recovery_required")
+        end
+        ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), reservation.targetPosition)
+    else
+        ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
+            targetId = reservation.requestId,
+            targetLevel = reservation.targetLevel,
+            targetPosition = reservation.targetPosition,
+        }, reservation.effectiveMaximum)
     end
+    if type(ledgerResult) ~= "table" or not ledgerResult.ok then
+        return failure("recovery_quarantined", "target_" .. detailOf(ledgerResult))
+    end
+    local addedTarget = not mastered and ledgerResult.added or false
 
     local inspected = inspectAdapter(resolved.adapter, resolved.handle, player, identity)
     if not inspected.ok then return failure("recovery_quarantined", detailOf(inspected)) end
@@ -424,10 +443,10 @@ local function recoverLoaded(deps, player, state)
 
     local committed, stateError = cloneValue(state)
     if not committed then return failure("recovery_quarantined", "state_" .. stateError) end
-    local committedRecord, recordError = applyLedger(record, appended.state)
+    local committedRecord, recordError = applyLedger(record, ledgerResult.state)
     if not committedRecord then return failure("recovery_quarantined", "record_" .. recordError) end
     committed.perks[reservation.perkId] = committedRecord
-    committed.survivor.spent = reservation.preSpent + 1
+    committed.survivor.spent = reservation.preSpent + apCost
     committed.revision = reservation.preRevision + 1
     committed.inFlightAdvancement = nil
     local saved = saveState(deps.store, player, committed, "recovery_commit_failed")
@@ -442,7 +461,10 @@ local function recoverLoaded(deps, player, state)
         revision = committed.revision,
         spent = committed.survivor.spent,
         availableAp = committed.survivor.level - committed.survivor.spent,
-        addedTarget = appended.added,
+        apCost = apCost,
+        mastered = mastered,
+        addedTarget = addedTarget,
+        clearedTargetIds = mastered and ledgerResult.effect.clearedTargetIds or {},
         xpWriteInvoked = ensured.xpWriteInvoked,
         levelWriteInvoked = ensured.levelWriteInvoked,
     }
@@ -458,7 +480,10 @@ local function publicRecovery(result)
         revision = result.revision,
         spent = result.spent,
         availableAp = result.availableAp,
+        apCost = result.apCost,
+        mastered = result.mastered,
         addedTarget = result.addedTarget,
+        clearedTargetIds = result.clearedTargetIds,
         xpWriteInvoked = result.xpWriteInvoked,
         levelWriteInvoked = result.levelWriteInvoked,
         recovered = true,
@@ -471,7 +496,7 @@ function ApTransaction.create(dependencies)
     end
     local store = dependencies.store or dependencies.PlayerStateStore
     local required = {
-        { dependencies.NaturalLedger, { "baseline", "inspect", "reconcileExternal", "appendTarget" }, "NaturalLedger" },
+        { dependencies.NaturalLedger, { "baseline", "inspect", "reconcileExternal", "appendTarget", "master" }, "NaturalLedger" },
         { dependencies.SurvivorEconomy, { "availableAp" }, "SurvivorEconomy" },
         { dependencies.Allotment, { "evaluate" }, "Allotment" },
         { dependencies.MutationScope, { "begin", "finish" }, "MutationScope" },
@@ -552,6 +577,9 @@ function ApTransaction.create(dependencies)
         if available.availableAp < 1 then return failure("no_ap", "no_available_ap") end
         if not actual.levelAligned then return failure("misaligned_progression", actual.alignment or "unaligned") end
         if actual.storedLevel >= identity.effectiveMaximum then return failure("at_maximum", "effective_maximum") end
+        local apCost = advancementCost(actual.nextTargetLevel, identity.effectiveMaximum)
+        local mastered = apCost == 2
+        if available.availableAp < apCost then return failure("no_ap", "insufficient_ap_for_advancement") end
 
         if record == nil then
             local baseline = deps.NaturalLedger.baseline(actual.actualPosition)
@@ -566,21 +594,28 @@ function ApTransaction.create(dependencies)
         end
         if ledgerInspection.red then return failure("red_recovery", "natural_recovery_required") end
 
-        local appended = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
-            targetId = request.requestId,
-            targetLevel = actual.nextTargetLevel,
-            targetPosition = actual.nextTargetPosition,
-        }, identity.effectiveMaximum)
-        if type(appended) ~= "table" or not appended.ok then
-            return failure("target_rejected", detailOf(appended))
+        local ledgerResult
+        if mastered then
+            ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), actual.nextTargetPosition)
+        else
+            ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
+                targetId = request.requestId,
+                targetLevel = actual.nextTargetLevel,
+                targetPosition = actual.nextTargetPosition,
+            }, identity.effectiveMaximum)
         end
+        if type(ledgerResult) ~= "table" or not ledgerResult.ok then
+            return failure("target_rejected", detailOf(ledgerResult))
+        end
+        local addedTarget = not mastered and ledgerResult.added or false
         local active, activeError = activeByPerk(state)
         if activeError then return activeError end
-        local allotment = deps.Allotment.evaluate(allotmentConfig, request.perkId, active, appended.added)
+        local allotment = deps.Allotment.evaluate(allotmentConfig, request.perkId, active, addedTarget)
         if type(allotment) ~= "table" or not allotment.ok then
             return failure("allotment_invalid", detailOf(allotment))
         end
         if not allotment.allowed then return failure("allotment_rejected", "capacity_reached") end
+        if mastered and not allotment.spendingEnabled then return failure("allotment_rejected", "spending_disabled") end
 
         local reservationState, stateError = cloneValue(state)
         if not reservationState then return failure("invalid_state", stateError) end
@@ -623,10 +658,10 @@ function ApTransaction.create(dependencies)
 
         local committed, commitError = cloneValue(reservationState)
         if not committed then return failure("commit_save_failed", commitError) end
-        local committedRecord, recordError = applyLedger(record, appended.state)
+        local committedRecord, recordError = applyLedger(record, ledgerResult.state)
         if not committedRecord then return failure("commit_save_failed", recordError) end
         committed.perks[request.perkId] = committedRecord
-        committed.survivor.spent = state.survivor.spent + 1
+        committed.survivor.spent = state.survivor.spent + apCost
         committed.revision = state.revision + 1
         committed.inFlightAdvancement = nil
         local saved = saveState(deps.store, player, committed, "commit_save_failed")
@@ -639,7 +674,10 @@ function ApTransaction.create(dependencies)
             revision = committed.revision,
             spent = committed.survivor.spent,
             availableAp = committed.survivor.level - committed.survivor.spent,
-            addedTarget = appended.added,
+            apCost = apCost,
+            mastered = mastered,
+            addedTarget = addedTarget,
+            clearedTargetIds = mastered and ledgerResult.effect.clearedTargetIds or {},
             xpWriteInvoked = ensured.xpWriteInvoked,
             levelWriteInvoked = ensured.levelWriteInvoked,
             recovered = recovered.recovered,

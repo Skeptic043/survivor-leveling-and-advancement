@@ -22,6 +22,18 @@ local function bad(value, code)
     expect(not result.ok and result.code == code, "expected " .. code .. ", got " .. tostring(result.code))
 end
 
+local function withReservation(targetLevel, maximum, spent)
+    local state = validState()
+    state.survivor.level = 5
+    state.survivor.spent = spent
+    state.inFlightAdvancement = {
+        requestId = "reserved", perkId = "Axe", preRevision = 4, preSpent = 1,
+        preLevel = targetLevel - 1, prePosition = 5, targetLevel = targetLevel, targetPosition = 6,
+        adapterId = "adapter", adapterVersion = 1, curveFingerprint = "curve-a", effectiveMaximum = maximum,
+    }
+    return state
+end
+
 local fresh = C.decode(nil); expect(fresh.ok and fresh.state.revision == 0 and fresh.state.survivor.level == 0 and fresh.state.survivor.earned == nil and fresh.state.writerVersion == nil, "fresh approved shape")
 local input = validState(); local decoded = C.decode(input); expect(decoded.ok, "decode valid"); decoded.state.perks.Axe.adapterId = "changed"; expect(input.perks.Axe.adapterId == "adapter", "decode deep copy")
 local original = validState(); local encoded = C.encode(original); expect(encoded.ok, "encode valid"); encoded.state.survivor.level = 99; expect(original.survivor.level == 2 and original.perks.Axe.activeTargets[1].targetId == "target-1", "encode retained input deep copy"); local roundTrip = C.decode(original); expect(roundTrip.ok and C.encode(roundTrip.state).canonical == C.encode(original).canonical, "round trip")
@@ -64,5 +76,11 @@ local aboveMaximum = validState(); aboveMaximum.perks.Axe.activeTargets[1].targe
 local high = validState(); high.perks.Axe.highWaterPosition = 4; bad(high, "invalid_perk")
 local orderedA = validState(); orderedA.perks.B = validPerk("b"); local orderedB = validState(); orderedB.perks = {}; orderedB.perks.B = validPerk("b"); orderedB.perks.Axe = validPerk("a"); expect(C.encode(orderedA).canonical == C.encode(orderedB).canonical, "canonical map order")
 local negativeZero = validState(); negativeZero.perks.Axe.postMaxFullRateUsed = -0.0; local positiveZero = validState(); positiveZero.perks.Axe.postMaxFullRateUsed = 0; expect(C.encode(negativeZero).canonical == C.encode(positiveZero).canonical, "canonical zero")
+local ordinaryReserved = withReservation(6, 10, 2); expect(C.decode(ordinaryReserved).ok, "ordinary reservation accepts preSpent plus one")
+local ordinaryWrongSpent = withReservation(6, 10, 3); bad(ordinaryWrongSpent, "invalid_in_flight_advancement")
+local masteryReserved = withReservation(10, 10, 3); expect(C.decode(masteryReserved).ok, "mastery reservation accepts preSpent plus two")
+local masteryWrongSpent = withReservation(10, 10, 2); bad(masteryWrongSpent, "invalid_in_flight_advancement")
+local noCostField = withReservation(10, 10, 1); noCostField.inFlightAdvancement.apCost = 2; bad(noCostField, "invalid_in_flight_advancement")
+expect(C.SCHEMA_VERSION == 1, "mastery keeps schema v1")
 
 return assertions

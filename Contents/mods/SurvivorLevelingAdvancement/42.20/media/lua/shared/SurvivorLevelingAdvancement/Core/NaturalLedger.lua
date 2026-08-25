@@ -244,6 +244,39 @@ function NaturalLedger.reconcileExternal(state, actualDelta, actualPositionAfter
     return transition(state, actualDelta, actualPositionAfter, false)
 end
 
+function NaturalLedger.master(state, actualPositionAfter)
+    local ledger, stateError = validateState(state)
+    if stateError then
+        return stateError
+    end
+    local positionError = validateActualPosition(actualPositionAfter)
+    if positionError then
+        return positionError
+    end
+    if actualPositionAfter < ledger.highWaterPosition then
+        return failure("POSITION_BEHIND_HIGH_WATER", "mastery position cannot lower high water")
+    end
+
+    local clearedTargetIds = {}
+    for index = 1, #ledger.activeTargets do
+        clearedTargetIds[index] = ledger.activeTargets[index].targetId
+    end
+    return {
+        ok = true,
+        state = {
+            naturalPosition = actualPositionAfter,
+            highWaterPosition = actualPositionAfter,
+            activeTargets = {},
+        },
+        effect = {
+            recoveryApplied = 0,
+            eligibleApplied = 0,
+            eligibleRatio = 0,
+            clearedTargetIds = clearedTargetIds,
+        },
+    }
+end
+
 function NaturalLedger.appendTarget(state, target, effectiveMaximum)
     local ledger, stateError = validateState(state)
     if stateError then

@@ -76,19 +76,20 @@ function Allotment.evaluate(config, perkId, activeByPerk, addsTarget)
             end
         end
     end
+    local spendingEnabled = mode == "Free" or limit > 0
     if not addsTarget then
-        return { ok = true, allowed = true, mode = mode, bypassed = true, activeCount = activeByPerk[perkId] or 0 }
+        return { ok = true, allowed = true, spendingEnabled = spendingEnabled, mode = mode, bypassed = true, activeCount = activeByPerk[perkId] or 0, limit = limit }
     end
     if mode == "Free" then
-        return { ok = true, allowed = true, mode = mode, bypassed = false, activeCount = activeByPerk[perkId] or 0 }
+        return { ok = true, allowed = true, spendingEnabled = true, mode = mode, bypassed = false, activeCount = activeByPerk[perkId] or 0 }
     end
     if mode == "Global" then
         local count = globalCount(activeByPerk)
-        return { ok = true, allowed = count < limit, mode = mode, bypassed = false, activeCount = count, limit = limit }
+        return { ok = true, allowed = count < limit, spendingEnabled = spendingEnabled, mode = mode, bypassed = false, activeCount = count, limit = limit }
     end
 
     local count = activeByPerk[perkId] or 0
-    return { ok = true, allowed = count < limit, mode = mode, bypassed = false, activeCount = count, limit = limit }
+    return { ok = true, allowed = count < limit, spendingEnabled = spendingEnabled, mode = mode, bypassed = false, activeCount = count, limit = limit }
 end
 
 return Allotment
