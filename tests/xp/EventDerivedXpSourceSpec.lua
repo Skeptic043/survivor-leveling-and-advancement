@@ -162,6 +162,9 @@ local function makeHarness(options)
                 if h.handlerThrow then
                     error("handler", 0)
                 end
+                if h.handlerAnswer ~= nil then
+                    return h.handlerAnswer
+                end
                 if h.handlerFail then
                     return { ok = false }
                 end
@@ -914,25 +917,49 @@ do
     local axe = { id = "Axe" }
     h.setPosition(player, axe, 0)
     source.initializePlayer(player, { axe })
-    h.handlerFail = true
+    h.handlerAnswer = {
+        ok = false,
+        code = "save_rejected",
+        detail = "quota exceeded",
+    }
     h.emit(player, axe, 2)
     equal(source.status().lastCode, "handler_failed", "handler failure is reported synchronously")
-    h.handlerFail = false
+    local rejected = source.status().lastFailure
+    equal(rejected.code, "handler_failed", "structured rejection keeps outer failure")
+    equal(rejected.detail.code, "save_rejected", "structured rejection keeps safe handler code")
+    equal(rejected.detail.detail, "quota exceeded", "structured rejection keeps safe handler detail")
+    h.handlerAnswer = {
+        ok = false,
+        code = {},
+        detail = player,
+    }
+    h.emit(player, axe, 2)
+    local malformed = source.status().lastFailure
+    equal(malformed.code, "handler_failed", "malformed rejection keeps outer failure")
+    equal(malformed.detail.code, "unavailable", "malformed handler code is generic")
+    equal(malformed.detail.detail, "unavailable", "malformed handler detail is generic")
+    h.handlerAnswer = nil
     equal(source.flushAll().detail.flushed, 0, "failed event is not retried")
     h.handlerThrow = true
     h.emit(player, axe, 2)
     equal(source.status().lastCode, "handler_threw", "handler throw is reported synchronously")
+    local thrown = source.status().lastFailure
+    equal(thrown.code, "handler_threw", "thrown handler keeps outer failure")
+    equal(thrown.detail.code, "unavailable", "thrown handler code is generic")
+    equal(thrown.detail.detail, "unavailable", "thrown handler detail is generic")
     h.handlerThrow = false
     equal(source.flushAll().detail.flushed, 0, "thrown event is not retried")
-    equal(#h.awards, 2, "each failed handler is attempted only for its own event")
+    equal(#h.awards, 3, "each failed handler is attempted only for its own event")
     h.emit(player, axe, 2)
-    equal(#h.awards, 3, "successful event follows failed handlers")
-    equal(h.awards[3].award.actualPositionBefore, 4,
+    equal(#h.awards, 4, "successful event follows failed handlers")
+    equal(h.awards[4].award.actualPositionBefore, 6,
         "failed handlers still advance the source cursor")
-    equal(h.awards[3].award.actualPositionAfter, 6,
+    equal(h.awards[4].award.actualPositionAfter, 8,
         "follow-up event preserves exact cursor continuity")
     equal(source.status().lastCode, "award_processed",
         "handler scope is cleaned after failures")
+    equal(source.status().lastFailure, nil,
+        "successful delivery clears the current handler failure")
 end
 
 do

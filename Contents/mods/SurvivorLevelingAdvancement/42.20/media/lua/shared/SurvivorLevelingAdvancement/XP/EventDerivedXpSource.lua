@@ -2,6 +2,9 @@ local EventDerivedXpSource = {}
 
 local RELOAD_SENTINEL_KEY = "__SLA_EventDerivedXpSource_42_20_v1_7F2C9D4A"
 local RELOAD_SENTINEL_SIGNATURE = "sla.event-derived-xp-source/42.20/v1/7f2c9d4a"
+local MAX_HANDLER_DIAGNOSTIC_CODE_LENGTH = 64
+local MAX_HANDLER_DIAGNOSTIC_DETAIL_LENGTH = 160
+local GENERIC_HANDLER_DIAGNOSTIC = "unavailable"
 local ambiguousEvents = setmetatable({}, { __mode = "k" })
 
 local function result(ok, code, detail)
@@ -21,6 +24,34 @@ end
 
 local function isSafePerkId(value)
     return type(value) == "string" and value:match("^[%w%._:%-]+$") ~= nil
+end
+
+local function isSafeHandlerDiagnosticCode(value)
+    return type(value) == "string"
+        and #value > 0
+        and #value <= MAX_HANDLER_DIAGNOSTIC_CODE_LENGTH
+        and value:match("^[%w%._:%-]+$") ~= nil
+end
+
+local function isSafeHandlerDiagnosticDetail(value)
+    return type(value) == "string"
+        and #value > 0
+        and #value <= MAX_HANDLER_DIAGNOSTIC_DETAIL_LENGTH
+        and value:find("[%c]") == nil
+end
+
+local function safeHandlerDiagnosticCode(value)
+    if isSafeHandlerDiagnosticCode(value) then
+        return value
+    end
+    return GENERIC_HANDLER_DIAGNOSTIC
+end
+
+local function safeHandlerDiagnosticDetail(value)
+    if isSafeHandlerDiagnosticDetail(value) then
+        return value
+    end
+    return GENERIC_HANDLER_DIAGNOSTIC
 end
 
 local function pack(...)
@@ -143,6 +174,7 @@ function EventDerivedXpSource.create(dependencies)
     local wrappedAddXpNoMultiplier = nil
     local ownershipReason = nil
     local lastCode = "created"
+    local lastFailure = nil
     local instance = {}
     -- Dual anchors let a fresh source chunk find the owner after one anchor is lost.
     local reloadSentinel = {
@@ -156,6 +188,22 @@ function EventDerivedXpSource.create(dependencies)
 
     local function setLast(code)
         lastCode = code
+    end
+
+    local function setHandlerFailure(code, handlerAnswer)
+        local handlerCode = nil
+        local handlerDetail = nil
+        if type(handlerAnswer) == "table" then
+            handlerCode = rawget(handlerAnswer, "code")
+            handlerDetail = rawget(handlerAnswer, "detail")
+        end
+        lastFailure = {
+            code = code,
+            detail = {
+                code = safeHandlerDiagnosticCode(handlerCode),
+                detail = safeHandlerDiagnosticDetail(handlerDetail),
+            },
+        }
     end
 
     local function mapFor(root, player, create)
@@ -299,13 +347,16 @@ function EventDerivedXpSource.create(dependencies)
         popHandlerScope(player, envelope.perkId)
         if not called[1] then
             setLast("handler_threw")
+            setHandlerFailure("handler_threw", nil)
             return result(false, "handler_threw", nil)
         end
         if type(called[2]) ~= "table" or called[2].ok ~= true then
             setLast("handler_failed")
+            setHandlerFailure("handler_failed", called[2])
             return result(false, "handler_failed", nil)
         end
         setLast("award_processed")
+        lastFailure = nil
         return result(true, "award_processed", nil)
     end
 
@@ -787,6 +838,13 @@ function EventDerivedXpSource.create(dependencies)
             ownsAddXpEvent = ownsAddXpEvent,
             cursorCount = cursorCount,
             lastCode = lastCode,
+            lastFailure = lastFailure and {
+                code = lastFailure.code,
+                detail = {
+                    code = lastFailure.detail.code,
+                    detail = lastFailure.detail.detail,
+                },
+            } or nil,
             ownershipReason = ownershipReason,
         }
     end
