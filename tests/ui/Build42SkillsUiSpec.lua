@@ -97,6 +97,7 @@ local function makeEnvironment(options)
         buttonCreates = 0,
         listenerSets = 0,
         listener = nil,
+        prerenderGeometry = {},
         mode = options.mode or "Global",
         pending = { false, false, false, false },
         reason = options.reason,
@@ -120,6 +121,10 @@ local function makeEnvironment(options)
     function CharacterInfo.prerender(self)
         evidence.priorPrerender = evidence.priorPrerender + 1
         if self.throwPrerender then error("vanilla prerender") end
+        evidence.prerenderGeometry[#evidence.prerenderGeometry + 1] = {
+            y = self:getY(),
+            height = self:getHeight(),
+        }
     end
 
     function CharacterInfo.render(self)
@@ -129,6 +134,10 @@ local function makeEnvironment(options)
             self.progressBars = self.pendingBars
             self.pendingBars = nil
         end
+        if self.buttonList[1] ~= nil then self.buttonList[1]:setY(10) end
+        self:setWidthAndParentWidth(math.max(self:getWidth(), self.vanillaWidth))
+        self:setHeightAndParentHeight(self.vanillaHeight)
+        self.scrollHeight = self.vanillaScrollHeight
     end
 
     function ProgressBar.renderPerkRect(self)
@@ -382,10 +391,33 @@ local function makeEnvironment(options)
     return evidence
 end
 
-local function makeParent(width)
-    local parent = { width = width or 450 }
+local function makeParent(width, height, ancestor, x, y)
+    local parent = {
+        x = x or 0,
+        y = y or 0,
+        width = width or 450,
+        height = height or 308,
+        parent = ancestor,
+        statusDraws = {},
+        xScroll = 0,
+        yScroll = 0,
+    }
+    function parent:getX() return self.x end
+    function parent:getY() return self.y end
     function parent:getWidth() return self.width end
+    function parent:getHeight() return self.height end
     function parent:setWidth(value) self.width = value end
+    function parent:setHeight(value) self.height = value end
+    function parent:drawTextRightStatic(text, drawX, drawY, r, g, b, a, font)
+        self.statusDraws[#self.statusDraws + 1] = {
+            text = text,
+            x = drawX,
+            y = drawY,
+            screenX = self.x + drawX - self.xScroll,
+            screenY = self.y + drawY - self.yScroll,
+            font = font,
+        }
+    end
     return parent
 end
 
@@ -435,22 +467,54 @@ local function makeView(environment, slot, bars, delayed)
     local categoryButton = { x = 10, y = 10, width = 20 }
     function categoryButton:getRight() return self.x + self.width end
     function categoryButton:getY() return self.y end
+    function categoryButton:getHeight() return 20 end
+    function categoryButton:setY(value) self.y = value end
+    local outer = makeParent(450, 328, nil, 0, 0)
+    local parent = makeParent(450, 308, outer, 0, 20)
     local view = {
         playerNum = slot,
         progressBars = delayed and {} or bars,
         pendingBars = delayed and bars or nil,
-        parent = makeParent(450),
+        parent = parent,
+        outer = outer,
+        x = 0,
+        y = 8,
         width = 400,
+        height = 300,
+        vanillaWidth = 400,
+        vanillaHeight = 300,
+        vanillaScrollHeight = 500,
+        scrollHeight = 500,
+        yScroll = 0,
         sorted = { category },
         buttonList = { categoryButton },
-        statusDraws = {},
+        statusDraws = parent.statusDraws,
     }
+    function view:getX() return self.x end
+    function view:getY() return self.y end
     function view:getWidth() return self.width end
+    function view:getHeight() return self.height end
+    function view:setY(value) self.y = value end
     function view:setWidth(value) self.width = value end
-    function view:drawTextRight(text, x, y, r, g, b, a, font)
-        self.statusDraws[#self.statusDraws + 1] = {
-            text = text, x = x, y = y, font = font,
-        }
+    function view:setHeight(value) self.height = value end
+    function view:getYScroll() return self.yScroll end
+    function view:setYScroll(value) self.yScroll = value end
+    function view:getScrollHeight() return self.scrollHeight end
+    function view:setWidthAndParentWidth(value)
+        self:setWidth(value)
+        local child, current = self, self.parent
+        while current ~= nil do
+            current:setWidth(child:getX() + child:getWidth())
+            child, current = current, current.parent
+        end
+    end
+    function view:setHeightAndParentHeight(value)
+        self:setHeight(value)
+        local child, current = self, self.parent
+        while current ~= nil do
+            current:setHeight(child:getY() + child:getHeight())
+            child, current = current, current.parent
+        end
     end
     setmetatable(view, { __index = environment.CharacterInfo })
     return view
@@ -492,8 +556,13 @@ local installedMouseUp = environment.ProgressBar.onMouseUp
 local player = { identity = "exact-player" }
 local axe = makeBar(environment, "Axe", { player = player })
 local view = makeView(environment, 0, { axe }, true)
+local dockedParent = view.parent
+local dockedOuter = view.outer
 view:prerender()
 equal(environment.priorPrerender, 1, "first prerender chains vanilla once")
+equal(environment.prerenderGeometry[1].y, 38, "header inset is applied before vanilla prerender")
+equal(environment.prerenderGeometry[1].height, 270, "header viewport is reserved before vanilla stencil")
+equal(view.y, 38, "view moves by the exact native header inset")
 equal(environment.refresh[1], 1, "first visible prerender requests refresh")
 equal(total(environment.stateReads), 0, "first prerender reads no owner state")
 equal(total(environment.statusReads), 0, "first prerender reads no advancement status")
@@ -502,6 +571,10 @@ equal(environment.modelBuilds, 0, "first prerender builds no model")
 
 view:render()
 equal(environment.priorRender, 1, "first render chains vanilla once")
+equal(view.height, 270, "viewport loses exactly one native header inset")
+equal(view.parent.height, 308, "containing panel retains vanilla absolute height")
+equal(view.outer.height, 328, "outer window retains vanilla unshifted height")
+equal(view.scrollHeight, 500, "vanilla scroll height remains unchanged")
 equal(#view.progressBars, 1, "vanilla creates one bar")
 equal(environment.buttonCreates, 1, "reconciliation creates one button")
 equal(axe.children[1].enabled, false, "new button stays disabled before the first model build")
@@ -582,17 +655,21 @@ equal(reopenedEnvironment.refresh[1], 1, "reopened view also advances refresh ca
 
 local slotBar = makeBar(environment, "Cooking", { x = 120 })
 local slotView = makeView(environment, 1, { slotBar }, false)
+slotView:setY(12)
 environment.now = 1600
 slotView:prerender()
 equal(environment.stateReads[2], 1, "slot one rebuild isolated")
 equal(environment.stateReads[1], 3, "slot zero read count unchanged")
+equal(slotView.y, 42, "slot one keeps its independent vanilla header base")
 for slot = 2, 3 do
     local isolatedBar = makeBar(environment, "Slot" .. tostring(slot), { x = 120 + slot })
     local isolatedView = makeView(environment, slot, { isolatedBar }, false)
+    isolatedView:setY(8 + slot)
     isolatedView:prerender()
     equal(environment.stateReads[slot + 1], 1, "slot rebuild isolated " .. tostring(slot))
     equal(environment.refresh[slot + 1], 1, "slot refresh isolated " .. tostring(slot))
     expect(isolatedBar.children[1].enabled, "slot button isolated " .. tostring(slot))
+    equal(isolatedView.y, 38 + slot, "slot header geometry isolated " .. tostring(slot))
 end
 environment.listener(0, "owner_snapshot")
 environment.now = 1601
@@ -647,13 +724,41 @@ local buttonsBeforeRepeatedRender = environment.buttonCreates
 view:render()
 local stableViewWidth = view.width
 local stableParentWidth = view.parent.width
+local stableOuterWidth = view.outer.width
 local stableBarWidth = axe.width
-for repeatRender = 1, 5 do view:render() end
+local stableViewY = view.y
+local stableViewHeight = view.height
+local stableParentHeight = view.parent.height
+local stableOuterHeight = view.outer.height
+local stableStatusY = view.statusDraws[#view.statusDraws].screenY
+local rowScreenY = view.parent.y + view.y + view:getYScroll() + axe.y
+view:setYScroll(-60)
+view:render()
+equal(view.statusDraws[#view.statusDraws].screenY, stableStatusY,
+    "status screen position stays fixed while skill rows scroll")
+equal(view.parent.y + view.y + view:getYScroll() + axe.y, rowScreenY - 60,
+    "vanilla rows retain scrolling below the fixed status")
+local readsBeforeStable = {
+    environment.refresh[1], environment.stateReads[1], environment.settingsReads,
+}
+for repeatRender = 1, 60 do view:render() end
 equal(view.width, stableViewWidth, "view width never grows cumulatively")
 equal(view.parent.width, stableParentWidth, "parent width never grows cumulatively")
+equal(view.outer.width, stableOuterWidth, "complete ancestor width never grows cumulatively")
 equal(axe.width, stableBarWidth, "bar width never grows cumulatively")
+equal(view.y, stableViewY, "view header inset never grows cumulatively")
+equal(view.height, stableViewHeight, "viewport height never shrinks cumulatively")
+equal(view.parent.height, stableParentHeight, "parent height never grows cumulatively")
+equal(view.outer.height, stableOuterHeight, "outer height never grows cumulatively")
+equal(environment.refresh[1], readsBeforeStable[1], "render stability sends no refresh")
+equal(environment.stateReads[1], readsBeforeStable[2], "render stability reads no owner state")
+equal(environment.settingsReads, readsBeforeStable[3], "render stability reads no settings")
 equal(environment.buttonCreates, buttonsBeforeRepeatedRender, "repeated renders create no duplicate buttons")
+equal(view.width - (axe.x + axe.width), 100, "expanded bar preserves measured vanilla right gutter")
+equal(view.parent.width, view.x + view.width, "view width propagates absolutely to parent")
+equal(view.outer.width, view.parent.x + view.parent.width, "width propagates through every ancestor")
 expect(#view.statusDraws > 0, "status draws on first category row")
+equal(view.statusDraws[#view.statusDraws].y, 18, "status uses fixed parent-local header coordinates")
 expect(string.find(view.statusDraws[#view.statusDraws].text, "AP: 3 unspent", 1, true) ~= nil,
     "status includes AP")
 expect(string.find(view.statusDraws[#view.statusDraws].text, "Active advancements: 2 / 6", 1, true) ~= nil,
@@ -665,6 +770,7 @@ expect(narrowEnvironment.integration.install().ok, "narrow-view integration inst
 local narrowBar = makeBar(narrowEnvironment, "Axe", { x = 50, width = 100, height = 10 })
 local narrowView = makeView(narrowEnvironment, 0, { narrowBar })
 narrowView.width = 200
+narrowView.vanillaWidth = 200
 narrowView.parent.width = 220
 narrowView:prerender()
 narrowView:render()
@@ -673,6 +779,22 @@ local requiredStatusRight = 30 + (#"Long category" * 10) + 12 + (#narrowStatus.t
 expect(narrowStatus.x >= requiredStatusRight, "long category and status preserve measured spacing")
 expect(narrowView.width > 200 and narrowView.parent.width > 220,
     "narrow view and containing window widen for measured copy")
+
+local resolutionEnvironment = makeEnvironment()
+expect(resolutionEnvironment.integration.install().ok, "resolution integration installs")
+local resolutionBar = makeBar(resolutionEnvironment, "Axe")
+local resolutionView = makeView(resolutionEnvironment, 0, { resolutionBar })
+resolutionView:prerender()
+resolutionView:render()
+resolutionView:setWidth(460)
+resolutionView:render()
+equal(resolutionView.width, 480, "resolution rebuild rebases from the new vanilla view width")
+equal(resolutionView.width - (resolutionBar.x + resolutionBar.width), 160,
+    "resolution rebuild preserves its newly measured vanilla gutter")
+equal(resolutionView.parent.width, 480, "resolution width propagates to parent")
+equal(resolutionView.outer.width, 480, "resolution width propagates to outer ancestor")
+resolutionView:render()
+equal(resolutionView.width, 480, "resolution rebase remains non-cumulative")
 
 local oldButton = axeButton
 local buttonsBeforeReplacement = environment.buttonCreates
@@ -692,11 +814,24 @@ view.progressBars = { expanded }
 view:render()
 equal(#expanded.children, 1, "expanded bar gets one button")
 
-local tornParent = makeParent(300)
+local tornOuter = makeParent(300, 0, nil, 0, 0)
+local tornParent = makeParent(300, 0, tornOuter, 0, 24)
 view.parent = tornParent
+view:setY(16)
 view:render()
 expect(tornParent.width > 300, "torn-off parent identity widens independently")
 equal(view.width, stableViewWidth, "torn-off reconciliation remains non-cumulative")
+equal(view.y, 46, "torn-off view rebases one header inset from its new vanilla position")
+equal(tornParent.height, 316, "torn-off parent receives exact absolute vanilla height")
+equal(tornOuter.height, 340, "torn-off outer window receives full ancestor height")
+equal(tornParent.statusDraws[#tornParent.statusDraws].y, 26,
+    "torn-off status uses the new parent-local fixed row")
+view.parent = dockedParent
+view:setY(8)
+view:render()
+equal(view.y, 38, "reattached view reapplies one header inset")
+equal(dockedParent.height, 308, "reattached panel restores vanilla height")
+equal(dockedOuter.height, 328, "reattached outer window restores vanilla height")
 
 local unsupported = makeBar(environment, "Unsupported", { unsupported = true })
 view.progressBars = { unsupported }
@@ -854,9 +989,19 @@ local clockBar = makeBar(clockEnvironment, "Axe")
 local clockView = makeView(clockEnvironment, 0, { clockBar })
 clockEnvironment.clockThrows = true
 local beforePrior = clockEnvironment.priorPrerender
+local readsBeforeClockFailure = {
+    clockEnvironment.refresh[1], clockEnvironment.stateReads[1], clockEnvironment.settingsReads,
+}
 local clockOk = pcall(function() clockView:prerender() end)
 expect(clockOk, "clock failure is contained")
 equal(clockEnvironment.priorPrerender, beforePrior + 1, "wrapper failure never repeats vanilla")
+equal(clockView.y, 8, "permanent disable restores captured vanilla Y")
+equal(clockView.height, 300, "permanent disable restores captured vanilla height")
+equal(clockView.parent.height, 308, "permanent disable restores parent height")
+equal(clockView.outer.height, 328, "permanent disable restores outer height")
+equal(clockEnvironment.refresh[1], readsBeforeClockFailure[1], "disable path sends no refresh")
+equal(clockEnvironment.stateReads[1], readsBeforeClockFailure[2], "disable path reads no owner state")
+equal(clockEnvironment.settingsReads, readsBeforeClockFailure[3], "disable path reads no settings")
 
 local ownershipEnvironment = makeEnvironment()
 expect(ownershipEnvironment.integration.install().ok, "ownership integration installs")

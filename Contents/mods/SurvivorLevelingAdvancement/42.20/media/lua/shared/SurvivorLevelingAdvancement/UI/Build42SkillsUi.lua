@@ -377,7 +377,6 @@ function Build42SkillsUi.create(dependencies)
 
     local views = weakKeys()
     local bars = weakKeys()
-    local parentWidths = weakKeys()
     local installed = false
     local installAttempted = false
     local retainedFailure = nil
@@ -427,6 +426,12 @@ function Build42SkillsUi.create(dependencies)
             order = {},
             baseWidth = nil,
             appliedWidth = nil,
+            layoutParent = nil,
+            baseY = nil,
+            appliedY = nil,
+            vanillaHeight = nil,
+            appliedHeight = nil,
+            inset = nil,
             statusText = nil,
             statusRight = nil,
             statusY = nil,
@@ -443,8 +448,18 @@ function Build42SkillsUi.create(dependencies)
         end
     end
 
+    local restoreLayout
+
     local function disableView(state)
         if state == nil then return end
+        if restoreLayout ~= nil then
+            for view, candidate in pairs(views) do
+                if candidate == state then
+                    pcall(restoreLayout, view, state)
+                    break
+                end
+            end
+        end
         state.disabled = true
         state.cache = nil
         state.statusText = nil
@@ -733,22 +748,53 @@ function Build42SkillsUi.create(dependencies)
         return true
     end
 
+    local function propagate(view, value, axis)
+        local sizeName = axis == "width" and "setWidth" or "setHeight"
+        local readSize = axis == "width" and "getWidth" or "getHeight"
+        local readPosition = axis == "width" and "getX" or "getY"
+        if not writeNumber(view, sizeName, value) then return false end
+        local child = view
+        local parent = rawget(view, "parent")
+        while parent ~= nil do
+            if type(parent) ~= "table" then return false end
+            local position = readNumber(child, readPosition)
+            local size = readNumber(child, readSize)
+            if position == nil or size == nil
+                or not writeNumber(parent, sizeName, position + size) then return false end
+            child = parent
+            parent = rawget(parent, "parent")
+        end
+        return true
+    end
+
     local function prepareGeometry(view, state)
-        if state.baseWidth ~= nil then writeNumber(view, "setWidth", state.baseWidth) end
+        local currentWidth = readNumber(view, "getWidth")
+        if currentWidth == nil then return false end
+        if state.appliedWidth ~= nil and currentWidth ~= state.appliedWidth then
+            state.baseWidth = currentWidth
+        end
+        if state.baseWidth ~= nil and not propagate(view, state.baseWidth, "width") then return false end
         for index = 1, #state.order do
             local barState = bars[state.order[index]]
             if barState and barState.supported then
-                writeNumber(state.order[index], "setWidth", barState.baseWidth)
+                if not writeNumber(state.order[index], "setWidth", barState.baseWidth) then return false end
             end
         end
-        local parent = type(view) == "table" and rawget(view, "parent") or nil
-        local parentState = parent and parentWidths[parent] or nil
-        if parentState and parentState.baseWidth then writeNumber(parent, "setWidth", parentState.baseWidth) end
+        return true
+    end
+
+    local function firstButtonGeometry(view)
+        local buttons = type(view) == "table" and rawget(view, "buttonList") or nil
+        local firstButton = type(buttons) == "table" and rawget(buttons, 1) or nil
+        local left = firstButton and readNumber(firstButton, "getRight") or nil
+        local y = firstButton and readNumber(firstButton, "getY") or nil
+        local height = firstButton and readNumber(firstButton, "getHeight") or nil
+        if y == nil or height == nil or height <= 0 then return nil, nil, nil end
+        return left or OUTER_PADDING, y, height
     end
 
     local function categoryGeometry(view)
         local sorted = type(view) == "table" and rawget(view, "sorted") or nil
-        local buttons = type(view) == "table" and rawget(view, "buttonList") or nil
         local category = type(sorted) == "table" and rawget(sorted, 1) or nil
         local lookupCalled, getName = pcall(function() return category and category.getName or nil end)
         if not lookupCalled or not callable(getName) then return nil, nil, nil end
@@ -756,22 +802,71 @@ function Build42SkillsUi.create(dependencies)
         if not calledName or type(name) ~= "string" then return nil, nil, nil end
         local calledMeasure, width = pcall(measureText, name)
         if not calledMeasure or not finite(width) or width < 0 then return nil, nil, nil end
-        local firstButton = type(buttons) == "table" and rawget(buttons, 1) or nil
-        local left = firstButton and readNumber(firstButton, "getRight") or nil
-        local y = firstButton and readNumber(firstButton, "getY") or nil
-        if left == nil then left = OUTER_PADDING end
-        return left, width, y or OUTER_PADDING
+        local left, y, height = firstButtonGeometry(view)
+        if left == nil then return nil, nil, nil, nil end
+        return left, width, y, height
+    end
+
+    local function prepareHeader(view, state)
+        local _, buttonY, buttonHeight = firstButtonGeometry(view)
+        if buttonY == nil or buttonHeight == nil then return false end
+        local inset = buttonY + buttonHeight
+        if not finite(inset) or inset <= 0 then return false end
+        local parent = rawget(view, "parent")
+        if type(parent) ~= "table" then return false end
+        local currentY = readNumber(view, "getY")
+        local currentHeight = readNumber(view, "getHeight")
+        if currentY == nil or currentHeight == nil or currentHeight < inset then return false end
+
+        if state.layoutParent ~= parent then
+            if state.appliedY ~= nil and currentY == state.appliedY then currentY = state.baseY end
+            if state.appliedHeight ~= nil and currentHeight == state.appliedHeight then
+                currentHeight = state.vanillaHeight
+            end
+            state.layoutParent = parent
+            state.baseY = currentY
+            state.vanillaHeight = currentHeight
+        else
+            if state.appliedY == nil or currentY ~= state.appliedY then state.baseY = currentY end
+            if state.appliedHeight == nil or currentHeight ~= state.appliedHeight then
+                state.vanillaHeight = currentHeight
+            end
+        end
+        state.inset = inset
+        local appliedY = state.baseY + inset
+        if not writeNumber(view, "setY", appliedY) then return false end
+        state.appliedY = appliedY
+        local appliedHeight = state.vanillaHeight - inset
+        if appliedHeight < 0 or not propagate(view, appliedHeight, "height") then return false end
+        state.appliedHeight = appliedHeight
+        return true
+    end
+
+    local function finishHeader(view, state)
+        local height = readNumber(view, "getHeight")
+        if height == nil or state.inset == nil or height < state.inset then return false end
+        state.vanillaHeight = height
+        local appliedHeight = height - state.inset
+        if not propagate(view, appliedHeight, "height") then return false end
+        state.appliedHeight = appliedHeight
+        return true
+    end
+
+    restoreLayout = function(view, state)
+        local restored = true
+        if state.baseY ~= nil and not writeNumber(view, "setY", state.baseY) then restored = false end
+        if state.vanillaHeight ~= nil and not propagate(view, state.vanillaHeight, "height") then
+            restored = false
+        end
+        state.appliedY = nil
+        state.appliedHeight = nil
+        return restored
     end
 
     local function applyGeometry(view, state)
         local currentWidth = readNumber(view, "getWidth")
         if currentWidth == nil then return false end
         state.baseWidth = currentWidth
-        local parent = rawget(view, "parent")
-        if type(parent) == "table" then
-            local width = readNumber(parent, "getWidth")
-            if width ~= nil then parentWidths[parent] = { baseWidth = width, appliedWidth = width } end
-        end
         local baseRight, expandedRight = 0, 0
         for index = 1, #state.order do
             local bar = state.order[index]
@@ -790,6 +885,8 @@ function Build42SkillsUi.create(dependencies)
             end
         end
         if baseRight == 0 then return true end
+        local gutter = state.baseWidth - baseRight
+        if not finite(gutter) or gutter < 0 then return false end
         local desiredRight = expandedRight
         if state.statusText ~= nil then
             local left, categoryWidth, y = categoryGeometry(view)
@@ -801,15 +898,9 @@ function Build42SkillsUi.create(dependencies)
         else
             state.statusRight, state.statusY = nil, nil
         end
-        local desiredWidth = state.baseWidth + math.max(0, desiredRight - baseRight)
-        if not writeNumber(view, "setWidth", desiredWidth) then return false end
+        local desiredWidth = desiredRight + gutter
+        if not propagate(view, desiredWidth, "width") then return false end
         state.appliedWidth = desiredWidth
-        if type(parent) == "table" then
-            local parentState = parentWidths[parent]
-            local parentWidth = parentState.baseWidth + math.max(0, desiredWidth - state.baseWidth)
-            if not writeNumber(parent, "setWidth", parentWidth) then return false end
-            parentState.appliedWidth = parentWidth
-        end
         return true
     end
 
@@ -842,13 +933,19 @@ function Build42SkillsUi.create(dependencies)
     local function onRender(view)
         local state = viewFor(view)
         if state == nil or state.disabled then return end
-        if not reconcile(view, state) or not applyGeometry(view, state) then
+        if not finishHeader(view, state) or not reconcile(view, state) or not applyGeometry(view, state) then
             disableView(state)
             return
         end
-        if state.statusText ~= nil and state.statusRight ~= nil and callable(view.drawTextRight) then
-            if not pcall(view.drawTextRight, view, state.statusText, state.statusRight,
-                state.statusY, 1, 1, 1, 1, smallFont) then disableView(state) end
+        if state.statusText ~= nil and state.statusRight ~= nil then
+            local parent = rawget(view, "parent")
+            local viewX = readNumber(view, "getX")
+            local drawStatus = type(parent) == "table" and parent.drawTextRightStatic or nil
+            if viewX == nil or not callable(drawStatus)
+                or not pcall(drawStatus, parent, state.statusText, viewX + state.statusRight,
+                    state.baseY + state.statusY, 1, 1, 1, 1, smallFont) then
+                disableView(state)
+            end
         end
     end
 
@@ -894,6 +991,11 @@ function Build42SkillsUi.create(dependencies)
     end
 
     wrappers.prerender = function(view, ...)
+        local state = viewFor(view)
+        if state ~= nil and not state.disabled then
+            local prepared, result = pcall(prepareHeader, view, state)
+            if not prepared or not result then disableView(state) end
+        end
         local ok, a, b, c = pcall(priorPrerender, view, ...)
         local addonOk = pcall(onPrerender, view)
         if not addonOk then disableView(views[view]) end
@@ -903,8 +1005,11 @@ function Build42SkillsUi.create(dependencies)
     wrappers.render = function(view, ...)
         local state = viewFor(view)
         if state ~= nil and not state.disabled then
-            local prepared = pcall(prepareGeometry, view, state)
-            if not prepared then disableView(state) end
+            local headerCalled, headerPrepared = pcall(prepareHeader, view, state)
+            local geometryCalled, geometryPrepared = pcall(prepareGeometry, view, state)
+            if not headerCalled or not headerPrepared or not geometryCalled or not geometryPrepared then
+                disableView(state)
+            end
         end
         local ok, a, b, c = pcall(priorRender, view, ...)
         local addonOk = pcall(onRender, view)
