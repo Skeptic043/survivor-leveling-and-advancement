@@ -41,6 +41,12 @@ local function makeDependencies(overrides)
     local ownerSnapshot = {
         project = function() return { ok = true, snapshot = {} } end,
     }
+    local ownerSession = {
+        ready = function() return { ok = true } end,
+        snapshot = function() return { ok = true } end,
+        isReady = function() return false end,
+        clearPlayer = function() return { ok = true } end,
+    }
     local processorCalls = {}
     local processor = {
         process = function(player, award, settings)
@@ -153,6 +159,13 @@ local function makeDependencies(overrides)
                 return source, nil
             end,
         },
+        OwnerSession = {
+            create = function(argument)
+                calls[#calls + 1] = "session"
+                arguments.session = argument
+                return { ok = true, session = ownerSession }
+            end,
+        },
         catalog = {
             allPerks = function() return {} end,
             resolver = {
@@ -186,6 +199,7 @@ local function makeDependencies(overrides)
             arguments = arguments,
             store = store,
             ownerSnapshot = ownerSnapshot,
+            ownerSession = ownerSession,
             apService = apService,
             processor = processor,
             processorCalls = processorCalls,
@@ -201,6 +215,7 @@ local function makeDependencies(overrides)
         arguments = arguments,
         store = store,
         ownerSnapshot = ownerSnapshot,
+        ownerSession = ownerSession,
         apService = apService,
         processor = processor,
         processorCalls = processorCalls,
@@ -216,7 +231,7 @@ do
     local result = ServiceComposition.create(dependencies)
 
     assertTrue(result.ok, "composition succeeds")
-    sequenceEquals(fixture.calls, { "store", "settings", "snapshot", "ap", "processor", "source" }, "factory order")
+    sequenceEquals(fixture.calls, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "factory order")
     assertSame(fixture.arguments.store, dependencies.StateCodec, "codec identity")
     assertSame(fixture.arguments.settings.provider, dependencies.worldSettingsProvider, "provider identity")
     assertFalse(fixture.arguments.settings.normalizationByPerk == dependencies.normalizationByPerk, "normalization detached")
@@ -237,12 +252,18 @@ do
     assertSame(fixture.arguments.source.perkIdentity, dependencies.catalog.perkIdentity, "perk identity")
     assertSame(fixture.arguments.source.positionReader, dependencies.catalog.positionReader, "position reader identity")
     assertSame(fixture.arguments.source.awardHandler, result.services.awardHandler, "handler identity")
+    assertSame(fixture.arguments.session.store, fixture.store, "session store identity")
+    assertSame(fixture.arguments.session.recoveryService, fixture.apService, "session recovery identity")
+    assertSame(fixture.arguments.session.catalog, dependencies.catalog, "session catalog identity")
+    assertSame(fixture.arguments.session.xpSource, fixture.source, "session XP source identity")
+    assertSame(fixture.arguments.session.ownerSnapshot, fixture.ownerSnapshot, "session snapshot identity")
     assertSame(result.services.store, fixture.store, "result store")
     assertSame(result.services.worldSettings, fixture.worldSettings, "result settings")
     assertSame(result.services.ownerSnapshot, fixture.ownerSnapshot, "result snapshot")
     assertSame(result.services.apTransaction, fixture.apService, "result AP")
     assertSame(result.services.awardProcessor, fixture.processor, "result processor")
     assertSame(result.services.xpSource, fixture.source, "result source")
+    assertSame(result.services.ownerSession, fixture.ownerSession, "result owner session")
 
     local expectedKeys = {
         store = true,
@@ -252,13 +273,14 @@ do
         awardProcessor = true,
         awardHandler = true,
         xpSource = true,
+        ownerSession = true,
     }
     local serviceCount = 0
     for key in pairs(result.services) do
         serviceCount = serviceCount + 1
         assertTrue(expectedKeys[key] == true, "unexpected result service " .. tostring(key))
     end
-    assertEqual(serviceCount, 7, "seven services only")
+    assertEqual(serviceCount, 8, "eight services only")
     assertEqual(result.services.dependencies, nil, "dependencies not exposed")
     assertEqual(result.services.modules, nil, "modules not exposed")
     assertEqual(result.services.OwnerSnapshot, nil, "snapshot factory not exposed")
@@ -358,6 +380,7 @@ end
 assertPreflightFailure(function(dependencies) dependencies.StateCodec = nil end, "StateCodec capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.PlayerStateStore.create = nil end, "PlayerStateStore.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSnapshot.create = nil end, "OwnerSnapshot.create is required")
+assertPreflightFailure(function(dependencies) dependencies.OwnerSession.create = nil end, "OwnerSession.create is required")
 assertPreflightFailure(function(dependencies) dependencies.SurvivorEconomy.nextLevelCost = nil end, "SurvivorEconomy capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.catalog.allPerks = nil end, "catalog capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.catalog.resolver.resolve = nil end, "catalog capabilities are required")
@@ -375,6 +398,7 @@ local function assertFactoryStops(factoryName, replacement, expectedCalls, expec
         ApTransaction = "ap",
         SupportedAwardProcessor = "processor",
         EventDerivedXpSource = "source",
+        OwnerSession = "session",
     }
     local dependencies, fixture = makeDependencies(function(values, returned)
         values[factoryName].create = function(argument)
@@ -398,6 +422,9 @@ assertFactoryStops("ApTransaction", function()
 end, { "store", "settings", "snapshot", "ap" }, "invalid_factory_result")
 assertFactoryStops("SupportedAwardProcessor", function() return { ok = true, service = {} } end, { "store", "settings", "snapshot", "ap", "processor" }, "invalid_factory_result")
 assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, code = "source_unavailable", detail = "nope" } end, { "store", "settings", "snapshot", "ap", "processor", "source" }, "source_unavailable")
+assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
+assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
+assertFactoryStops("OwnerSession", function() error("session boom") end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
 
 do
     local dependencies, fixture = makeDependencies(function(values, returned)
@@ -463,6 +490,10 @@ do
     local recoveries = 0
     local loadedRecoveries = 0
     local playerInitializations = 0
+    local sessionReadiness = 0
+    local sessionSnapshots = 0
+    local sessionQueries = 0
+    local sessionClears = 0
     local commands = 0
     local dependencies, fixture = makeDependencies(function(values, returned)
         values.environment.register = function()
@@ -502,6 +533,22 @@ do
             playerInitializations = playerInitializations + 1
             return { ok = true }
         end
+        returned.ownerSession.ready = function()
+            sessionReadiness = sessionReadiness + 1
+            return { ok = true }
+        end
+        returned.ownerSession.snapshot = function()
+            sessionSnapshots = sessionSnapshots + 1
+            return { ok = true }
+        end
+        returned.ownerSession.isReady = function()
+            sessionQueries = sessionQueries + 1
+            return false
+        end
+        returned.ownerSession.clearPlayer = function()
+            sessionClears = sessionClears + 1
+            return { ok = true }
+        end
     end)
     local result = ServiceComposition.create(dependencies)
     assertTrue(result.ok, "source graph created")
@@ -514,6 +561,10 @@ do
     assertEqual(recoveries, 0, "composition does not recover state")
     assertEqual(loadedRecoveries, 0, "composition does not recover loaded state")
     assertEqual(playerInitializations, 0, "composition does not initialize a player")
+    assertEqual(sessionReadiness, 0, "composition does not ready a player")
+    assertEqual(sessionSnapshots, 0, "composition does not snapshot a player")
+    assertEqual(sessionQueries, 0, "composition does not query a player")
+    assertEqual(sessionClears, 0, "composition does not clear a player")
     assertEqual(commands, 0, "composition sends no commands")
 end
 

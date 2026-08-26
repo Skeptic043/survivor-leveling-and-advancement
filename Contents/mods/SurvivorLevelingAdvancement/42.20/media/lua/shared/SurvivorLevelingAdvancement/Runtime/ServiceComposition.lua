@@ -96,6 +96,7 @@ local function validateDependencies(dependencies)
         "SupportedAwardProcessor",
         "WorldSettings",
         "EventDerivedXpSource",
+        "OwnerSession",
     }
     for index = 1, #factories do
         local name = factories[index]
@@ -337,6 +338,23 @@ function ServiceComposition.create(dependencies)
         return xpSourceFailure
     end
 
+    local ownerSession, ownerSessionFailure = callSingleFactory(
+        "OwnerSession",
+        dependencies.OwnerSession,
+        {
+            store = store,
+            recoveryService = apTransaction,
+            catalog = dependencies.catalog,
+            xpSource = xpSource,
+            ownerSnapshot = ownerSnapshot,
+        },
+        "session",
+        { "ready", "snapshot", "isReady", "clearPlayer" }
+    )
+    if ownerSession == nil then
+        return ownerSessionFailure
+    end
+
     return {
         ok = true,
         services = {
@@ -347,6 +365,7 @@ function ServiceComposition.create(dependencies)
             awardProcessor = awardProcessor,
             awardHandler = awardHandler,
             xpSource = xpSource,
+            ownerSession = ownerSession,
         },
     }
 end
