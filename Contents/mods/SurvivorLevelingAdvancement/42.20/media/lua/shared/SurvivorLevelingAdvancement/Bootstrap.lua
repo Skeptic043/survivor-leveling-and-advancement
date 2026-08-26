@@ -68,6 +68,7 @@ local modules = {
     PostMax = require "SurvivorLevelingAdvancement/Core/PostMax",
     MutationScope = require "SurvivorLevelingAdvancement/State/MutationScope",
     ActualObservation = require "SurvivorLevelingAdvancement/State/ActualObservation",
+    AccountingMode = require "SurvivorLevelingAdvancement/Runtime/AccountingMode",
     OwnerSnapshot = require "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot",
     OwnerSession = require "SurvivorLevelingAdvancement/Runtime/OwnerSession",
     AdvancementSession = require "SurvivorLevelingAdvancement/Runtime/AdvancementSession",

@@ -12,6 +12,27 @@ local function positiveInteger(value)
         and value ~= -math.huge and value > 0 and value == math.floor(value)
 end
 
+local function nonnegativeInteger(value)
+    return type(value) == "number" and value == value and value ~= math.huge
+        and value ~= -math.huge and value >= 0 and value == math.floor(value)
+end
+
+local function finiteNonnegative(value)
+    return type(value) == "number" and value == value and value ~= math.huge
+        and value ~= -math.huge and value >= 0
+end
+
+local function exactPlain(value, fields)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return false end
+    for key in pairs(value) do
+        if type(key) ~= "string" or not fields[key] then return false end
+    end
+    for key in pairs(fields) do
+        if rawget(value, key) == nil then return false end
+    end
+    return true
+end
+
 local function denseArray(value)
     if type(value) ~= "table" then return false end
     local length = #value
@@ -24,7 +45,7 @@ local function denseArray(value)
 end
 
 local function successful(result)
-    return type(result) == "table" and result.ok == true
+    return type(result) == "table" and rawget(result, "ok") == true
 end
 
 local function safeDiagnosticCode(value)
@@ -78,6 +99,73 @@ local function dependencyFailure(operation, kind, result)
     return failure(operation .. "_threw", "dependency threw")
 end
 
+local function resolveAccountingMode(accountingSettings, player)
+    local resolved, settingsFailure, settingsResult = call(accountingSettings.resolve, player)
+    if resolved == nil then
+        return nil, dependencyFailure("accounting_settings", settingsFailure, settingsResult)
+    end
+    if not exactPlain(resolved, { ok = true, settings = true }) or rawget(resolved, "ok") ~= true then
+        return nil, failure("accounting_settings_invalid", "accountingSettings.resolve")
+    end
+    local settings = resolved.settings
+    if not exactPlain(settings, { mode = true }) then
+        return nil, failure("accounting_settings_invalid", "accountingSettings.resolve")
+    end
+    if settings.mode ~= "Tracked" and settings.mode ~= "Free" then
+        return nil, failure("accounting_settings_invalid", "accountingSettings.resolve")
+    end
+    return settings.mode, nil
+end
+
+local function synchronizeAccountingMode(accountingMode, player, state, desiredMode)
+    local synchronized, synchronizeFailure, synchronizeResult = call(
+        accountingMode.synchronizeLoaded,
+        player,
+        state,
+        desiredMode
+    )
+    if synchronized == nil then
+        return nil, dependencyFailure("accounting_mode", synchronizeFailure, synchronizeResult)
+    end
+    if not exactPlain(synchronized, {
+            ok = true,
+            state = true,
+            transitioned = true,
+            fromMode = true,
+            toMode = true,
+        })
+        or rawget(synchronized, "ok") ~= true
+        or type(synchronized.state) ~= "table"
+        or type(synchronized.transitioned) ~= "boolean"
+        or (synchronized.fromMode ~= "Tracked" and synchronized.fromMode ~= "Free")
+        or synchronized.toMode ~= desiredMode
+        or synchronized.state.accountingMode ~= desiredMode
+        or state.accountingMode ~= synchronized.fromMode
+        or not nonnegativeInteger(state.revision)
+        or (synchronized.transitioned and (
+            synchronized.fromMode == desiredMode
+            or state.revision >= MAX_SAFE_INTEGER
+            or synchronized.state == state
+            or synchronized.state.revision ~= state.revision + 1
+        ))
+        or (not synchronized.transitioned and (
+            synchronized.fromMode ~= desiredMode
+            or synchronized.state ~= state
+        )) then
+        return nil, failure("accounting_mode_invalid", "accountingMode.synchronizeLoaded")
+    end
+    local survivor = synchronized.state.survivor
+    if not nonnegativeInteger(synchronized.state.revision)
+        or type(survivor) ~= "table"
+        or not nonnegativeInteger(survivor.level)
+        or not finiteNonnegative(survivor.xpIntoLevel)
+        or not nonnegativeInteger(survivor.spent)
+        or (desiredMode == "Tracked" and type(synchronized.state.perks) ~= "table") then
+        return nil, failure("accounting_mode_invalid", "accountingMode.synchronizeLoaded")
+    end
+    return synchronized.state, nil
+end
+
 function OwnerSession.create(dependencies)
     if type(dependencies) ~= "table" then return failure("invalid_dependencies", "dependencies must be a table") end
 
@@ -88,6 +176,14 @@ function OwnerSession.create(dependencies)
     local recoveryService = dependencies.recoveryService
     if type(recoveryService) ~= "table" or type(recoveryService.recoverLoadedState) ~= "function" then
         return failure("invalid_dependencies", "recoveryService.recoverLoadedState is required")
+    end
+    local accountingMode = dependencies.accountingMode
+    if type(accountingMode) ~= "table" or type(accountingMode.synchronizeLoaded) ~= "function" then
+        return failure("invalid_dependencies", "accountingMode.synchronizeLoaded is required")
+    end
+    local accountingSettings = dependencies.accountingSettings
+    if type(accountingSettings) ~= "table" or type(accountingSettings.resolve) ~= "function" then
+        return failure("invalid_dependencies", "accountingSettings.resolve is required")
     end
     local catalog = dependencies.catalog
     if type(catalog) ~= "table" or type(catalog.allPerks) ~= "function"
@@ -143,6 +239,16 @@ function OwnerSession.create(dependencies)
             return failure("recovery_invalid", "recoveryService.recoverLoadedState")
         end
 
+        local desiredMode, settingsFailure = resolveAccountingMode(accountingSettings, player)
+        if desiredMode == nil then return settingsFailure end
+        local synchronizedState, synchronizationFailure = synchronizeAccountingMode(
+            accountingMode,
+            player,
+            recovered.state,
+            desiredMode
+        )
+        if synchronizedState == nil then return synchronizationFailure end
+
         local catalogResult, catalogFailure, failedCatalogResult = call(catalog.allPerks)
         if catalogResult == nil then return dependencyFailure("catalog", catalogFailure, failedCatalogResult) end
         if not denseArray(catalogResult.perks) then return failure("catalog_invalid", "catalog.allPerks") end
@@ -156,7 +262,7 @@ function OwnerSession.create(dependencies)
 
         local sequence = nextSequence(entryFor(player))
         if sequence == nil then return failure("sequence_invalid", "session sequence") end
-        local snapshot, snapshotFailure = project(recovered.state, sequence)
+        local snapshot, snapshotFailure = project(synchronizedState, sequence)
         if snapshot == nil then return snapshotFailure end
 
         entries[player] = { ready = true, sequence = sequence }
@@ -178,9 +284,19 @@ function OwnerSession.create(dependencies)
         if loaded == nil then return dependencyFailure("store_load", loadFailure, loadResult) end
         if type(loaded.state) ~= "table" then return failure("store_load_invalid", "store.load") end
 
+        local desiredMode, settingsFailure = resolveAccountingMode(accountingSettings, player)
+        if desiredMode == nil then return settingsFailure end
+        local synchronizedState, synchronizationFailure = synchronizeAccountingMode(
+            accountingMode,
+            player,
+            loaded.state,
+            desiredMode
+        )
+        if synchronizedState == nil then return synchronizationFailure end
+
         local sequence = nextSequence(entry)
         if sequence == nil then return failure("sequence_invalid", "session sequence") end
-        local snapshot, snapshotFailure = project(loaded.state, sequence)
+        local snapshot, snapshotFailure = project(synchronizedState, sequence)
         if snapshot == nil then return snapshotFailure end
 
         entry.sequence = sequence

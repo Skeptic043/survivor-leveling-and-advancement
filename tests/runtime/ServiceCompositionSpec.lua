@@ -38,6 +38,9 @@ local function makeDependencies(overrides)
         recover = function() return { ok = true } end,
         recoverLoadedState = function() return { ok = true } end,
     }
+    local accountingMode = {
+        synchronizeLoaded = function() return { ok = true } end,
+    }
     local ownerSnapshot = {
         project = function() return { ok = true, snapshot = {} } end,
     }
@@ -74,6 +77,11 @@ local function makeDependencies(overrides)
     local settingsCalls = {}
     local worldSettings = {
         ok = true,
+        accountingSettings = {
+            resolve = function()
+                return { ok = true, settings = { mode = "Tracked" } }
+            end,
+        },
         awardSettings = {
             resolve = function(player, perkId)
                 settingsCalls[#settingsCalls + 1] = { player = player, perkId = perkId }
@@ -124,6 +132,13 @@ local function makeDependencies(overrides)
             get = function() end,
             set = function() end,
             clearPlayer = function() end,
+        },
+        AccountingMode = {
+            create = function(argument)
+                calls[#calls + 1] = "accounting"
+                arguments.accounting = argument
+                return { ok = true, service = accountingMode }
+            end,
         },
         ApTransaction = {
             create = function(argument)
@@ -210,6 +225,7 @@ local function makeDependencies(overrides)
             ownerSession = ownerSession,
             advancementSession = advancementSession,
             apService = apService,
+            accountingMode = accountingMode,
             processor = processor,
             processorCalls = processorCalls,
             source = source,
@@ -227,6 +243,7 @@ local function makeDependencies(overrides)
         ownerSession = ownerSession,
         advancementSession = advancementSession,
         apService = apService,
+        accountingMode = accountingMode,
         processor = processor,
         processorCalls = processorCalls,
         source = source,
@@ -241,11 +258,13 @@ do
     local result = ServiceComposition.create(dependencies)
 
     assertTrue(result.ok, "composition succeeds")
-    sequenceEquals(fixture.calls, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory order")
+    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory order")
     assertSame(fixture.arguments.store, dependencies.StateCodec, "codec identity")
     assertSame(fixture.arguments.settings.provider, dependencies.worldSettingsProvider, "provider identity")
     assertFalse(fixture.arguments.settings.normalizationByPerk == dependencies.normalizationByPerk, "normalization detached")
     assertEqual(fixture.arguments.settings.normalizationByPerk.Cooking, 1200, "normalization retained")
+    assertSame(fixture.arguments.accounting.store, fixture.store, "accounting store identity")
+    assertSame(fixture.arguments.accounting.ActualObservation, dependencies.ActualObservation, "accounting observation identity")
     assertSame(fixture.arguments.snapshot.catalog, dependencies.catalog, "snapshot catalog identity")
     assertSame(fixture.arguments.snapshot.SurvivorEconomy, dependencies.SurvivorEconomy, "snapshot economy identity")
     assertSame(fixture.arguments.ap.store, fixture.store, "AP store identity")
@@ -257,13 +276,17 @@ do
     assertSame(fixture.arguments.processor.MutationScope, dependencies.MutationScope, "processor mutation scope identity")
     assertSame(fixture.arguments.source.mutationScope, dependencies.MutationScope, "source mutation scope identity")
     assertSame(fixture.arguments.ap.ActualObservation, dependencies.ActualObservation, "AP observation identity")
+    assertSame(fixture.arguments.ap.AccountingMode, fixture.accountingMode, "AP accounting-mode identity")
     assertSame(fixture.arguments.processor.ActualObservation, dependencies.ActualObservation, "processor observation identity")
+    assertSame(fixture.arguments.processor.AccountingMode, fixture.accountingMode, "processor accounting-mode identity")
     assertSame(fixture.arguments.processor.recoveryService, fixture.apService, "recovery identity")
     assertSame(fixture.arguments.source.perkIdentity, dependencies.catalog.perkIdentity, "perk identity")
     assertSame(fixture.arguments.source.positionReader, dependencies.catalog.positionReader, "position reader identity")
     assertSame(fixture.arguments.source.awardHandler, result.services.awardHandler, "handler identity")
     assertSame(fixture.arguments.session.store, fixture.store, "session store identity")
     assertSame(fixture.arguments.session.recoveryService, fixture.apService, "session recovery identity")
+    assertSame(fixture.arguments.session.accountingMode, fixture.accountingMode, "session accounting-mode identity")
+    assertSame(fixture.arguments.session.accountingSettings, fixture.worldSettings.accountingSettings, "session accounting-settings identity")
     assertSame(fixture.arguments.session.catalog, dependencies.catalog, "session catalog identity")
     assertSame(fixture.arguments.session.xpSource, fixture.source, "session XP source identity")
     assertSame(fixture.arguments.session.ownerSnapshot, fixture.ownerSnapshot, "session snapshot identity")
@@ -272,6 +295,7 @@ do
     assertSame(fixture.arguments.advancement.ownerSession, fixture.ownerSession, "advancement owner identity")
     assertSame(result.services.store, fixture.store, "result store")
     assertSame(result.services.worldSettings, fixture.worldSettings, "result settings")
+    assertSame(result.services.accountingMode, fixture.accountingMode, "result accounting mode")
     assertSame(result.services.ownerSnapshot, fixture.ownerSnapshot, "result snapshot")
     assertSame(result.services.apTransaction, fixture.apService, "result AP")
     assertSame(result.services.awardProcessor, fixture.processor, "result processor")
@@ -282,6 +306,7 @@ do
     local expectedKeys = {
         store = true,
         worldSettings = true,
+        accountingMode = true,
         ownerSnapshot = true,
         apTransaction = true,
         awardProcessor = true,
@@ -295,7 +320,7 @@ do
         serviceCount = serviceCount + 1
         assertTrue(expectedKeys[key] == true, "unexpected result service " .. tostring(key))
     end
-    assertEqual(serviceCount, 9, "nine services only")
+    assertEqual(serviceCount, 10, "ten services only")
     assertEqual(result.services.dependencies, nil, "dependencies not exposed")
     assertEqual(result.services.modules, nil, "modules not exposed")
     assertEqual(result.services.OwnerSnapshot, nil, "snapshot factory not exposed")
@@ -394,6 +419,7 @@ end
 
 assertPreflightFailure(function(dependencies) dependencies.StateCodec = nil end, "StateCodec capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.PlayerStateStore.create = nil end, "PlayerStateStore.create is required")
+assertPreflightFailure(function(dependencies) dependencies.AccountingMode.create = nil end, "AccountingMode.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSnapshot.create = nil end, "OwnerSnapshot.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSession.create = nil end, "OwnerSession.create is required")
 assertPreflightFailure(function(dependencies) dependencies.AdvancementSession.create = nil end, "AdvancementSession.create is required")
@@ -410,6 +436,7 @@ local function assertFactoryStops(factoryName, replacement, expectedCalls, expec
     local labels = {
         PlayerStateStore = "store",
         WorldSettings = "settings",
+        AccountingMode = "accounting",
         OwnerSnapshot = "snapshot",
         ApTransaction = "ap",
         SupportedAwardProcessor = "processor",
@@ -431,20 +458,21 @@ end
 
 assertFactoryStops("PlayerStateStore", function() return { ok = true, store = {} } end, { "store" }, "invalid_factory_result")
 assertFactoryStops("WorldSettings", function() return { ok = true, awardSettings = {} } end, { "store", "settings" }, "invalid_factory_result")
-assertFactoryStops("OwnerSnapshot", function() return nil end, { "store", "settings", "snapshot" }, "invalid_factory_result")
-assertFactoryStops("OwnerSnapshot", function() return { ok = true, projector = {} } end, { "store", "settings", "snapshot" }, "invalid_factory_result")
-assertFactoryStops("ApTransaction", function() return { ok = false, code = "ap_unavailable", detail = "nope" } end, { "store", "settings", "snapshot", "ap" }, "ap_unavailable")
+assertFactoryStops("AccountingMode", function() return { ok = true, service = {} } end, { "store", "settings", "accounting" }, "invalid_factory_result")
+assertFactoryStops("OwnerSnapshot", function() return nil end, { "store", "settings", "accounting", "snapshot" }, "invalid_factory_result")
+assertFactoryStops("OwnerSnapshot", function() return { ok = true, projector = {} } end, { "store", "settings", "accounting", "snapshot" }, "invalid_factory_result")
+assertFactoryStops("ApTransaction", function() return { ok = false, code = "ap_unavailable", detail = "nope" } end, { "store", "settings", "accounting", "snapshot", "ap" }, "ap_unavailable")
 assertFactoryStops("ApTransaction", function()
     return { ok = true, service = { spend = function() end, recover = function() end } }
-end, { "store", "settings", "snapshot", "ap" }, "invalid_factory_result")
-assertFactoryStops("SupportedAwardProcessor", function() return { ok = true, service = {} } end, { "store", "settings", "snapshot", "ap", "processor" }, "invalid_factory_result")
-assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, code = "source_unavailable", detail = "nope" } end, { "store", "settings", "snapshot", "ap", "processor", "source" }, "source_unavailable")
-assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
-assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
-assertFactoryStops("OwnerSession", function() error("session boom") end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
-assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
-assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
-assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
+end, { "store", "settings", "accounting", "snapshot", "ap" }, "invalid_factory_result")
+assertFactoryStops("SupportedAwardProcessor", function() return { ok = true, service = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor" }, "invalid_factory_result")
+assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, code = "source_unavailable", detail = "nope" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source" }, "source_unavailable")
+assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
+assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
+assertFactoryStops("OwnerSession", function() error("session boom") end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
+assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
+assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
+assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
 
 do
     local dependencies, fixture = makeDependencies(function(values, returned)
@@ -457,7 +485,7 @@ do
     assertFalse(result.ok, "snapshot explicit failure returned")
     assertEqual(result.code, "snapshot_unavailable", "snapshot explicit failure code")
     assertEqual(result.detail, "catalog rejected", "snapshot explicit failure detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "snapshot" }, "snapshot explicit failure stops graph")
+    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot" }, "snapshot explicit failure stops graph")
 end
 
 do
@@ -471,7 +499,7 @@ do
     assertFalse(result.ok, "snapshot malformed failure returned")
     assertEqual(result.code, "snapshot_unavailable", "snapshot malformed failure keeps explicit code")
     assertEqual(result.detail, "OwnerSnapshot.create failed", "snapshot malformed failure gets stable detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "snapshot" }, "snapshot malformed failure stops graph")
+    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot" }, "snapshot malformed failure stops graph")
 end
 
 do
@@ -485,7 +513,7 @@ do
     assertFalse(result.ok, "snapshot throw contained")
     assertEqual(result.code, "factory_threw", "snapshot throw code")
     assertEqual(result.detail, "OwnerSnapshot.create threw", "snapshot throw detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "snapshot" }, "snapshot throw stops graph")
+    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot" }, "snapshot throw stops graph")
 end
 
 do
@@ -506,6 +534,7 @@ do
     local installs = 0
     local loads = 0
     local saves = 0
+    local synchronizations = 0
     local projections = 0
     local recoveries = 0
     local loadedRecoveries = 0
@@ -532,6 +561,10 @@ do
         end
         returned.store.save = function()
             saves = saves + 1
+            return { ok = true }
+        end
+        returned.accountingMode.synchronizeLoaded = function()
+            synchronizations = synchronizations + 1
             return { ok = true }
         end
         returned.ownerSnapshot.project = function()
@@ -582,6 +615,7 @@ do
     assertEqual(installs, 0, "composition does not install source")
     assertEqual(loads, 0, "composition does not load state")
     assertEqual(saves, 0, "composition does not save state")
+    assertEqual(synchronizations, 0, "composition does not synchronize accounting mode")
     assertEqual(projections, 0, "composition does not project a snapshot")
     assertEqual(recoveries, 0, "composition does not recover state")
     assertEqual(loadedRecoveries, 0, "composition does not recover loaded state")

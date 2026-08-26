@@ -90,6 +90,7 @@ end
 local function state()
     return {
         schemaVersion = 1,
+        accountingMode = "Tracked",
         revision = 9,
         survivor = { level = 4, xpIntoLevel = 120, spent = 1, privateSurvivor = "do-not-send" },
         perks = { Axe = record("axe"), Carpentry = record("carpentry"), Orphan = record("orphan") },
@@ -134,7 +135,9 @@ expectEqual(original.survivor.level, 4, "survivor data is detached")
 expectEqual(original.perks.Axe.activeTargets[1].targetPosition, 5.5, "targets are deeply detached")
 
 failure(projector.project(nil, 1, true), "invalid_state", "state must be a table")
-failure(projector.project({ revision = 0, survivor = {}, perks = {} }, 1, true), "invalid_state", "survivor display fields are malformed")
+failure(projector.project({ accountingMode = "Tracked", revision = 0, survivor = {}, perks = {} }, 1, true), "invalid_state", "survivor display fields are malformed")
+local invalidMode = state(); invalidMode.accountingMode = "Unknown"
+failure(projector.project(invalidMode, 1, true), "invalid_state", "state.accountingMode must be Tracked or Free")
 failure(projector.project(state(), 0, true), "invalid_sequence", "sequence must be a positive integer")
 failure(projector.project(state(), 1, "yes"), "invalid_ready", "ready must be a boolean")
 local unsafeState = state(); unsafeState.perks["bad id"] = record("bad")
@@ -162,6 +165,29 @@ local throwingCatalog = {
     perkIdentity = { resolve = function() return { ok = true, perkId = "Axe" } end },
 }
 failure(OwnerSnapshot.create({ catalog = throwingCatalog, SurvivorEconomy = economy() }).projector.project(state(), 1, true), "invalid_catalog", "catalog.allPerks failed")
+
+do
+    local catalogCalls, identityCalls = 0, 0
+    local hostileCatalog = {
+        allPerks = function() catalogCalls = catalogCalls + 1; error("Free must not enumerate") end,
+        perkIdentity = { resolve = function() identityCalls = identityCalls + 1; error("Free must not resolve") end },
+    }
+    local freeState = state()
+    freeState.accountingMode = "Free"
+    freeState.perks = "hostile malformed frozen perks"
+    freeState.orphanedPerks = setmetatable({}, { __index = function() error("Free must not inspect orphans") end })
+    local freeResult = OwnerSnapshot.create({ catalog = hostileCatalog, SurvivorEconomy = economy() }).projector.project(freeState, 7, true)
+    expectEqual(freeResult.ok, true, "Free projection ignores hostile frozen maps")
+    expectEqual(catalogCalls, 0, "Free projection does not enumerate catalog")
+    expectEqual(identityCalls, 0, "Free projection does not resolve catalog identity")
+    local projectedPerkCount = 0
+    for _ in pairs(freeResult.snapshot.perks) do projectedPerkCount = projectedPerkCount + 1 end
+    expectEqual(projectedPerkCount, 0, "Free projection publishes an empty perk map")
+    expectEqual(freeResult.snapshot.revision, 9, "Free projection preserves authoritative revision")
+    expectEqual(freeResult.snapshot.accountingMode, nil, "protocol does not expose accounting mode")
+    freeResult.snapshot.perks.injected = true
+    expectEqual(freeState.perks, "hostile malformed frozen perks", "Free perk map is detached")
+end
 
 local observedState, observedLevel
 local derivedEconomy = {

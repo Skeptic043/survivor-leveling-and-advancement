@@ -117,6 +117,7 @@ local function validateDependencies(dependencies)
 
     local factories = {
         "PlayerStateStore",
+        "AccountingMode",
         "OwnerSnapshot",
         "ApTransaction",
         "SupportedAwardProcessor",
@@ -222,6 +223,7 @@ local function callWorldSettings(factory, argument)
         return nil, failure("factory_threw", "WorldSettings.create threw")
     end
     if type(result) ~= "table" or result.ok ~= true
+        or not hasFunctions(result.accountingSettings, { "resolve" })
         or not hasFunctions(result.awardSettings, { "resolve" })
         or not hasFunctions(result.allotmentSettings, { "resolve" }) then
         if type(result) == "table" and result.ok == false
@@ -281,6 +283,20 @@ function ServiceComposition.create(dependencies)
         return worldSettingsFailure
     end
 
+    local accountingMode, accountingModeFailure = callSingleFactory(
+        "AccountingMode",
+        dependencies.AccountingMode,
+        {
+            store = store,
+            ActualObservation = dependencies.ActualObservation,
+        },
+        "service",
+        { "synchronizeLoaded" }
+    )
+    if accountingMode == nil then
+        return accountingModeFailure
+    end
+
     local ownerSnapshot, ownerSnapshotFailure = callSingleFactory(
         "OwnerSnapshot",
         dependencies.OwnerSnapshot,
@@ -305,6 +321,7 @@ function ServiceComposition.create(dependencies)
             MutationScope = dependencies.MutationScope,
             store = store,
             ActualObservation = dependencies.ActualObservation,
+            AccountingMode = accountingMode,
             resolver = dependencies.catalog.resolver,
         },
         "service",
@@ -326,6 +343,7 @@ function ServiceComposition.create(dependencies)
             MutationScope = dependencies.MutationScope,
             resolver = dependencies.catalog.resolver,
             recoveryService = apTransaction,
+            AccountingMode = accountingMode,
         },
         "service",
         { "process" }
@@ -398,6 +416,8 @@ function ServiceComposition.create(dependencies)
         {
             store = store,
             recoveryService = apTransaction,
+            accountingMode = accountingMode,
+            accountingSettings = worldSettings.accountingSettings,
             catalog = dependencies.catalog,
             xpSource = xpSource,
             ownerSnapshot = ownerSnapshot,
@@ -428,6 +448,7 @@ function ServiceComposition.create(dependencies)
         services = {
             store = store,
             worldSettings = worldSettings,
+            accountingMode = accountingMode,
             ownerSnapshot = ownerSnapshot,
             apTransaction = apTransaction,
             awardProcessor = awardProcessor,

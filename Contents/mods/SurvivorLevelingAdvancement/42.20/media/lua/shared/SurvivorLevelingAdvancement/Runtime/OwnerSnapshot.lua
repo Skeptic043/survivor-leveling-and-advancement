@@ -33,9 +33,11 @@ end
 
 local function validateState(state)
     if type(state) ~= "table" then return nil, failure("invalid_state", "state must be a table") end
+    if state.accountingMode ~= "Tracked" and state.accountingMode ~= "Free" then
+        return nil, failure("invalid_state", "state.accountingMode must be Tracked or Free")
+    end
     if not nonnegativeInteger(state.revision) then return nil, failure("invalid_state", "state.revision must be a nonnegative integer") end
     if type(state.survivor) ~= "table" then return nil, failure("invalid_state", "state.survivor must be a table") end
-    if type(state.perks) ~= "table" then return nil, failure("invalid_state", "state.perks must be a table") end
 
     local survivor = state.survivor
     if not nonnegativeInteger(survivor.level) or not finite(survivor.xpIntoLevel) or survivor.xpIntoLevel < 0
@@ -122,34 +124,37 @@ function OwnerSnapshot.create(dependencies)
         if not positiveInteger(sequence) then return failure("invalid_sequence", "sequence must be a positive integer") end
         if type(ready) ~= "boolean" then return failure("invalid_ready", "ready must be a boolean") end
 
-        local catalogCalled, catalogResult = pcall(catalog.allPerks)
-        if not catalogCalled then return failure("invalid_catalog", "catalog.allPerks failed") end
-        if not validateCatalogResult(catalogResult) then
-            return failure("invalid_catalog", "catalog.allPerks returned an invalid result")
-        end
-
-        local published = {}
-        for index = 1, #catalogResult.perks do
-            local resolvedCalled, resolved = pcall(catalog.perkIdentity.resolve, catalogResult.perks[index])
-            if not resolvedCalled then return failure("invalid_catalog", "catalog.perkIdentity.resolve failed") end
-            if type(resolved) ~= "table" or resolved.ok ~= true or not safeId(resolved.perkId) then
-                return failure("invalid_catalog", "catalog.perkIdentity.resolve returned an invalid result")
-            end
-            if published[resolved.perkId] then return failure("invalid_catalog", "catalog contains duplicate perk IDs") end
-            published[resolved.perkId] = true
-        end
-
-        for perkId in pairs(state.perks) do
-            if not safeId(perkId) then return failure("invalid_state", "state.perks contains an unsafe perk ID") end
-        end
-
         local perks = {}
-        for perkId in pairs(published) do
-            local record = state.perks[perkId]
-            if record ~= nil then
-                local projected, perkFailure = projectPerk(record)
-                if projected == nil then return perkFailure end
-                perks[perkId] = projected
+        if state.accountingMode == "Tracked" then
+            if type(state.perks) ~= "table" then return failure("invalid_state", "state.perks must be a table") end
+            local catalogCalled, catalogResult = pcall(catalog.allPerks)
+            if not catalogCalled then return failure("invalid_catalog", "catalog.allPerks failed") end
+            if not validateCatalogResult(catalogResult) then
+                return failure("invalid_catalog", "catalog.allPerks returned an invalid result")
+            end
+
+            local published = {}
+            for index = 1, #catalogResult.perks do
+                local resolvedCalled, resolved = pcall(catalog.perkIdentity.resolve, catalogResult.perks[index])
+                if not resolvedCalled then return failure("invalid_catalog", "catalog.perkIdentity.resolve failed") end
+                if type(resolved) ~= "table" or resolved.ok ~= true or not safeId(resolved.perkId) then
+                    return failure("invalid_catalog", "catalog.perkIdentity.resolve returned an invalid result")
+                end
+                if published[resolved.perkId] then return failure("invalid_catalog", "catalog contains duplicate perk IDs") end
+                published[resolved.perkId] = true
+            end
+
+            for perkId in pairs(state.perks) do
+                if not safeId(perkId) then return failure("invalid_state", "state.perks contains an unsafe perk ID") end
+            end
+
+            for perkId in pairs(published) do
+                local record = state.perks[perkId]
+                if record ~= nil then
+                    local projected, perkFailure = projectPerk(record)
+                    if projected == nil then return perkFailure end
+                    perks[perkId] = projected
+                end
             end
         end
 
