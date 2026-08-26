@@ -6,7 +6,8 @@ $mod = Join-Path $root 'Contents/mods/SurvivorLevelingAdvancement/42.20'
 $optionsPath = Join-Path $mod 'media/sandbox-options.txt'
 $infoPath = Join-Path $mod 'mod.info'
 $jsonPath = Join-Path $mod 'media/lua/shared/Translate/EN/Sandbox.json'
-$uiPath = Join-Path $mod 'media/lua/shared/Translate/EN/IG_UI_EN.txt'
+$uiPath = Join-Path $mod 'media/lua/shared/Translate/EN/IG_UI.json'
+$obsoleteUiPath = Join-Path $mod 'media/lua/shared/Translate/EN/IG_UI_EN.txt'
 
 $assertions = 0
 function Assert($condition, [string]$message) {
@@ -103,35 +104,34 @@ $forbidden = 'inherit|post.?maximum|digital.?watch|admin|runtime|poll|network|ui
 Assert (-not ($text -match "(?i)$forbidden")) 'sandbox file contains no deferred settings or claims'
 Assert (-not ($info.Values -join ' ' -match "(?i)$forbidden")) 'metadata contains no deferred claims'
 
-$uiText = Get-Content -Raw -LiteralPath $uiPath
-$uiMatches = @([regex]::Matches($uiText, '(?m)^\s*(IGUI_SLA_[A-Za-z0-9_]+)\s*=\s*"((?:[^"\\]|\\.)*)",\s*$'))
-$uiKeys = @($uiMatches | ForEach-Object { $_.Groups[1].Value })
-$requiredUiKeys = @(
-    'IGUI_SLA_StatusAP',
-    'IGUI_SLA_StatusActive',
-    'IGUI_SLA_Advance',
-    'IGUI_SLA_PerSkillActive',
-    'IGUI_SLA_Targets',
-    'IGUI_SLA_HighWater',
-    'IGUI_SLA_Recovery',
-    'IGUI_SLA_Reason_Pending',
-    'IGUI_SLA_Reason_MaximumMismatch',
-    'IGUI_SLA_Reason_AtMaximum',
-    'IGUI_SLA_Reason_RedRecovery',
-    'IGUI_SLA_Reason_InsufficientAp',
-    'IGUI_SLA_Reason_AllotmentDisabled',
-    'IGUI_SLA_Reason_AllotmentCapacity'
-)
-Assert ($uiText -match '(?m)^IG_UI_EN\s*=\s*\{\s*$') 'English UI translation table header'
-Assert ($uiText -match '(?m)^\}\s*$') 'English UI translation table footer'
-Assert ($uiMatches.Count -eq $requiredUiKeys.Count) 'exact new SLA UI translation count'
-Assert (($uiKeys -join ',') -eq ($requiredUiKeys -join ',')) 'exact ordered SLA UI translation keys'
-Assert (@($uiKeys | Group-Object | Where-Object Count -gt 1).Count -eq 0) 'SLA UI translations have no duplicate keys'
-foreach ($match in $uiMatches) {
-    $value = $match.Groups[2].Value
-    Assert (-not [string]::IsNullOrWhiteSpace($value)) "SLA UI translation has copy $($match.Groups[1].Value)"
-    Assert ($value -notmatch ';') "SLA UI tooltip copy has no semicolon $($match.Groups[1].Value)"
+$requiredUi = [ordered]@{
+    'IGUI_SLA_StatusAP' = 'AP: %1 unspent'
+    'IGUI_SLA_StatusActive' = 'Active advancements: %1 / %2'
+    'IGUI_SLA_Advance' = 'Advance to level %1 for %2 AP.'
+    'IGUI_SLA_PerSkillActive' = 'Active advancements: %1 / %2.'
+    'IGUI_SLA_Targets' = 'Blue boxes are active AP advancements.'
+    'IGUI_SLA_HighWater' = 'The blue marker shows natural XP progress.'
+    'IGUI_SLA_Recovery' = 'Red shows natural XP recovery still needed.'
+    'IGUI_SLA_Reason_Pending' = 'An advancement request is pending.'
+    'IGUI_SLA_Reason_MaximumMismatch' = "This skill's progression curve changed."
+    'IGUI_SLA_Reason_AtMaximum' = 'This skill is already at its maximum.'
+    'IGUI_SLA_Reason_RedRecovery' = 'Recover natural XP before advancing again.'
+    'IGUI_SLA_Reason_InsufficientAp' = 'You need more AP.'
+    'IGUI_SLA_Reason_AllotmentDisabled' = 'Advancement spending is disabled for this skill.'
+    'IGUI_SLA_Reason_AllotmentCapacity' = 'This skill has reached its advancement limit.'
 }
-Assert (($uiMatches | Where-Object { $_.Groups[1].Value -eq 'IGUI_SLA_StatusAP' }).Groups[2].Value -eq 'AP: %1 unspent') 'AP status wording'
-Assert (($uiMatches | Where-Object { $_.Groups[1].Value -eq 'IGUI_SLA_StatusActive' }).Groups[2].Value -eq 'Active advancements: %1 / %2') 'active status wording'
+Assert (Test-Path -LiteralPath $uiPath -PathType Leaf) 'Build 42 English UI JSON exists'
+Assert (-not (Test-Path -LiteralPath $obsoleteUiPath)) 'obsolete English UI text file is absent'
+$uiText = Get-Content -Raw -LiteralPath $uiPath
+$uiKeys = @([regex]::Matches($uiText, '(?m)"((?:[^"\\]|\\.)*)"\s*:') | ForEach-Object { $_.Groups[1].Value })
+Assert (@($uiKeys | Group-Object | Where-Object Count -gt 1).Count -eq 0) 'SLA UI JSON has no duplicate keys'
+$uiTranslations = $uiText | ConvertFrom-Json
+$actualUiKeys = @($uiTranslations.PSObject.Properties.Name)
+Assert ($actualUiKeys.Count -eq $requiredUi.Count) 'exact SLA UI translation count'
+Assert (($actualUiKeys -join ',') -eq (@($requiredUi.Keys) -join ',')) 'exact ordered SLA UI translation keys'
+foreach ($key in $requiredUi.Keys) {
+    $value = $uiTranslations.$key
+    Assert ($value -eq $requiredUi[$key]) "exact SLA UI wording $key"
+    Assert ($value -notmatch ';') "SLA UI copy has no semicolon $key"
+}
 Write-Output "Public sandbox settings: $assertions assertions passed."

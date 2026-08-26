@@ -940,7 +940,7 @@ function Build42SkillsUi.create(dependencies)
         if state.statusText ~= nil and state.statusRight ~= nil then
             local parent = rawget(view, "parent")
             local viewX = readNumber(view, "getX")
-            local drawStatus = type(parent) == "table" and parent.drawTextRightStatic or nil
+            local drawStatus = type(parent) == "table" and parent.drawTextRight or nil
             if viewX == nil or not callable(drawStatus)
                 or not pcall(drawStatus, parent, state.statusText, viewX + state.statusRight,
                     state.baseY + state.statusY, 1, 1, 1, 1, smallFont) then

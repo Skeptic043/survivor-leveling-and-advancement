@@ -408,7 +408,8 @@ local function makeParent(width, height, ancestor, x, y)
     function parent:getHeight() return self.height end
     function parent:setWidth(value) self.width = value end
     function parent:setHeight(value) self.height = value end
-    function parent:drawTextRightStatic(text, drawX, drawY, r, g, b, a, font)
+    function parent:drawTextRight(text, drawX, drawY, r, g, b, a, font)
+        if self.throwDraw then error("parent draw boom") end
         self.statusDraws[#self.statusDraws + 1] = {
             text = text,
             x = drawX,
@@ -558,6 +559,8 @@ local axe = makeBar(environment, "Axe", { player = player })
 local view = makeView(environment, 0, { axe }, true)
 local dockedParent = view.parent
 local dockedOuter = view.outer
+expect(type(view.parent.drawTextRight) == "function", "containing parent exposes ordinary text drawing")
+equal(view.parent.drawTextRightStatic, nil, "live-faithful parent exposes no static text helper")
 view:prerender()
 equal(environment.priorPrerender, 1, "first prerender chains vanilla once")
 equal(environment.prerenderGeometry[1].y, 38, "header inset is applied before vanilla prerender")
@@ -733,7 +736,10 @@ local stableOuterHeight = view.outer.height
 local stableStatusY = view.statusDraws[#view.statusDraws].screenY
 local rowScreenY = view.parent.y + view.y + view:getYScroll() + axe.y
 view:setYScroll(-60)
+local statusDrawsBeforeScroll = #view.statusDraws
 view:render()
+equal(#view.statusDraws, statusDrawsBeforeScroll + 1,
+    "ordinary containing parent receives exactly one status draw")
 equal(view.statusDraws[#view.statusDraws].screenY, stableStatusY,
     "status screen position stays fixed while skill rows scroll")
 equal(view.parent.y + view.y + view:getYScroll() + axe.y, rowScreenY - 60,
@@ -1002,6 +1008,23 @@ equal(clockView.outer.height, 328, "permanent disable restores outer height")
 equal(clockEnvironment.refresh[1], readsBeforeClockFailure[1], "disable path sends no refresh")
 equal(clockEnvironment.stateReads[1], readsBeforeClockFailure[2], "disable path reads no owner state")
 equal(clockEnvironment.settingsReads, readsBeforeClockFailure[3], "disable path reads no settings")
+
+local drawFailureEnvironment = makeEnvironment()
+expect(drawFailureEnvironment.integration.install().ok, "parent draw failure integration installs")
+local drawFailureBar = makeBar(drawFailureEnvironment, "Axe")
+local drawFailureView = makeView(drawFailureEnvironment, 0, { drawFailureBar })
+drawFailureView:prerender()
+drawFailureView.parent.throwDraw = true
+local drawFailureOk = pcall(function() drawFailureView:render() end)
+expect(drawFailureOk, "throwing ordinary parent draw is contained")
+equal(drawFailureEnvironment.priorRender, 1, "throwing parent draw retains one vanilla render")
+equal(#drawFailureView.statusDraws, 0, "throwing parent records no status draw")
+expect(not drawFailureBar.children[1].enabled, "throwing parent disables only SLA control")
+equal(drawFailureView.y, 8, "throwing parent restores vanilla Y")
+equal(drawFailureView.height, 300, "throwing parent restores vanilla height")
+drawFailureView:render()
+equal(drawFailureEnvironment.priorRender, 2, "disabled SLA view keeps later vanilla rendering")
+equal(#drawFailureView.statusDraws, 0, "disabled SLA view does not retry parent drawing")
 
 local ownershipEnvironment = makeEnvironment()
 expect(ownershipEnvironment.integration.install().ok, "ownership integration installs")
