@@ -2,10 +2,10 @@ local Build42SkillsUi = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
 local REFRESH_MILLIS = 1000
-local TARGET_R, TARGET_G, TARGET_B = 0.12, 0.32, 0.65
-local POSITION_R, POSITION_G, POSITION_B = 0.35, 0.72, 1.00
-local RECOVERY_R, RECOVERY_G, RECOVERY_B = 0.45, 0.08, 0.08
-local RECOVERY_POSITION_R, RECOVERY_POSITION_G, RECOVERY_POSITION_B = 0.95, 0.25, 0.25
+local TARGET_R, TARGET_G, TARGET_B = 0.35, 0.72, 1.00
+local POSITION_R, POSITION_G, POSITION_B = 0.12, 0.32, 0.65
+local RECOVERY_R, RECOVERY_G, RECOVERY_B = 0.95, 0.25, 0.25
+local RECOVERY_POSITION_R, RECOVERY_POSITION_G, RECOVERY_POSITION_B = 0.45, 0.08, 0.08
 
 local REASON_KEYS = {
     pending = "IGUI_SLA_Reason_Pending",
@@ -555,7 +555,7 @@ function Build42SkillsUi.create(dependencies)
             return { supported = false, perkId = perkId }
         end
         if callable(button.setBorderRGBA) then
-            pcall(button.setBorderRGBA, button, TARGET_R, TARGET_G, TARGET_B, 0.75)
+            pcall(button.setBorderRGBA, button, POSITION_R, POSITION_G, POSITION_B, 0.75)
         end
         barState.button = button
         return barState

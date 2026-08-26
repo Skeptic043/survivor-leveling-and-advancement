@@ -11,7 +11,7 @@
     "IGUI_SLA_Reason_MaximumMismatch": "This skill's progression curve changed.",
     "IGUI_SLA_Reason_AtMaximum": "This skill is already at its maximum.",
     "IGUI_SLA_Reason_RedRecovery": "Recover natural XP before advancing again.",
-    "IGUI_SLA_Reason_InsufficientAp": "You need more AP.",
+    "IGUI_SLA_Reason_InsufficientAp": "Not enough AP.",
     "IGUI_SLA_Reason_AllotmentDisabled": "Advancement spending is disabled for this skill.",
     "IGUI_SLA_Reason_AllotmentCapacity": "This skill has reached its advancement limit."
 }

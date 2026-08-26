@@ -32,7 +32,7 @@ local translations = {
     IGUI_SLA_Reason_MaximumMismatch = "This skill's progression curve changed.",
     IGUI_SLA_Reason_AtMaximum = "This skill is already at its maximum.",
     IGUI_SLA_Reason_RedRecovery = "Recover natural XP before advancing again.",
-    IGUI_SLA_Reason_InsufficientAp = "You need more AP.",
+    IGUI_SLA_Reason_InsufficientAp = "Not enough AP.",
     IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
     IGUI_SLA_Reason_AllotmentCapacity = "This skill has reached its advancement limit.",
 }
@@ -638,6 +638,9 @@ expect(axeButton.enabled, "eligible button enabled")
 equal(axeButton.title, "+", "native button copy")
 equal(axeButton.x, 200, "button begins exactly at the vanilla bar edge")
 equal(axe.width, 200 + axeButton.width, "bar expands by exactly the observed button width")
+expect(axeButton.border[1] == 0.12 and axeButton.border[2] == 0.32
+    and axeButton.border[3] == 0.65 and axeButton.border[4] == 0.75,
+    "button retains its exact subtle blue border")
 expect(string.find(axeButton.tooltip, "Advance to level 2 for 1 AP.", 1, true) ~= nil,
     "button tooltip explains cost")
 equal(string.find(axeButton.tooltip, ";", 1, true), nil, "button tooltip has no semicolon")
@@ -744,9 +747,23 @@ equal(axe.draws[2].x, 60, "level four outline boundary")
 equal(axe.draws[3].x, 29, "fractional high-water marker")
 equal(axe.draws[4].x, 20, "red recovery starts at natural position")
 equal(axe.draws[4].width, 10, "red recovery ends at high-water")
-equal(axe.draws[5].x, 19, "bright recovery marker tracks current natural position")
-expect(axe.draws[1].b < axe.draws[3].b, "target outline is darker than accounting marker")
-expect(axe.draws[4].r < axe.draws[5].r, "recovery span is darker than recovery marker")
+equal(axe.draws[5].x, 19, "recovery current-position line tracks natural position")
+expect(axe.draws[1].alpha == 0.95 and axe.draws[1].width == 20 and axe.draws[1].height == 20,
+    "target border alpha and geometry remain unchanged")
+expect(axe.draws[3].alpha == 0.85 and axe.draws[3].width == 2 and axe.draws[3].height == 20,
+    "accounting-position line alpha and thickness remain unchanged")
+expect(axe.draws[4].alpha == 0.75 and axe.draws[4].height == 2,
+    "recovery span alpha and thickness remain unchanged")
+expect(axe.draws[5].alpha == 0.90 and axe.draws[5].width == 2 and axe.draws[5].height == 20,
+    "recovery-position line alpha and thickness remain unchanged")
+expect(axe.draws[1].r == 0.35 and axe.draws[1].g == 0.72 and axe.draws[1].b == 1.00,
+    "target border uses exact brighter blue")
+expect(axe.draws[3].r == 0.12 and axe.draws[3].g == 0.32 and axe.draws[3].b == 0.65,
+    "accounting-position line uses exact darker blue")
+expect(axe.draws[4].r == 0.95 and axe.draws[4].g == 0.25 and axe.draws[4].b == 0.25,
+    "recovery span uses exact brighter red")
+expect(axe.draws[5].r == 0.45 and axe.draws[5].g == 0.08 and axe.draws[5].b == 0.08,
+    "recovery-position line uses exact darker red")
 
 axe.mouseX = 20
 axe:updateTooltip()
@@ -769,7 +786,7 @@ expect(string.find(axe.message, "Catch up to free this advancement slot.", 1, tr
     "target consequence appended")
 equal(string.find(axe.message, "Advance to level", 1, true), nil,
     "skill tooltip never receives button action copy")
-equal(string.find(axe.message, "You need more AP", 1, true), nil,
+equal(string.find(axe.message, "Not enough AP", 1, true), nil,
     "skill tooltip never receives button reason copy")
 equal(string.find(axe.message, "lost skill XP left", 1, true), nil,
     "blue-only region omits recovery copy")
@@ -1090,6 +1107,13 @@ for index = 1, #reasons do
     equal(string.find(tooltip, ";", 1, true), nil, "reason tooltip has no semicolon " .. reasons[index])
     equal(string.find(tooltip, "secret", 1, true), nil, "reason tooltip omits detail " .. reasons[index])
     expect(not reasonBar.children[1].enabled, "reason disables button " .. reasons[index])
+    if reasons[index] == "insufficient_ap" then
+        equal(tooltip, "Not enough AP.", "disabled plus owns exact insufficient-AP copy")
+        reasonBar.mouseX = 35
+        reasonBar:updateTooltip()
+        equal(string.find(reasonBar.message, "Not enough AP.", 1, true), nil,
+            "vanilla skill tooltip omits insufficient-AP copy")
+    end
 end
 
 local failureEnvironment = makeEnvironment()
