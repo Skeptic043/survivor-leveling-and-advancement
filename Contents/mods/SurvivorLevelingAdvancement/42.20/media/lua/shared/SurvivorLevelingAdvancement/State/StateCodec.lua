@@ -1,7 +1,7 @@
 local Codec = {}
 
-Codec.SCHEMA_VERSION = 1
-local ROOT_FIELDS = { schemaVersion = true, revision = true, survivor = true, perks = true, orphanedPerks = true, inFlightAdvancement = true }
+Codec.SCHEMA_VERSION = 2
+local ROOT_FIELDS = { schemaVersion = true, revision = true, survivor = true, perks = true, orphanedPerks = true, inFlightAdvancement = true, accountingMode = true }
 local SURVIVOR_FIELDS = { level = true, xpIntoLevel = true, spent = true }
 local PERK_FIELDS = {
     adapterId = true, adapterVersion = true, curveFingerprint = true,
@@ -175,11 +175,14 @@ local function validateMap(map, label)
     return result
 end
 
-local function validateV1(raw)
+local function validateV2(raw)
     if type(raw) ~= "table" then return nil, failure("invalid_state", "not_table") end
     local fields, key = hasOnlyFields(raw, ROOT_FIELDS)
     if not fields then return nil, failure("invalid_state", "unknown_field:" .. tostring(key)) end
     if raw.schemaVersion ~= Codec.SCHEMA_VERSION then return nil, failure("invalid_state", "version") end
+    if raw.accountingMode ~= "Tracked" and raw.accountingMode ~= "Free" then
+        return nil, failure("invalid_state", "accountingMode")
+    end
     if not isNonNegativeInteger(raw.revision) then return nil, failure("invalid_state", "revision") end
     if type(raw.survivor) ~= "table" then return nil, failure("invalid_survivor", "not_table") end
     local survivorFields, survivorKey = hasOnlyFields(raw.survivor, SURVIVOR_FIELDS)
@@ -208,14 +211,14 @@ local function validateV1(raw)
         end
     end
     return {
-        schemaVersion = Codec.SCHEMA_VERSION, revision = raw.revision,
+        schemaVersion = Codec.SCHEMA_VERSION, accountingMode = raw.accountingMode, revision = raw.revision,
         survivor = { level = survivor.level, xpIntoLevel = survivor.xpIntoLevel, spent = survivor.spent },
         perks = perks, orphanedPerks = orphaned, inFlightAdvancement = inFlight,
     }
 end
 
 local function freshState()
-    return { schemaVersion = Codec.SCHEMA_VERSION, revision = 0,
+    return { schemaVersion = Codec.SCHEMA_VERSION, accountingMode = "Tracked", revision = 0,
         survivor = { level = 0, xpIntoLevel = 0, spent = 0 }, perks = {}, orphanedPerks = {}, inFlightAdvancement = nil }
 end
 
@@ -301,8 +304,17 @@ function Codec.decode(raw, options)
     if not isNonNegativeInteger(schema) then return failure("invalid_state", "schemaVersion", raw) end
     if schema > Codec.SCHEMA_VERSION then return failure("newer_schema", schema, raw) end
     while schema < Codec.SCHEMA_VERSION do
-        local migrations = options and options.schemaMigrations
-        local migration = migrations and migrations[schema]
+        local migration
+        if schema == 1 then
+            migration = function(value)
+                value.schemaVersion = 2
+                value.accountingMode = "Tracked"
+                return value
+            end
+        else
+            local migrations = options and options.schemaMigrations
+            migration = migrations and migrations[schema]
+        end
         if type(migration) ~= "function" then return failure("missing_schema_migration", schema, raw) end
         local ok, nextRaw = pcall(migration, cloned)
         if not ok or type(nextRaw) ~= "table" then return failure("schema_migration_failed", schema, raw) end
@@ -311,15 +323,16 @@ function Codec.decode(raw, options)
         if cloned.schemaVersion ~= schema + 1 then return failure("schema_migration_not_consecutive", schema, raw) end
         schema = cloned.schemaVersion
     end
-    local state, err = validateV1(cloned)
+    local state, err = validateV2(cloned)
     if not state then return err end
+    if state.accountingMode == "Free" then return { ok = true, state = state } end
     local compatible, compatibilityError = applyCompatibility(state, options)
     if not compatible then return compatibilityError end
     return { ok = true, state = compatible }
 end
 
 function Codec.encode(state)
-    local checked, err = validateV1(state)
+    local checked, err = validateV2(state)
     if not checked then return err end
     return { ok = true, state = checked }
 end

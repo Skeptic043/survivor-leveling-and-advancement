@@ -51,12 +51,21 @@ local opaquePlayer = setmetatable({}, {
     end,
 })
 
+local accounting = resolver.accountingSettings.resolve(opaquePlayer)
+expect(accounting.ok)
+expectEqual(accounting.settings.mode, "Tracked")
+expectEqual(reads, 1)
+accounting.settings.mode = "Free"
+expectEqual(resolver.accountingSettings.resolve(opaquePlayer).settings.mode, "Tracked")
+expectEqual(reads, 2)
+
 local award = resolver.awardSettings.resolve(opaquePlayer, "Carving")
 expect(award.ok)
 expectEqual(award.settings.normalization, 2)
 expectEqual(award.settings.survivorMultiplier, 1.5)
 expectEqual(award.settings.postMax.enabled, false)
-expectEqual(reads, 1)
+expectEqual(award.settings.accountingMode, "Tracked")
+expectEqual(reads, 3)
 award.settings.normalization = 99
 award.settings.survivorMultiplier = 99
 award.settings.postMax.enabled = true
@@ -91,6 +100,9 @@ expect(award.ok)
 expectEqual(award.settings.survivorMultiplier, 0)
 
 current.allotmentMode = "Global"
+accounting = resolver.accountingSettings.resolve(opaquePlayer)
+expect(accounting.ok)
+expectEqual(accounting.settings.mode, "Tracked")
 local allotment = resolver.allotmentSettings.resolve(opaquePlayer, "Carving")
 expect(allotment.ok)
 expectEqual(allotment.settings.mode, "Global")
@@ -98,6 +110,9 @@ expectEqual(allotment.settings.globalLimit, 3)
 expectEqual(allotment.settings.perSkillDefault, nil)
 
 current.allotmentMode = "PerSkill"
+accounting = resolver.accountingSettings.resolve(opaquePlayer)
+expect(accounting.ok)
+expectEqual(accounting.settings.mode, "Tracked")
 allotment = resolver.allotmentSettings.resolve(opaquePlayer, "Carving")
 expect(allotment.ok)
 expectEqual(allotment.settings.mode, "PerSkill")
@@ -108,12 +123,16 @@ allotment = resolver.allotmentSettings.resolve(opaquePlayer, "Carving")
 expectEqual(allotment.settings.perSkillOverrides.Carving, 0)
 
 current.allotmentMode = "Free"
+accounting = resolver.accountingSettings.resolve(opaquePlayer)
+expect(accounting.ok)
+expectEqual(accounting.settings.mode, "Free")
 allotment = resolver.allotmentSettings.resolve(opaquePlayer, "Carving")
 expect(allotment.ok)
 expectEqual(allotment.settings.mode, "Free")
 expectEqual(allotment.settings.globalLimit, nil)
 expectEqual(allotment.settings.perSkillDefault, nil)
 expectEqual(allotment.settings.perSkillOverrides, nil)
+expectEqual(resolver.awardSettings.resolve(opaquePlayer, "Carving").settings.accountingMode, "Free")
 
 current = rawSettings()
 current.automaticCurveNormalization = true

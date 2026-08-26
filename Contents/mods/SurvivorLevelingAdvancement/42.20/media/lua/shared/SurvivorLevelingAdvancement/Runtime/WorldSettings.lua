@@ -164,6 +164,18 @@ function WorldSettings.create(dependencies)
         return readRaw(provider)
     end
 
+    local accountingSettings = {}
+
+    function accountingSettings.resolve(_)
+        local raw, code, detail = readRaw(provider)
+        if raw == nil then
+            return failed(code, detail)
+        end
+        local mode = "Tracked"
+        if raw.allotmentMode == "Free" then mode = "Free" end
+        return { ok = true, settings = { mode = mode } }
+    end
+
     local awardSettings = {}
 
     function awardSettings.resolve(_, perkId)
@@ -182,6 +194,7 @@ function WorldSettings.create(dependencies)
         return {
             ok = true,
             settings = {
+                accountingMode = raw.allotmentMode == "Free" and "Free" or "Tracked",
                 normalization = normalization,
                 survivorMultiplier = raw.survivorMultiplier,
                 postMax = { enabled = false },
@@ -226,6 +239,7 @@ function WorldSettings.create(dependencies)
 
     return {
         ok = true,
+        accountingSettings = accountingSettings,
         awardSettings = awardSettings,
         allotmentSettings = allotmentSettings,
     }

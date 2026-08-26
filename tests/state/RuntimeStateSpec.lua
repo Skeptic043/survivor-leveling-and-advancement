@@ -34,7 +34,7 @@ end
 
 local function validState()
     return {
-        schemaVersion = 1, revision = 3,
+        schemaVersion = 2, accountingMode = "Tracked", revision = 3,
         survivor = { level = 2, xpIntoLevel = 100, spent = 1 },
         perks = { Axe = validPerk() }, orphanedPerks = {},
     }
@@ -154,7 +154,7 @@ function invalidPlayer:getModData()
     self.calls = self.calls + 1
     return { untouched = true }
 end
-local rejected = store.save(invalidPlayer, { schemaVersion = 1 })
+local rejected = store.save(invalidPlayer, { schemaVersion = 2 })
 expect(not rejected.ok and invalidPlayer.calls == 0, "invalid save does not read or write ModData")
 local missingCapability = store.save({}, validState())
 expect(not missingCapability.ok and missingCapability.code == "missing_player_mod_data", "save missing capability fails closed")
