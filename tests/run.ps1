@@ -1,8 +1,51 @@
+param(
+    [string] $ProjectZomboidPath
+)
+
 $ErrorActionPreference = 'Stop'
+
 $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $PSScriptRoot '.build'
-$jar = 'C:\Steam Games\steamapps\common\ProjectZomboid\projectzomboid.jar'
-$java = 'C:\Steam Games\steamapps\common\ProjectZomboid\jre64\bin\java.exe'
+
+function Resolve-ProjectZomboidInstallation {
+    param([string] $ExplicitPath)
+
+    $environmentPath = [Environment]::GetEnvironmentVariable('SURVIVOR_LEVELING_PZ_INSTALL_DIR')
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        $candidates = @($ExplicitPath)
+    } elseif (-not [string]::IsNullOrWhiteSpace($environmentPath)) {
+        $candidates = @($environmentPath)
+    } else {
+        # Keep discovery bounded and predictable; do not scan Steam libraries or the registry.
+        $candidates = @(
+            'C:\Steam Games\steamapps\common\ProjectZomboid',
+            (Join-Path ${env:ProgramFiles(x86)} 'Steam\steamapps\common\ProjectZomboid'),
+            (Join-Path $env:ProgramFiles 'Steam\steamapps\common\ProjectZomboid')
+        )
+    }
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $fullPath = [IO.Path]::GetFullPath($candidate)
+        $jarPath = Join-Path $fullPath 'projectzomboid.jar'
+        $javaPath = Join-Path $fullPath 'jre64\bin\java.exe'
+        if ((Test-Path -LiteralPath $jarPath -PathType Leaf) -and (Test-Path -LiteralPath $javaPath -PathType Leaf)) {
+            return [pscustomobject]@{ Root = $fullPath; Jar = $jarPath; Java = $javaPath }
+        }
+    }
+
+    $source = if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) { '-ProjectZomboidPath' } elseif (-not [string]::IsNullOrWhiteSpace($environmentPath)) { 'SURVIVOR_LEVELING_PZ_INSTALL_DIR' } else { 'the documented default locations' }
+    throw "No valid Project Zomboid installation found from $source. Supply -ProjectZomboidPath or set SURVIVOR_LEVELING_PZ_INSTALL_DIR to a folder containing projectzomboid.jar and jre64\\bin\\java.exe."
+}
+
+try {
+    $installation = Resolve-ProjectZomboidInstallation $ProjectZomboidPath
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+$jar = $installation.Jar
+$java = $installation.Java
 if (Test-Path $build) { Remove-Item -Recurse -Force -LiteralPath $build }
 New-Item -ItemType Directory -Path $build | Out-Null
 foreach ($luaRoot in @((Join-Path $root 'Contents\mods\SurvivorLevelingAdvancement\42.20\media\lua\shared\SurvivorLevelingAdvancement\State'), (Join-Path $root 'Contents\mods\SurvivorLevelingAdvancement\42.20\media\lua\shared\SurvivorLevelingAdvancement\Core'))) {
