@@ -54,9 +54,11 @@ Assert (($actualIds -join ',') -eq ($ids -join ',')) 'ordered vanilla override I
 foreach ($b in $blocks | Where-Object { $_.Groups[1].Value -match 'PerSkillLimit_' }) {
     $body = $b.Groups[2].Value
     Assert ((Field $body 'type') -eq 'enum' -and (Field $body 'numValues') -eq '12' -and (Field $body 'default') -eq '1') 'per-skill enum shape'
-    Assert ((Field $body 'page') -eq 'SLA_PerSkill' -and (Field $body 'valueTranslation') -eq 'SLA_PerSkillLimit') 'per-skill page/value translation'
+    Assert ((Field $body 'page') -eq 'SLA' -and (Field $body 'valueTranslation') -eq 'SLA_PerSkillLimit') 'per-skill page/value translation'
     Assert ((Field $body 'valueTranslation') -eq 'SLA_PerSkillLimit') 'per-skill enum value translation'
 }
+Assert ((@($blocks | ForEach-Object { Field $_.Groups[2].Value 'page' } | Where-Object { $_ -eq 'SLA' }).Count -eq 41)) 'all settings use the one SLA page'
+Assert ($text -notmatch '(?m)^\s*page\s*=\s*SLA_PerSkill\s*,\s*$') 'no second sandbox page remains'
 
 $info = @{}
 foreach ($line in Get-Content $infoPath) { if ($line -match '^([^=]+)=(.*)$') { $info[$Matches[1]] = $Matches[2] } }
@@ -75,16 +77,18 @@ foreach ($b in $blocks) {
         Assert ($key -and $translations.("Sandbox_" + $key)) "automatic translation mapping $key"
     }
 }
-Assert ($translations.Sandbox_SLA -and $translations.Sandbox_SLA_PerSkill) 'page translation coverage'
+Assert ($translations.Sandbox_SLA) 'single page translation coverage'
+Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_PerSkill') 'second-page translation is absent'
+Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_PerSkill_tooltip') 'second-page tooltip translation is absent'
 Assert ($translations.Sandbox_SLA_PerSkillLimit_option1 -and $translations.Sandbox_SLA_PerSkillLimit_option12) 'shared enum translation coverage'
 Assert ($translations.Sandbox_SLA_tooltip -eq 'Control Survivor XP pacing and how many skill advancements may be active at once.') 'main page tooltip wording'
 Assert ($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip -eq 'Multiplies Survivor XP gained from trainable skill XP. This does not change skill XP.') 'XP multiplier tooltip wording'
-Assert ($translations.Sandbox_SLA_FitnessStrengthContribution_tooltip -eq 'Scales Survivor XP from Fitness and Strength before the Survivor XP multiplier. The default is about 6.7%.') 'Fitness and Strength tooltip wording'
+Assert ($translations.Sandbox_SLA_FitnessStrengthContribution_tooltip -eq 'Scales Survivor XP from Fitness and Strength before the Survivor XP multiplier. The default is about 6.7%%.') 'Fitness and Strength tooltip wording and escaping'
+Assert ((@([regex]::Matches($jsonText, '%')).Count -eq 2)) 'only the escaped Fitness and Strength literal percent is present'
 Assert ($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip -eq 'Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.') 'custom skill normalization tooltip wording'
 Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Choose whether active advancements share one global limit, use limits per skill, or have no limit.') 'allotment tooltip wording'
 Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
-Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value; vanilla skills can override it on the Per-Skill Limits page.') 'default limit tooltip wording'
-Assert ($translations.Sandbox_SLA_PerSkill_tooltip -eq 'Set active-advancement limits for vanilla skills. Use Default inherits the default per-skill limit.') 'per-skill page tooltip wording'
+Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value; vanilla skills can override it below.') 'default limit tooltip wording'
 $labels = @{'Sprinting'='Running';'Lightfoot'='Lightfooted';'Sneak'='Sneaking';'Farming'='Agriculture';'Husbandry'='Animal Care';'Woodwork'='Carpentry';'Doctor'='First Aid';'FlintKnapping'='Knapping';'Blacksmith'='Blacksmithing';'MetalWelding'='Welding';'PlantScavenging'='Foraging';'Electricity'='Electrical'}
 foreach ($id in $ids) {
     $key = "SLA_PerSkill_$id"

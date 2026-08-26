@@ -63,7 +63,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Fitness
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Fitness,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -73,7 +73,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Strength
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Strength,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -83,7 +83,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Sprinting
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Sprinting,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -93,7 +93,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Lightfoot
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Lightfoot,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -103,7 +103,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Nimble
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Nimble,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -113,7 +113,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Sneak
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Sneak,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -123,7 +123,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Axe
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Axe,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -133,7 +133,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Blunt
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Blunt,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -143,7 +143,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_SmallBlunt
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_SmallBlunt,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -153,7 +153,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_LongBlade
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_LongBlade,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -163,7 +163,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_SmallBlade
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_SmallBlade,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -173,7 +173,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Spear
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Spear,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -183,7 +183,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Maintenance
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Maintenance,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -193,7 +193,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Farming
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Farming,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -203,7 +203,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Husbandry
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Husbandry,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -213,7 +213,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Woodwork
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Woodwork,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -223,7 +223,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Carving
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Carving,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -233,7 +233,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Cooking
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Cooking,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -243,7 +243,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Electricity
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Electricity,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -253,7 +253,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Doctor
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Doctor,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -263,7 +263,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_FlintKnapping
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_FlintKnapping,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -273,7 +273,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Masonry
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Masonry,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -283,7 +283,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Mechanics
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Mechanics,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -293,7 +293,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Blacksmith
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Blacksmith,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -303,7 +303,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Pottery
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Pottery,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -313,7 +313,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Tailoring
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Tailoring,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -323,7 +323,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_MetalWelding
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_MetalWelding,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -333,7 +333,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Aiming
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Aiming,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -343,7 +343,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Reloading
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Reloading,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -353,7 +353,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Fishing
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Fishing,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -363,7 +363,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_PlantScavenging
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_PlantScavenging,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -373,7 +373,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Tracking
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Tracking,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -383,7 +383,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Trapping
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Trapping,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -393,7 +393,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Butchering
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Butchering,
     valueTranslation = SLA_PerSkillLimit,
 }
@@ -403,7 +403,7 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Glassmaking
     type = enum,
     numValues = 12,
     default = 1,
-    page = SLA_PerSkill,
+    page = SLA,
     translation = SLA_PerSkill_Glassmaking,
     valueTranslation = SLA_PerSkillLimit,
 }
