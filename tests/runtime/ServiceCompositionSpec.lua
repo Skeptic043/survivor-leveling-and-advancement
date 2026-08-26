@@ -47,6 +47,7 @@ local function makeDependencies(overrides)
         isReady = function() return false end,
         clearPlayer = function() return { ok = true } end,
     }
+    local advancementSession = { request = function() return { ok = true } end }
     local processorCalls = {}
     local processor = {
         process = function(player, award, settings)
@@ -166,6 +167,13 @@ local function makeDependencies(overrides)
                 return { ok = true, session = ownerSession }
             end,
         },
+        AdvancementSession = {
+            create = function(argument)
+                calls[#calls + 1] = "advancement"
+                arguments.advancement = argument
+                return { ok = true, session = advancementSession }
+            end,
+        },
         catalog = {
             allPerks = function() return {} end,
             resolver = {
@@ -200,6 +208,7 @@ local function makeDependencies(overrides)
             store = store,
             ownerSnapshot = ownerSnapshot,
             ownerSession = ownerSession,
+            advancementSession = advancementSession,
             apService = apService,
             processor = processor,
             processorCalls = processorCalls,
@@ -216,6 +225,7 @@ local function makeDependencies(overrides)
         store = store,
         ownerSnapshot = ownerSnapshot,
         ownerSession = ownerSession,
+        advancementSession = advancementSession,
         apService = apService,
         processor = processor,
         processorCalls = processorCalls,
@@ -231,7 +241,7 @@ do
     local result = ServiceComposition.create(dependencies)
 
     assertTrue(result.ok, "composition succeeds")
-    sequenceEquals(fixture.calls, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "factory order")
+    sequenceEquals(fixture.calls, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory order")
     assertSame(fixture.arguments.store, dependencies.StateCodec, "codec identity")
     assertSame(fixture.arguments.settings.provider, dependencies.worldSettingsProvider, "provider identity")
     assertFalse(fixture.arguments.settings.normalizationByPerk == dependencies.normalizationByPerk, "normalization detached")
@@ -257,6 +267,9 @@ do
     assertSame(fixture.arguments.session.catalog, dependencies.catalog, "session catalog identity")
     assertSame(fixture.arguments.session.xpSource, fixture.source, "session XP source identity")
     assertSame(fixture.arguments.session.ownerSnapshot, fixture.ownerSnapshot, "session snapshot identity")
+    assertSame(fixture.arguments.advancement.apTransaction, fixture.apService, "advancement AP identity")
+    assertSame(fixture.arguments.advancement.allotmentSettings, fixture.worldSettings.allotmentSettings, "advancement settings identity")
+    assertSame(fixture.arguments.advancement.ownerSession, fixture.ownerSession, "advancement owner identity")
     assertSame(result.services.store, fixture.store, "result store")
     assertSame(result.services.worldSettings, fixture.worldSettings, "result settings")
     assertSame(result.services.ownerSnapshot, fixture.ownerSnapshot, "result snapshot")
@@ -264,6 +277,7 @@ do
     assertSame(result.services.awardProcessor, fixture.processor, "result processor")
     assertSame(result.services.xpSource, fixture.source, "result source")
     assertSame(result.services.ownerSession, fixture.ownerSession, "result owner session")
+    assertSame(result.services.advancementSession, fixture.advancementSession, "result advancement session")
 
     local expectedKeys = {
         store = true,
@@ -274,13 +288,14 @@ do
         awardHandler = true,
         xpSource = true,
         ownerSession = true,
+        advancementSession = true,
     }
     local serviceCount = 0
     for key in pairs(result.services) do
         serviceCount = serviceCount + 1
         assertTrue(expectedKeys[key] == true, "unexpected result service " .. tostring(key))
     end
-    assertEqual(serviceCount, 8, "eight services only")
+    assertEqual(serviceCount, 9, "nine services only")
     assertEqual(result.services.dependencies, nil, "dependencies not exposed")
     assertEqual(result.services.modules, nil, "modules not exposed")
     assertEqual(result.services.OwnerSnapshot, nil, "snapshot factory not exposed")
@@ -381,6 +396,7 @@ assertPreflightFailure(function(dependencies) dependencies.StateCodec = nil end,
 assertPreflightFailure(function(dependencies) dependencies.PlayerStateStore.create = nil end, "PlayerStateStore.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSnapshot.create = nil end, "OwnerSnapshot.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSession.create = nil end, "OwnerSession.create is required")
+assertPreflightFailure(function(dependencies) dependencies.AdvancementSession.create = nil end, "AdvancementSession.create is required")
 assertPreflightFailure(function(dependencies) dependencies.SurvivorEconomy.nextLevelCost = nil end, "SurvivorEconomy capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.catalog.allPerks = nil end, "catalog capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.catalog.resolver.resolve = nil end, "catalog capabilities are required")
@@ -399,6 +415,7 @@ local function assertFactoryStops(factoryName, replacement, expectedCalls, expec
         SupportedAwardProcessor = "processor",
         EventDerivedXpSource = "source",
         OwnerSession = "session",
+        AdvancementSession = "advancement",
     }
     local dependencies, fixture = makeDependencies(function(values, returned)
         values[factoryName].create = function(argument)
@@ -425,6 +442,9 @@ assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, 
 assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
 assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
 assertFactoryStops("OwnerSession", function() error("session boom") end, { "store", "settings", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
+assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
+assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
+assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "store", "settings", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
 
 do
     local dependencies, fixture = makeDependencies(function(values, returned)
@@ -494,6 +514,7 @@ do
     local sessionSnapshots = 0
     local sessionQueries = 0
     local sessionClears = 0
+    local advancementRequests = 0
     local commands = 0
     local dependencies, fixture = makeDependencies(function(values, returned)
         values.environment.register = function()
@@ -549,6 +570,10 @@ do
             sessionClears = sessionClears + 1
             return { ok = true }
         end
+        returned.advancementSession.request = function()
+            advancementRequests = advancementRequests + 1
+            return { ok = true }
+        end
     end)
     local result = ServiceComposition.create(dependencies)
     assertTrue(result.ok, "source graph created")
@@ -565,6 +590,7 @@ do
     assertEqual(sessionSnapshots, 0, "composition does not snapshot a player")
     assertEqual(sessionQueries, 0, "composition does not query a player")
     assertEqual(sessionClears, 0, "composition does not clear a player")
+    assertEqual(advancementRequests, 0, "composition does not request advancement")
     assertEqual(commands, 0, "composition sends no commands")
 end
 
@@ -578,6 +604,48 @@ do
     assertFalse(handled.ok, "malformed processor failure rejected")
     assertEqual(handled.code, "invalid_processor_result", "malformed processor failure code")
     assertTrue(type(handled.detail) == "string" and handled.detail ~= "", "malformed processor failure detail")
+end
+
+do
+    local dependencies = makeDependencies(function(values)
+        values.AdvancementSession.create = function()
+            return setmetatable({ ok = true, session = { request = function() end } }, {})
+        end
+    end)
+    local result = ServiceComposition.create(dependencies)
+    assertFalse(result.ok, "advancement metatable result rejected")
+    assertEqual(result.code, "invalid_factory_result", "advancement metatable result code")
+end
+
+do
+    local dependencies = makeDependencies(function(values)
+        values.AdvancementSession.create = function()
+            return { ok = true, session = { request = function() end }, private = {} }
+        end
+    end)
+    local result = ServiceComposition.create(dependencies)
+    assertFalse(result.ok, "advancement extra result rejected")
+    assertEqual(result.code, "invalid_factory_result", "advancement extra result code")
+end
+
+do
+    local dependencies = makeDependencies(function(values)
+        values.AdvancementSession.create = function()
+            return { ok = true, session = { request = function() end, private = {} } }
+        end
+    end)
+    local result = ServiceComposition.create(dependencies)
+    assertFalse(result.ok, "advancement private service rejected")
+    assertEqual(result.code, "invalid_factory_result", "advancement private service code")
+end
+
+do
+    local dependencies = makeDependencies(function(values)
+        values.AdvancementSession = setmetatable({}, { __index = function() error("hostile") end })
+    end)
+    local result = ServiceComposition.create(dependencies)
+    assertFalse(result.ok, "hostile advancement lookup contained")
+    assertEqual(result.code, "invalid_dependencies", "hostile advancement lookup code")
 end
 
 do

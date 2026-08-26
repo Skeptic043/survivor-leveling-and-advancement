@@ -17,6 +17,7 @@ if evidence == nil then
     }
     evidence.owner = owner
     evidence.runtimeFactory = {}
+    evidence.advancementSession = {}
     local lifecycle = {
         create = function(argument)
             evidence.creates = evidence.creates + 1
@@ -29,6 +30,7 @@ if evidence == nil then
         evidence.requires[path] = (evidence.requires[path] or 0) + 1
         if path == "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle" then return lifecycle end
         if path == "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory" then return evidence.runtimeFactory end
+        if path == "SurvivorLevelingAdvancement/Runtime/AdvancementSession" then return evidence.advancementSession end
         return {}
     end
     evidence.perkFactory, evidence.perks, evidence.options, evidence.vars, evidence.math = {}, {}, {}, {}, {}
@@ -43,12 +45,13 @@ elseif evidence.phase == 1 then
     check(evidence.creates == 1 and evidence.installs == 2, "bootstrap first load and reload")
     check(evidence.requires["SurvivorLevelingAdvancement/Runtime/Build42Lifecycle"] == 1, "lifecycle required exactly once")
     check(evidence.created.modules.Build42RuntimeFactory == evidence.runtimeFactory, "exact runtime factory")
+    check(evidence.created.modules.AdvancementSession == evidence.advancementSession, "exact advancement session factory")
     check(evidence.created.globals.PerkFactory == evidence.perkFactory and evidence.created.globals.Events == evidence.events, "exact globals")
     check(evidence.owner.modules == nil and type(rawget(_G, key).owner.status) == "function", "no dependencies exposed")
     local required = {
         "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
         "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog", "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter", "SurvivorLevelingAdvancement/Adapters/Build42NormalizationSnapshot", "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider", "SurvivorLevelingAdvancement/Adapters/Build42SandboxMultiplier", "SurvivorLevelingAdvancement/Adapters/Build42XpPositionArithmetic",
-        "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/Core/PostMax", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
+        "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/Core/PostMax", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Runtime/AdvancementSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
     }
     for index = 1, #required do check(evidence.requires[required[index]] == 1, "exact bootstrap require " .. index) end
     rawset(_G, key, { signature = signature, owner = { install = function() return { ok = true } end } })

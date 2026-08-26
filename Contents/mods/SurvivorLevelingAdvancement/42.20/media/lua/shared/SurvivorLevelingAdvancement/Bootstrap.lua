@@ -56,6 +56,7 @@ local modules = {
     ActualObservation = require "SurvivorLevelingAdvancement/State/ActualObservation",
     OwnerSnapshot = require "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot",
     OwnerSession = require "SurvivorLevelingAdvancement/Runtime/OwnerSession",
+    AdvancementSession = require "SurvivorLevelingAdvancement/Runtime/AdvancementSession",
     ApTransaction = require "SurvivorLevelingAdvancement/Advancement/ApTransaction",
     SupportedAwardProcessor = require "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor",
     WorldSettings = require "SurvivorLevelingAdvancement/Runtime/WorldSettings",

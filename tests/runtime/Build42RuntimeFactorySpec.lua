@@ -11,6 +11,7 @@ local function makeModules(log, g)
     local services = {}
     local ownerSnapshot = { create = function() end }
     local ownerSession = { create = function() end }
+    local advancementSession = { create = function() end }
     local m = {
         Build42PerkCatalog = { create = function(a) log[#log + 1] = "catalog"; eq(a.perkRegistry, g.PerkFactory.PerkList, "registry identity"); eq(type(a.progressionAdapter), "table", "adapter identity"); return { ok = true, catalog = catalog } end },
         VanillaProgressionAdapter = { build = function() end, describe = function() end, inspect = function() end },
@@ -18,8 +19,8 @@ local function makeModules(log, g)
         Build42WorldSettingsProvider = { create = function(a) log[#log + 1] = "provider"; eq(a.readSandboxVars(), g.SandboxVars, "live sandbox vars"); return { ok = true, provider = {} } end },
         Build42SandboxMultiplier = { create = function(a) log[#log + 1] = "multiplier"; eq(a.SandboxOptions, g.SandboxOptions, "options identity"); return { ok = true, resolver = { resolve = function() end } } end },
         Build42XpPositionArithmetic = { create = function(a) log[#log + 1] = "arithmetic"; eq(a.environment.globals, g, "globals identity"); return { ok = true, arithmetic = { add = function() end } } end },
-        ServiceComposition = { create = function(a) log[#log + 1] = "composition"; eq(a.catalog, catalog, "composition catalog"); eq(a.normalizationByPerk.Cooking, 3, "normalization map"); eq(a.OwnerSnapshot, ownerSnapshot, "snapshot factory identity"); eq(a.OwnerSession, ownerSession, "session factory identity"); eq(a.authority.describe().authoritative, true, "authority"); eq(a.playerIdentity.isPlayer({}), true, "identity"); return { ok = true, services = services } end },
-        StateCodec = { decode = function() end, encode = function() end }, PlayerStateStore = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
+        ServiceComposition = { create = function(a) log[#log + 1] = "composition"; eq(a.catalog, catalog, "composition catalog"); eq(a.normalizationByPerk.Cooking, 3, "normalization map"); eq(a.OwnerSnapshot, ownerSnapshot, "snapshot factory identity"); eq(a.OwnerSession, ownerSession, "session factory identity"); eq(a.AdvancementSession, advancementSession, "advancement factory identity"); eq(a.authority.describe().authoritative, true, "authority"); eq(a.playerIdentity.isPlayer({}), true, "identity"); return { ok = true, services = services } end },
+        StateCodec = { decode = function() end, encode = function() end }, PlayerStateStore = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, AdvancementSession = advancementSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
     }
     return m, catalog, services
 end
@@ -46,6 +47,19 @@ eq(missingSession.ok, false, "missing session rejected")
 eq(missingSession.code, "invalid_module_OwnerSession", "missing session code")
 eq(#log, callsBeforeMissingSession, "missing session runs no factory")
 m.OwnerSession = savedOwnerSession
+local savedAdvancementSession = m.AdvancementSession
+m.AdvancementSession = nil
+local callsBeforeMissingAdvancement = #log
+local missingAdvancement = Build42RuntimeFactory.create({ modules = m, globals = g })
+eq(missingAdvancement.ok, false, "missing advancement rejected")
+eq(missingAdvancement.code, "invalid_module_AdvancementSession", "missing advancement code")
+eq(#log, callsBeforeMissingAdvancement, "missing advancement runs no factory")
+m.AdvancementSession = savedAdvancementSession
+local hostileGlobals = globals(); local hostileLog = {}; local hostileModules = makeModules(hostileLog, hostileGlobals)
+hostileModules.AdvancementSession = setmetatable({}, { __index = function() error("hostile") end })
+local hostileAdvancement = Build42RuntimeFactory.create({ modules = hostileModules, globals = hostileGlobals })
+eq(hostileAdvancement.ok, false, "hostile advancement module rejected")
+eq(hostileAdvancement.code, "invalid_module_AdvancementSession", "hostile advancement module code")
 g.SandboxVars = {}; local providerArgs
 m.Build42WorldSettingsProvider.create = function(a) providerArgs = a; return { ok = true, provider = {} } end
 ok(Build42RuntimeFactory.create({ modules = m, globals = g }), "current settings success"); eq(providerArgs.readSandboxVars(), g.SandboxVars, "current settings")

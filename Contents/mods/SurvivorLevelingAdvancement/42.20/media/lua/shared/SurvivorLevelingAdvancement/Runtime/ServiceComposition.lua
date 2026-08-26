@@ -62,6 +62,32 @@ local function stableDetail(detail, fallback)
     return fallback
 end
 
+local function boundedCode(value)
+    if type(value) ~= "string" or value == "" or #value > 64 then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        if not ((byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122)
+            or byte == 45 or byte == 46 or byte == 58 or byte == 95) then return false end
+    end
+    return true
+end
+
+local function boundedDetail(value)
+    if type(value) ~= "string" or value == "" or #value > 160 then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        if byte < 32 or byte > 126 then return false end
+    end
+    return true
+end
+
+local function exactPlain(value, fields)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return false end
+    for key in pairs(value) do if type(key) ~= "string" or not fields[key] then return false end end
+    for key in pairs(fields) do if rawget(value, key) == nil then return false end end
+    return true
+end
+
 local function validateDependencies(dependencies)
     if type(dependencies) ~= "table" then
         return failure("invalid_dependencies", "dependencies must be a table")
@@ -105,6 +131,11 @@ local function validateDependencies(dependencies)
         end
     end
 
+    local advancement = rawget(dependencies, "AdvancementSession")
+    if type(advancement) ~= "table" or getmetatable(advancement) ~= nil or type(rawget(advancement, "create")) ~= "function" then
+        return failure("invalid_dependencies", "AdvancementSession.create is required")
+    end
+
     if not hasFunctions(dependencies.MutationScope, { "begin", "isActive", "finish" }) then
         return failure("invalid_dependencies", "MutationScope capabilities are required")
     end
@@ -134,6 +165,29 @@ local function validateDependencies(dependencies)
         ok = true,
         normalizationByPerk = normalizationByPerk,
     }
+end
+
+local function callAdvancementSession(factory, argument)
+    local create = rawget(factory, "create")
+    local called, result = pcall(create, argument)
+    if not called then return nil, failure("factory_threw", "AdvancementSession.create threw") end
+    if type(result) ~= "table" or getmetatable(result) ~= nil then
+        return nil, failure("invalid_factory_result", "AdvancementSession.create returned a malformed result")
+    end
+    if rawget(result, "ok") == false then
+        if exactPlain(result, { ok = true, code = true, detail = true }) and boundedCode(rawget(result, "code")) and boundedDetail(rawget(result, "detail")) then
+            return nil, failure(rawget(result, "code"), rawget(result, "detail"))
+        end
+        return nil, failure("invalid_factory_result", "AdvancementSession.create returned a malformed failure")
+    end
+    if not exactPlain(result, { ok = true, session = true }) or rawget(result, "ok") ~= true then
+        return nil, failure("invalid_factory_result", "AdvancementSession.create returned a malformed result")
+    end
+    local session = rawget(result, "session")
+    if not exactPlain(session, { request = true }) or type(rawget(session, "request")) ~= "function" then
+        return nil, failure("invalid_factory_result", "AdvancementSession.create returned a malformed service")
+    end
+    return session, nil
 end
 
 local function callSingleFactory(name, factory, argument, field, requiredMethods)
@@ -355,6 +409,20 @@ function ServiceComposition.create(dependencies)
         return ownerSessionFailure
     end
 
+    local advancementSession, advancementSessionFailure = callAdvancementSession(
+        rawget(dependencies, "AdvancementSession"),
+        {
+            apTransaction = apTransaction,
+            allotmentSettings = worldSettings.allotmentSettings,
+            ownerSession = ownerSession,
+        },
+        "session",
+        { "request" }
+    )
+    if advancementSession == nil then
+        return advancementSessionFailure
+    end
+
     return {
         ok = true,
         services = {
@@ -366,6 +434,7 @@ function ServiceComposition.create(dependencies)
             awardHandler = awardHandler,
             xpSource = xpSource,
             ownerSession = ownerSession,
+            advancementSession = advancementSession,
         },
     }
 end

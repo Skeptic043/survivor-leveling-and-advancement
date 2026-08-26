@@ -29,6 +29,10 @@ local function validateModules(m)
         { "PlayerStateStore", { "create" } }, { "OwnerSnapshot", { "create" } }, { "ApTransaction", { "create" } }, { "SupportedAwardProcessor", { "create" } }, { "WorldSettings", { "create" } }, { "EventDerivedXpSource", { "create" } }, { "OwnerSession", { "create" } },
     }
     for _, item in ipairs(surfaces) do if not surface(m[item[1]], item[2]) then return fail("invalid_module_" .. item[1], item[1] .. " capabilities are required") end end
+    local advancement = rawget(m, "AdvancementSession")
+    if type(advancement) ~= "table" or getmetatable(advancement) ~= nil or type(rawget(advancement, "create")) ~= "function" then
+        return fail("invalid_module_AdvancementSession", "AdvancementSession.create is required")
+    end
     return nil
 end
 
@@ -83,7 +87,7 @@ function Factory.create(dependencies)
     local playerIdentity = { isPlayer = function(player) local ok, value = pcall(g.instanceof, player, "IsoPlayer"); return ok and type(value) == "boolean" and value or false end }
     local composition, compositionErr = call("ServiceComposition.create", m.ServiceComposition.create, {
         StateCodec = m.StateCodec, PlayerStateStore = m.PlayerStateStore, NaturalLedger = m.NaturalLedger, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, PostMax = m.PostMax,
-        MutationScope = m.MutationScope, ActualObservation = m.ActualObservation, OwnerSnapshot = m.OwnerSnapshot, ApTransaction = m.ApTransaction, SupportedAwardProcessor = m.SupportedAwardProcessor, WorldSettings = m.WorldSettings, EventDerivedXpSource = m.EventDerivedXpSource, OwnerSession = m.OwnerSession,
+        MutationScope = m.MutationScope, ActualObservation = m.ActualObservation, OwnerSnapshot = m.OwnerSnapshot, ApTransaction = m.ApTransaction, SupportedAwardProcessor = m.SupportedAwardProcessor, WorldSettings = m.WorldSettings, EventDerivedXpSource = m.EventDerivedXpSource, OwnerSession = m.OwnerSession, AdvancementSession = rawget(m, "AdvancementSession"),
         catalog = catalog, worldSettingsProvider = provider, normalizationByPerk = normalization, sandboxMultiplier = resolver, positionArithmetic = arithmetic, environment = { globals = g }, authority = authority, playerIdentity = playerIdentity,
     }); if compositionErr then return compositionErr end
     local services; services, compositionErr = resultField(composition, "services", "service_composition_failed"); if compositionErr then return compositionErr end
