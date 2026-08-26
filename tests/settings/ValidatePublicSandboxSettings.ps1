@@ -6,6 +6,7 @@ $mod = Join-Path $root 'Contents/mods/SurvivorLevelingAdvancement/42.20'
 $optionsPath = Join-Path $mod 'media/sandbox-options.txt'
 $infoPath = Join-Path $mod 'mod.info'
 $jsonPath = Join-Path $mod 'media/lua/shared/Translate/EN/Sandbox.json'
+$uiPath = Join-Path $mod 'media/lua/shared/Translate/EN/IG_UI_EN.txt'
 
 $assertions = 0
 function Assert($condition, [string]$message) {
@@ -88,7 +89,9 @@ Assert ((@([regex]::Matches($jsonText, '%')).Count -eq 2)) 'only the escaped Fit
 Assert ($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip -eq 'Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.') 'custom skill normalization tooltip wording'
 Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Choose whether active advancements share one global limit, use limits per skill, or have no limit.') 'allotment tooltip wording'
 Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
-Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value; vanilla skills can override it below.') 'default limit tooltip wording'
+Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value. Vanilla skills can override it below.') 'default limit tooltip wording'
+$sandboxTooltips = @($translations.PSObject.Properties | Where-Object Name -like '*_tooltip')
+Assert (@($sandboxTooltips | Where-Object { $_.Value -match ';' }).Count -eq 0) 'sandbox tooltips contain no semicolons'
 $labels = @{'Sprinting'='Running';'Lightfoot'='Lightfooted';'Sneak'='Sneaking';'Farming'='Agriculture';'Husbandry'='Animal Care';'Woodwork'='Carpentry';'Doctor'='First Aid';'FlintKnapping'='Knapping';'Blacksmith'='Blacksmithing';'MetalWelding'='Welding';'PlantScavenging'='Foraging';'Electricity'='Electrical'}
 foreach ($id in $ids) {
     $key = "SLA_PerSkill_$id"
@@ -99,4 +102,36 @@ foreach ($id in $ids) {
 $forbidden = 'inherit|post.?maximum|digital.?watch|admin|runtime|poll|network|ui|poster|icon|workshop|client'
 Assert (-not ($text -match "(?i)$forbidden")) 'sandbox file contains no deferred settings or claims'
 Assert (-not ($info.Values -join ' ' -match "(?i)$forbidden")) 'metadata contains no deferred claims'
+
+$uiText = Get-Content -Raw -LiteralPath $uiPath
+$uiMatches = @([regex]::Matches($uiText, '(?m)^\s*(IGUI_SLA_[A-Za-z0-9_]+)\s*=\s*"((?:[^"\\]|\\.)*)",\s*$'))
+$uiKeys = @($uiMatches | ForEach-Object { $_.Groups[1].Value })
+$requiredUiKeys = @(
+    'IGUI_SLA_StatusAP',
+    'IGUI_SLA_StatusActive',
+    'IGUI_SLA_Advance',
+    'IGUI_SLA_PerSkillActive',
+    'IGUI_SLA_Targets',
+    'IGUI_SLA_HighWater',
+    'IGUI_SLA_Recovery',
+    'IGUI_SLA_Reason_Pending',
+    'IGUI_SLA_Reason_MaximumMismatch',
+    'IGUI_SLA_Reason_AtMaximum',
+    'IGUI_SLA_Reason_RedRecovery',
+    'IGUI_SLA_Reason_InsufficientAp',
+    'IGUI_SLA_Reason_AllotmentDisabled',
+    'IGUI_SLA_Reason_AllotmentCapacity'
+)
+Assert ($uiText -match '(?m)^IG_UI_EN\s*=\s*\{\s*$') 'English UI translation table header'
+Assert ($uiText -match '(?m)^\}\s*$') 'English UI translation table footer'
+Assert ($uiMatches.Count -eq $requiredUiKeys.Count) 'exact new SLA UI translation count'
+Assert (($uiKeys -join ',') -eq ($requiredUiKeys -join ',')) 'exact ordered SLA UI translation keys'
+Assert (@($uiKeys | Group-Object | Where-Object Count -gt 1).Count -eq 0) 'SLA UI translations have no duplicate keys'
+foreach ($match in $uiMatches) {
+    $value = $match.Groups[2].Value
+    Assert (-not [string]::IsNullOrWhiteSpace($value)) "SLA UI translation has copy $($match.Groups[1].Value)"
+    Assert ($value -notmatch ';') "SLA UI tooltip copy has no semicolon $($match.Groups[1].Value)"
+}
+Assert (($uiMatches | Where-Object { $_.Groups[1].Value -eq 'IGUI_SLA_StatusAP' }).Groups[2].Value -eq 'AP: %1 unspent') 'AP status wording'
+Assert (($uiMatches | Where-Object { $_.Groups[1].Value -eq 'IGUI_SLA_StatusActive' }).Groups[2].Value -eq 'Active advancements: %1 / %2') 'active status wording'
 Write-Output "Public sandbox settings: $assertions assertions passed."

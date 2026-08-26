@@ -1,0 +1,16 @@
+IG_UI_EN = {
+    IGUI_SLA_StatusAP = "AP: %1 unspent",
+    IGUI_SLA_StatusActive = "Active advancements: %1 / %2",
+    IGUI_SLA_Advance = "Advance to level %1 for %2 AP.",
+    IGUI_SLA_PerSkillActive = "Active advancements: %1 / %2.",
+    IGUI_SLA_Targets = "Blue boxes are active AP advancements.",
+    IGUI_SLA_HighWater = "The blue marker shows natural XP progress.",
+    IGUI_SLA_Recovery = "Red shows natural XP recovery still needed.",
+    IGUI_SLA_Reason_Pending = "An advancement request is pending.",
+    IGUI_SLA_Reason_MaximumMismatch = "This skill's progression curve changed.",
+    IGUI_SLA_Reason_AtMaximum = "This skill is already at its maximum.",
+    IGUI_SLA_Reason_RedRecovery = "Recover natural XP before advancing again.",
+    IGUI_SLA_Reason_InsufficientAp = "You need more AP.",
+    IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
+    IGUI_SLA_Reason_AllotmentCapacity = "This skill has reached its advancement limit.",
+}

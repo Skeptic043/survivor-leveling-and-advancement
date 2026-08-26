@@ -12,7 +12,7 @@
     "Sandbox_SLA_GlobalAdvancementLimit": "Global advancement limit",
     "Sandbox_SLA_GlobalAdvancementLimit_tooltip": "Maximum active advancements across all skills. Used only in Global mode.",
     "Sandbox_SLA_PerSkillDefaultLimit": "Default per-skill advancement limit",
-    "Sandbox_SLA_PerSkillDefaultLimit_tooltip": "Default maximum active advancements per skill. Custom skills use this value; vanilla skills can override it below.",
+    "Sandbox_SLA_PerSkillDefaultLimit_tooltip": "Default maximum active advancements per skill. Custom skills use this value. Vanilla skills can override it below.",
     "Sandbox_SLA_AllotmentMode_values_option1": "Global",
     "Sandbox_SLA_AllotmentMode_values_option2": "Per Skill",
     "Sandbox_SLA_AllotmentMode_values_option3": "Free",

@@ -1,0 +1,814 @@
+local assertions = 0
+
+local function expect(condition, message)
+    assertions = assertions + 1
+    if not condition then error(message, 2) end
+end
+
+local function equal(actual, expected, message)
+    assertions = assertions + 1
+    if actual ~= expected then
+        error(message .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual), 2)
+    end
+end
+
+local function exact(value, fields)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return false end
+    for key in pairs(value) do if not fields[key] then return false end end
+    for key in pairs(fields) do if rawget(value, key) == nil then return false end end
+    return true
+end
+
+local translations = {
+    IGUI_SLA_StatusAP = "AP: %1 unspent",
+    IGUI_SLA_StatusActive = "Active advancements: %1 / %2",
+    IGUI_SLA_Advance = "Advance to level %1 for %2 AP.",
+    IGUI_SLA_PerSkillActive = "Active advancements: %1 / %2.",
+    IGUI_SLA_Targets = "Blue boxes are active AP advancements.",
+    IGUI_SLA_HighWater = "The blue marker shows natural XP progress.",
+    IGUI_SLA_Recovery = "Red shows natural XP recovery still needed.",
+    IGUI_SLA_Reason_Pending = "An advancement request is pending.",
+    IGUI_SLA_Reason_MaximumMismatch = "This skill's progression curve changed.",
+    IGUI_SLA_Reason_AtMaximum = "This skill is already at its maximum.",
+    IGUI_SLA_Reason_RedRecovery = "Recover natural XP before advancing again.",
+    IGUI_SLA_Reason_InsufficientAp = "You need more AP.",
+    IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
+    IGUI_SLA_Reason_AllotmentCapacity = "This skill has reached its advancement limit.",
+}
+
+local function formatText(key, ...)
+    local value = translations[key]
+    if value == nil then return key end
+    local arguments = { ... }
+    for index = 1, #arguments do
+        value = string.gsub(value, "%%" .. tostring(index), tostring(arguments[index]))
+    end
+    return value
+end
+
+local function snapshot()
+    return {
+        protocolVersion = 1,
+        ready = true,
+        sequence = 1,
+        revision = 2,
+        survivor = {
+            level = 5,
+            xpIntoLevel = 10,
+            xpForNextLevel = 100,
+            spent = 2,
+            availableAp = 3,
+        },
+        perks = {},
+    }
+end
+
+local function settings(mode)
+    return {
+        survivorMultiplier = 1,
+        fitnessStrengthNormalization = 0.067,
+        automaticCurveNormalization = true,
+        allotmentMode = mode or "Global",
+        globalLimit = 6,
+        perSkillDefault = 2,
+        perSkillOverrides = { Axe = 4 },
+    }
+end
+
+local function makeEnvironment(options)
+    options = options or {}
+    local evidence = {
+        now = 0,
+        priorPrerender = 0,
+        priorRender = 0,
+        priorOverlay = 0,
+        priorTooltip = 0,
+        priorActivate = 0,
+        priorMouseUp = 0,
+        refresh = { 0, 0, 0, 0 },
+        stateReads = { 0, 0, 0, 0 },
+        statusReads = { 0, 0, 0, 0 },
+        settingsReads = 0,
+        modelBuilds = 0,
+        requests = { 0, 0, 0, 0 },
+        progressionBuilds = 0,
+        progressionDescribes = 0,
+        progressionInspects = 0,
+        buttonCreates = 0,
+        listenerSets = 0,
+        listener = nil,
+        mode = options.mode or "Global",
+        pending = { false, false, false, false },
+        reason = options.reason,
+        malformedSettings = false,
+        modelFailure = false,
+        asynchronous = options.asynchronous ~= false,
+        drawOrder = {},
+        buildArguments = {},
+    }
+
+    local CharacterInfo = {}
+    local ProgressBar = {}
+    local Button = {}
+
+    function CharacterInfo.prerender(self)
+        evidence.priorPrerender = evidence.priorPrerender + 1
+        if self.throwPrerender then error("vanilla prerender") end
+    end
+
+    function CharacterInfo.render(self)
+        evidence.priorRender = evidence.priorRender + 1
+        if self.throwRender then error("vanilla render") end
+        if self.pendingBars ~= nil then
+            self.progressBars = self.pendingBars
+            self.pendingBars = nil
+        end
+    end
+
+    function ProgressBar.renderPerkRect(self)
+        evidence.priorOverlay = evidence.priorOverlay + 1
+        evidence.drawOrder[#evidence.drawOrder + 1] = "gold"
+    end
+
+    function ProgressBar.updateTooltip(self)
+        evidence.priorTooltip = evidence.priorTooltip + 1
+        self.message = "Vanilla tooltip"
+    end
+
+    function ProgressBar.activate(self)
+        evidence.priorActivate = evidence.priorActivate + 1
+    end
+
+    function ProgressBar.onMouseUp(self)
+        evidence.priorMouseUp = evidence.priorMouseUp + 1
+    end
+
+    function Button.new(_, x, y, width, height, title, target, onclick)
+        evidence.buttonCreates = evidence.buttonCreates + 1
+        local button = {
+            x = x,
+            y = y,
+            width = math.max(width, 20),
+            height = height,
+            title = title,
+            target = target,
+            onclick = onclick,
+            enabled = true,
+            tooltip = nil,
+        }
+        function button:initialise() self.initialised = true end
+        function button:setEnable(value) self.enabled = value end
+        function button:setTooltip(value) self.tooltip = value end
+        function button:setBorderRGBA(r, g, b, a) self.border = { r, g, b, a } end
+        function button:getWidth() return self.width end
+        function button:setX(value) self.x = value end
+        function button:setY(value) self.y = value end
+        function button:click()
+            if self.enabled and self.onclick ~= nil then self.onclick(self.target, self) end
+        end
+        return button
+    end
+
+    local owner = {
+        install = function() return { ok = true } end,
+        status = function() return { ok = true } end,
+        clientState = function(slot)
+            evidence.stateReads[slot + 1] = evidence.stateReads[slot + 1] + 1
+            if evidence.stateMalformed then return { ok = true, present = false, extra = true } end
+            return { ok = true, present = true, snapshot = snapshot() }
+        end,
+        refreshOwner = function(slot)
+            evidence.refresh[slot + 1] = evidence.refresh[slot + 1] + 1
+            if evidence.refreshThrows then error("refresh boom") end
+            if evidence.refreshPending then
+                return { ok = false, code = "refresh_pending", detail = "coalesced" }
+            end
+            return { ok = true }
+        end,
+        setClientStateListener = function(listener)
+            evidence.listenerSets = evidence.listenerSets + 1
+            if evidence.listenerFailure then return { ok = false, code = "bad", detail = "bad" } end
+            evidence.listener = listener
+            return { ok = true }
+        end,
+        requestAdvancement = function(slot, perkId)
+            evidence.requests[slot + 1] = evidence.requests[slot + 1] + 1
+            evidence.lastRequest = { slot = slot, perkId = perkId }
+            if evidence.requestReject then
+                return { ok = false, code = "no_ap", detail = "secret backend detail" }
+            end
+            if evidence.asynchronous then return { ok = true, requestId = "ui-request" } end
+            return {
+                ok = true,
+                applied = true,
+                requestId = "sp-request",
+                perkId = perkId,
+                apCost = 1,
+                mastered = false,
+                snapshotAccepted = true,
+            }
+        end,
+        advancementStatus = function(slot)
+            evidence.statusReads[slot + 1] = evidence.statusReads[slot + 1] + 1
+            if evidence.statusMalformed then return { ok = true, pending = "no" } end
+            if evidence.pending[slot + 1] then
+                return { ok = true, pending = true, requestId = "pending-id", perkId = "Axe" }
+            end
+            return { ok = true, pending = false }
+        end,
+    }
+
+    local provider = {
+        read = function()
+            evidence.settingsReads = evidence.settingsReads + 1
+            if evidence.settingsThrows then error("settings boom") end
+            if evidence.malformedSettings then return nil end
+            local value = settings(evidence.mode)
+            evidence.lastRawSettings = value
+            return value
+        end,
+    }
+
+    local model = {
+        build = function(input)
+            evidence.modelBuilds = evidence.modelBuilds + 1
+            evidence.buildArguments[#evidence.buildArguments + 1] = input
+            if evidence.modelThrows then error("model boom") end
+            if evidence.modelFailure then return { ok = false, code = "bad", detail = "secret" } end
+            local rows = {}
+            for index = 1, #input.rows do
+                local source = input.rows[index]
+                local reason = evidence.reason
+                if input.pending then reason = "pending" end
+                local row = {
+                    currentLevel = source.currentLevel,
+                    effectiveMaximum = source.effectiveMaximum,
+                    nextTargetLevel = source.currentLevel + 1,
+                    apCost = source.currentLevel + 1 == source.effectiveMaximum and 2 or 1,
+                    enabled = reason == nil,
+                    activeTargetLevels = evidence.targetLevels or { 2, 4 },
+                    naturalPosition = evidence.naturalPosition or 100,
+                    highWaterPosition = evidence.highWaterPosition or 150,
+                }
+                if reason ~= nil then row.reasonCode = reason end
+                if input.allotment.mode == "PerSkill" then
+                    row.activeCount = 1
+                    row.limit = input.allotment.perSkillOverrides[source.perkId]
+                        or input.allotment.perSkillDefault
+                end
+                if evidence.modelMaximumOffset then
+                    row.effectiveMaximum = row.effectiveMaximum + evidence.modelMaximumOffset
+                    row.enabled = false
+                    row.reasonCode = "maximum_mismatch"
+                end
+                rows[source.perkId] = row
+            end
+            local allotment = { mode = input.allotment.mode }
+            if input.allotment.mode == "Global" then
+                allotment.activeCount = 2
+                allotment.limit = input.allotment.globalLimit
+            end
+            local result = {
+                sequence = 1,
+                revision = 2,
+                survivor = {
+                    level = 5,
+                    xpIntoLevel = 10,
+                    xpForNextLevel = 100,
+                    spent = 2,
+                    availableAp = 3,
+                },
+                allotment = allotment,
+                pending = input.pending,
+                rows = rows,
+            }
+            if evidence.privateModelField then result.private = true end
+            return { ok = true, view = result }
+        end,
+    }
+
+    local progression = {
+        build = function(perk)
+            evidence.progressionBuilds = evidence.progressionBuilds + 1
+            evidence.buildPerk = perk
+            if perk.unsupported then return { ok = false, code = "unsupported", detail = "unsupported" } end
+            return { ok = true, handle = { perk = perk } }
+        end,
+        describe = function(handle)
+            evidence.progressionDescribes = evidence.progressionDescribes + 1
+            evidence.describeHandle = handle
+            local maximum = handle.perk.maximum or 10
+            local thresholds = { [0] = 0 }
+            for level = 1, maximum do thresholds[level] = level * 100 end
+            if handle.perk.badCurve then thresholds[2] = thresholds[1] end
+            return {
+                ok = true,
+                effectiveMaximum = maximum,
+                cumulativeThresholds = thresholds,
+            }
+        end,
+        inspect = function(handle, player)
+            evidence.progressionInspects = evidence.progressionInspects + 1
+            evidence.inspectHandle = handle
+            evidence.inspectPlayer = player
+            return {
+                ok = true,
+                storedLevel = handle.perk.level or 1,
+                effectiveMaximum = handle.perk.maximum or 10,
+            }
+        end,
+    }
+
+    local created = Build42SkillsUi.create({
+        ISCharacterInfo = CharacterInfo,
+        ISSkillProgressBar = ProgressBar,
+        ISButton = Button,
+        owner = owner,
+        viewModel = model,
+        settingsProvider = provider,
+        progressionAdapter = progression,
+        clockMillis = function()
+            if evidence.clockThrows then error("clock boom") end
+            return evidence.now
+        end,
+        getText = formatText,
+        measureText = function(text) return #text * (evidence.measureScale or 1) end,
+        smallFont = "small-font",
+    })
+    expect(created.ok, "integration creates")
+    evidence.integration = created.integration
+    evidence.CharacterInfo = CharacterInfo
+    evidence.ProgressBar = ProgressBar
+    evidence.Button = Button
+    return evidence
+end
+
+local function makeParent(width)
+    local parent = { width = width or 450 }
+    function parent:getWidth() return self.width end
+    function parent:setWidth(value) self.width = value end
+    return parent
+end
+
+local function makeBar(environment, id, options)
+    options = options or {}
+    local perk = {
+        id = id,
+        maximum = options.maximum or 10,
+        level = options.level or 1,
+        unsupported = options.unsupported,
+        badCurve = options.badCurve,
+    }
+    function perk:getId() return self.id end
+    local bar = {
+        perk = perk,
+        char = options.player or { name = "player-" .. id },
+        x = options.x or 100,
+        y = options.y or 40,
+        width = options.width or 200,
+        height = options.height or 20,
+        children = {},
+        draws = {},
+    }
+    function bar:getX() return self.x end
+    function bar:getY() return self.y end
+    function bar:getWidth() return self.width end
+    function bar:getHeight() return self.height end
+    function bar:setWidth(value) self.width = value end
+    function bar:addChild(child) self.children[#self.children + 1] = child end
+    function bar:drawRectBorder(x, y, width, height, alpha, r, g, b)
+        self.draws[#self.draws + 1] = { kind = "border", x = x, y = y, width = width, height = height,
+            alpha = alpha, r = r, g = g, b = b }
+        environment.drawOrder[#environment.drawOrder + 1] = "overlay-border"
+    end
+    function bar:drawRect(x, y, width, height, alpha, r, g, b)
+        self.draws[#self.draws + 1] = { kind = "rect", x = x, y = y, width = width, height = height,
+            alpha = alpha, r = r, g = g, b = b }
+        environment.drawOrder[#environment.drawOrder + 1] = "overlay-rect"
+    end
+    setmetatable(bar, { __index = environment.ProgressBar })
+    return bar
+end
+
+local function makeView(environment, slot, bars, delayed)
+    local category = { name = "Long category" }
+    function category:getName() return self.name end
+    local categoryButton = { x = 10, y = 10, width = 20 }
+    function categoryButton:getRight() return self.x + self.width end
+    function categoryButton:getY() return self.y end
+    local view = {
+        playerNum = slot,
+        progressBars = delayed and {} or bars,
+        pendingBars = delayed and bars or nil,
+        parent = makeParent(450),
+        width = 400,
+        sorted = { category },
+        buttonList = { categoryButton },
+        statusDraws = {},
+    }
+    function view:getWidth() return self.width end
+    function view:setWidth(value) self.width = value end
+    function view:drawTextRight(text, x, y, r, g, b, a, font)
+        self.statusDraws[#self.statusDraws + 1] = {
+            text = text, x = x, y = y, font = font,
+        }
+    end
+    setmetatable(view, { __index = environment.CharacterInfo })
+    return view
+end
+
+local function total(list)
+    local result = 0
+    for index = 1, #list do result = result + list[index] end
+    return result
+end
+
+expect(type(Build42SkillsUi) == "table", "module loads")
+expect(type(Build42SkillsUi.create) == "function", "module exposes create")
+equal(SkillsUiBootstrapHarness, 19, "bootstrap harness checks")
+expect(C11CBootstrapFirst == rawget(_G, "__C11C_BOOTSTRAP_EVIDENCE").integration,
+    "bootstrap returns integration")
+expect(C11CBootstrapReload == C11CBootstrapFirst, "reload returns exact integration")
+
+local malformed = Build42SkillsUi.create({})
+equal(malformed.ok, false, "malformed dependencies fail")
+equal(malformed.code, "invalid_dependencies", "malformed dependency code")
+
+local environment = makeEnvironment()
+expect(exact(environment.integration.status(), { ok = true, installed = true })
+    and environment.integration.status().installed == false, "creation is inert")
+equal(environment.listenerSets, 0, "creation installs no listener")
+equal(environment.buttonCreates, 0, "creation creates no UI")
+equal(environment.settingsReads, 0, "creation reads no settings")
+equal(total(environment.stateReads), 0, "creation reads no state")
+equal(total(environment.refresh), 0, "creation sends no refresh")
+local installed = environment.integration.install()
+expect(exact(installed, { ok = true }) and installed.ok, "install succeeds exactly")
+equal(environment.listenerSets, 1, "one lifecycle listener")
+expect(environment.integration.install().ok, "repeat install idempotent")
+equal(environment.listenerSets, 1, "repeat install does not replace listener")
+expect(exact(environment.integration.status(), { ok = true, installed = true }), "status surface exact")
+local installedMouseUp = environment.ProgressBar.onMouseUp
+
+local player = { identity = "exact-player" }
+local axe = makeBar(environment, "Axe", { player = player })
+local view = makeView(environment, 0, { axe }, true)
+view:prerender()
+equal(environment.priorPrerender, 1, "first prerender chains vanilla once")
+equal(environment.refresh[1], 1, "first visible prerender requests refresh")
+equal(total(environment.stateReads), 0, "first prerender reads no owner state")
+equal(total(environment.statusReads), 0, "first prerender reads no advancement status")
+equal(environment.settingsReads, 0, "first prerender reads no settings")
+equal(environment.modelBuilds, 0, "first prerender builds no model")
+
+view:render()
+equal(environment.priorRender, 1, "first render chains vanilla once")
+equal(#view.progressBars, 1, "vanilla creates one bar")
+equal(environment.buttonCreates, 1, "reconciliation creates one button")
+equal(axe.children[1].enabled, false, "new button stays disabled before the first model build")
+equal(environment.progressionBuilds, 1, "bar progression builds once")
+equal(environment.progressionDescribes, 1, "bar progression describes once")
+equal(environment.progressionInspects, 1, "bar progression inspects once")
+expect(environment.buildPerk == axe.perk, "progression build receives exact perk")
+expect(environment.inspectPlayer == player, "progression inspect receives exact player")
+expect(environment.describeHandle == environment.inspectHandle, "describe and inspect share exact handle")
+equal(total(environment.stateReads), 0, "post-render reads no state")
+equal(environment.settingsReads, 0, "post-render reads no settings")
+
+environment.now = 10
+view:prerender()
+equal(environment.priorPrerender, 2, "second prerender chains once")
+equal(environment.stateReads[1], 1, "dirty rebuild reads owner once")
+equal(environment.statusReads[1], 1, "dirty rebuild reads status once")
+equal(environment.settingsReads, 1, "dirty rebuild reads settings once")
+equal(environment.modelBuilds, 1, "dirty rebuild builds model once")
+local firstInput = environment.buildArguments[1]
+expect(exact(firstInput, { snapshot = true, allotment = true, pending = true, rows = true }),
+    "model input exact")
+expect(exact(firstInput.allotment, { mode = true, globalLimit = true }), "Global projection exact")
+equal(firstInput.allotment.globalLimit, 6, "Global limit projected")
+expect(firstInput.rows[1].perkId == "Axe" and firstInput.rows[1].currentLevel == 1
+    and firstInput.rows[1].effectiveMaximum == 10, "resolved row projected")
+local axeButton = axe.children[1]
+expect(axeButton.enabled, "eligible button enabled")
+equal(axeButton.title, "+", "native button copy")
+expect(string.find(axeButton.tooltip, "Advance to level 2 for 1 AP.", 1, true) ~= nil,
+    "button tooltip explains cost")
+equal(string.find(axeButton.tooltip, ";", 1, true), nil, "button tooltip has no semicolon")
+
+for frame = 1, 60 do
+    environment.now = 10 + frame
+    view:prerender()
+end
+equal(environment.refresh[1], 1, "sixty frames inside one second send nothing")
+equal(environment.stateReads[1], 1, "sixty frames inside one second read nothing")
+equal(environment.settingsReads, 1, "sixty frames read no settings")
+environment.now = 1000
+view:prerender()
+equal(environment.refresh[1], 2, "one-second expiry refreshes once")
+equal(environment.stateReads[1], 2, "expiry performs one dirty rebuild")
+environment.now = 1001
+view:prerender()
+equal(environment.stateReads[1], 2, "next prerender rebuilds once")
+environment.now = 1100
+view:prerender()
+equal(environment.refresh[1], 2, "reopen inside one second reuses refresh cache")
+equal(environment.stateReads[1], 2, "reopen inside one second reuses presentation cache")
+
+local hiddenCounts = { environment.refresh[1], environment.stateReads[1], environment.settingsReads }
+environment.now = 5000
+equal(environment.refresh[1], hiddenCounts[1], "hidden view performs no refresh without prerender")
+equal(environment.stateReads[1], hiddenCounts[2], "hidden view performs no state read")
+equal(environment.settingsReads, hiddenCounts[3], "hidden view performs no settings read")
+
+environment.now = 500
+view:prerender()
+equal(environment.refresh[1], 2, "backward clock sends nothing")
+environment.now = 1499
+view:prerender()
+equal(environment.refresh[1], 2, "backward clock waits a fresh second")
+environment.now = 1500
+view:prerender()
+equal(environment.refresh[1], 3, "fresh second after backward jump refreshes")
+
+local reopenedEnvironment = makeEnvironment()
+expect(reopenedEnvironment.integration.install().ok, "reopened integration installs")
+local reopenedBar = makeBar(reopenedEnvironment, "Axe")
+local reopened = makeView(reopenedEnvironment, 0, { reopenedBar }, false)
+reopened:prerender()
+equal(reopenedEnvironment.stateReads[1], 1, "reopened existing bars rebuild immediately")
+equal(reopenedEnvironment.refresh[1], 1, "reopened view also advances refresh cadence")
+
+local slotBar = makeBar(environment, "Cooking", { x = 120 })
+local slotView = makeView(environment, 1, { slotBar }, false)
+environment.now = 1600
+slotView:prerender()
+equal(environment.stateReads[2], 1, "slot one rebuild isolated")
+equal(environment.stateReads[1], 3, "slot zero read count unchanged")
+for slot = 2, 3 do
+    local isolatedBar = makeBar(environment, "Slot" .. tostring(slot), { x = 120 + slot })
+    local isolatedView = makeView(environment, slot, { isolatedBar }, false)
+    isolatedView:prerender()
+    equal(environment.stateReads[slot + 1], 1, "slot rebuild isolated " .. tostring(slot))
+    equal(environment.refresh[slot + 1], 1, "slot refresh isolated " .. tostring(slot))
+    expect(isolatedBar.children[1].enabled, "slot button isolated " .. tostring(slot))
+end
+environment.listener(0, "owner_snapshot")
+environment.now = 1601
+view:prerender()
+equal(environment.stateReads[1], 4, "matching listener dirties slot zero")
+equal(environment.stateReads[2], 1, "listener does not dirty slot one")
+
+axeButton:click()
+equal(environment.requests[1], 1, "mouse plus sends one request")
+equal(environment.lastRequest.slot, 0, "request uses view slot")
+equal(environment.lastRequest.perkId, "Axe", "request uses resolved perk ID")
+equal(axeButton.enabled, false, "successful request disables button before return")
+axe:activate()
+equal(environment.requests[1], 1, "controller activation same frame coalesces")
+equal(environment.priorActivate, 2, "mouse and controller each retain vanilla activate seam")
+expect(slotBar.children[1].enabled, "other slot button remains enabled")
+expect(environment.ProgressBar.onMouseUp == installedMouseUp, "vanilla mouse seam remains unpatched")
+local requestsBeforeOutside = environment.requests[1]
+axe:onMouseUp(1, 1)
+equal(environment.priorMouseUp, 1, "click outside plus retains vanilla behavior")
+equal(environment.requests[1], requestsBeforeOutside, "click outside plus sends no advancement")
+
+environment.listener(0, "advancement_result")
+environment.pending[1] = false
+environment.now = 1602
+view:prerender()
+expect(axeButton.enabled, "terminal listener rebuild re-enables eligible row")
+environment.requestReject = true
+axeButton:click()
+equal(environment.requests[1], 2, "ordinary rejection is delivered once")
+expect(axeButton.enabled, "ordinary rejection does not poison control")
+equal(string.find(axeButton.tooltip or "", "secret", 1, true), nil, "backend detail never leaks")
+
+axe:renderPerkRect()
+equal(environment.drawOrder[1], "gold", "vanilla gold renders before overlays")
+equal(#axe.draws, 4, "two targets, marker, and recovery span draw")
+equal(axe.draws[1].kind, "border", "first overlay is target outline")
+equal(axe.draws[1].x, 20, "level two outline boundary")
+equal(axe.draws[2].x, 60, "level four outline boundary")
+equal(axe.draws[3].x, 29, "fractional high-water marker")
+equal(axe.draws[4].x, 20, "red recovery starts at natural position")
+equal(axe.draws[4].width, 10, "red recovery ends at high-water")
+
+axe:updateTooltip(1)
+equal(environment.priorTooltip, 1, "vanilla tooltip runs once")
+expect(string.find(axe.message, "Vanilla tooltip", 1, true) == 1, "vanilla tooltip retained")
+expect(string.find(axe.message, "Blue boxes", 1, true) ~= nil, "target explanation appended")
+expect(string.find(axe.message, "Red shows", 1, true) ~= nil, "recovery explanation appended")
+equal(string.find(axe.message, ";", 1, true), nil, "row tooltip has no semicolon")
+
+local buttonsBeforeRepeatedRender = environment.buttonCreates
+view:render()
+local stableViewWidth = view.width
+local stableParentWidth = view.parent.width
+local stableBarWidth = axe.width
+for repeatRender = 1, 5 do view:render() end
+equal(view.width, stableViewWidth, "view width never grows cumulatively")
+equal(view.parent.width, stableParentWidth, "parent width never grows cumulatively")
+equal(axe.width, stableBarWidth, "bar width never grows cumulatively")
+equal(environment.buttonCreates, buttonsBeforeRepeatedRender, "repeated renders create no duplicate buttons")
+expect(#view.statusDraws > 0, "status draws on first category row")
+expect(string.find(view.statusDraws[#view.statusDraws].text, "AP: 3 unspent", 1, true) ~= nil,
+    "status includes AP")
+expect(string.find(view.statusDraws[#view.statusDraws].text, "Active advancements: 2 / 6", 1, true) ~= nil,
+    "Global status includes active count")
+
+local narrowEnvironment = makeEnvironment()
+narrowEnvironment.measureScale = 10
+expect(narrowEnvironment.integration.install().ok, "narrow-view integration installs")
+local narrowBar = makeBar(narrowEnvironment, "Axe", { x = 50, width = 100, height = 10 })
+local narrowView = makeView(narrowEnvironment, 0, { narrowBar })
+narrowView.width = 200
+narrowView.parent.width = 220
+narrowView:prerender()
+narrowView:render()
+local narrowStatus = narrowView.statusDraws[#narrowView.statusDraws]
+local requiredStatusRight = 30 + (#"Long category" * 10) + 12 + (#narrowStatus.text * 10)
+expect(narrowStatus.x >= requiredStatusRight, "long category and status preserve measured spacing")
+expect(narrowView.width > 200 and narrowView.parent.width > 220,
+    "narrow view and containing window widen for measured copy")
+
+local oldButton = axeButton
+local buttonsBeforeReplacement = environment.buttonCreates
+local replacement = makeBar(environment, "Axe", { player = player })
+view.progressBars = { replacement }
+view:render()
+equal(environment.buttonCreates, buttonsBeforeReplacement + 1, "replacement creates one new button")
+equal(oldButton.onclick, nil, "replaced bar callback removed")
+local requestsBeforeStale = environment.requests[1]
+axe:activate()
+equal(environment.requests[1], requestsBeforeStale, "stale bar no longer requests")
+view.progressBars = {}
+view:render()
+equal(replacement.children[1].onclick, nil, "collapse removes stale callback")
+local expanded = makeBar(environment, "Axe")
+view.progressBars = { expanded }
+view:render()
+equal(#expanded.children, 1, "expanded bar gets one button")
+
+local tornParent = makeParent(300)
+view.parent = tornParent
+view:render()
+expect(tornParent.width > 300, "torn-off parent identity widens independently")
+equal(view.width, stableViewWidth, "torn-off reconciliation remains non-cumulative")
+
+local unsupported = makeBar(environment, "Unsupported", { unsupported = true })
+view.progressBars = { unsupported }
+view:render()
+equal(#unsupported.children, 0, "unsupported row remains vanilla-only")
+unsupported:renderPerkRect()
+equal(#unsupported.draws, 0, "unsupported row draws no SLA overlay")
+
+local badCurve = makeBar(environment, "BadCurve", { badCurve = true })
+view.progressBars = { badCurve }
+view:render()
+equal(#badCurve.children, 0, "malformed curve remains vanilla-only")
+
+local hostilePerk = makeBar(environment, "Hostile")
+hostilePerk.perk = setmetatable({}, { __index = function() error("lookup boom") end })
+view.progressBars = { hostilePerk }
+local hostileOk = pcall(function() view:render() end)
+expect(hostileOk, "throwing Java-like perk lookup is contained")
+equal(#hostilePerk.children, 0, "throwing perk lookup stays vanilla-only")
+
+local aboveTenEnvironment = makeEnvironment()
+aboveTenEnvironment.targetLevels = { 10, 11 }
+expect(aboveTenEnvironment.integration.install().ok, "above-ten integration installs")
+local aboveTen = makeBar(aboveTenEnvironment, "LongCurve", { maximum = 12 })
+local aboveTenView = makeView(aboveTenEnvironment, 0, { aboveTen })
+aboveTenView:prerender()
+aboveTen:renderPerkRect()
+equal(#aboveTen.draws, 3, "level eleven is not fabricated beyond ten cells")
+equal(aboveTen.draws[1].x, 180, "level ten uses last vanilla cell")
+
+local invalidOverlayEnvironment = makeEnvironment()
+invalidOverlayEnvironment.highWaterPosition = 5000
+expect(invalidOverlayEnvironment.integration.install().ok, "invalid overlay integration installs")
+local invalidOverlayBar = makeBar(invalidOverlayEnvironment, "Axe")
+local invalidOverlayView = makeView(invalidOverlayEnvironment, 0, { invalidOverlayBar })
+invalidOverlayView:prerender()
+equal(invalidOverlayBar.children[1].enabled, false, "out-of-curve positions disable SLA control")
+invalidOverlayBar:renderPerkRect()
+equal(#invalidOverlayBar.draws, 0, "out-of-curve positions suppress overlays")
+
+local modes = { "PerSkill", "Free" }
+for index = 1, #modes do
+    local modeEnvironment = makeEnvironment({ mode = modes[index] })
+    expect(modeEnvironment.integration.install().ok, modes[index] .. " integration installs")
+    local modeBar = makeBar(modeEnvironment, "Axe")
+    local modeView = makeView(modeEnvironment, 0, { modeBar })
+    modeView:prerender()
+    local allotment = modeEnvironment.buildArguments[1].allotment
+    if modes[index] == "PerSkill" then
+        expect(exact(allotment, { mode = true, perSkillDefault = true, perSkillOverrides = true }),
+            "Per Skill projection exact")
+        equal(allotment.perSkillOverrides.Axe, 4, "Per Skill override projected")
+        expect(allotment.perSkillOverrides ~= modeEnvironment.lastRawSettings.perSkillOverrides,
+            "Per Skill override projection detaches")
+        allotment.perSkillOverrides.Axe = 9
+        equal(modeEnvironment.lastRawSettings.perSkillOverrides.Axe, 4,
+            "model input mutation cannot alter provider result")
+        expect(string.find(modeBar.children[1].tooltip, "Active advancements: 1 / 4.", 1, true) ~= nil,
+            "Per Skill count is in row tooltip")
+    else
+        expect(exact(allotment, { mode = true }), "Free projection exact")
+        equal(string.find(modeBar.children[1].tooltip, "Active advancements", 1, true), nil,
+            "Free tooltip omits limits")
+    end
+    modeView:render()
+    local statusText = modeView.statusDraws[#modeView.statusDraws].text
+    expect(string.find(statusText, "AP: 3 unspent", 1, true) ~= nil,
+        modes[index] .. " status includes AP")
+    equal(string.find(statusText, "Active advancements", 1, true), nil,
+        modes[index] .. " status omits global count")
+end
+
+local reasons = {
+    "pending",
+    "maximum_mismatch",
+    "at_maximum",
+    "red_recovery",
+    "insufficient_ap",
+    "allotment_disabled",
+    "allotment_capacity",
+}
+for index = 1, #reasons do
+    local reasonEnvironment = makeEnvironment({ reason = reasons[index] })
+    expect(reasonEnvironment.integration.install().ok, "reason integration installs " .. reasons[index])
+    local reasonBar = makeBar(reasonEnvironment, "Axe")
+    local reasonView = makeView(reasonEnvironment, 0, { reasonBar })
+    reasonView:prerender()
+    local tooltip = reasonBar.children[1].tooltip
+    expect(type(tooltip) == "string" and #tooltip > 0, "reason tooltip exists " .. reasons[index])
+    equal(string.find(tooltip, ";", 1, true), nil, "reason tooltip has no semicolon " .. reasons[index])
+    equal(string.find(tooltip, "secret", 1, true), nil, "reason tooltip omits detail " .. reasons[index])
+    expect(not reasonBar.children[1].enabled, "reason disables button " .. reasons[index])
+end
+
+local failureEnvironment = makeEnvironment()
+expect(failureEnvironment.integration.install().ok, "failure integration installs")
+local failureBar = makeBar(failureEnvironment, "Axe")
+local failureView = makeView(failureEnvironment, 0, { failureBar })
+failureEnvironment.malformedSettings = true
+failureView:prerender()
+equal(failureEnvironment.settingsReads, 1, "malformed settings read once")
+expect(not failureBar.children[1].enabled, "malformed settings disables SLA presentation")
+for frame = 1, 20 do failureEnvironment.now = frame; failureView:prerender() end
+equal(failureEnvironment.settingsReads, 1, "malformed settings cannot retry every frame")
+failureEnvironment.malformedSettings = false
+failureEnvironment.listener(0, "owner_snapshot")
+failureEnvironment.now = 30
+failureView:prerender()
+equal(failureEnvironment.settingsReads, 2, "legitimate dirty mark permits retry")
+expect(failureBar.children[1].enabled, "valid retry restores presentation")
+
+failureEnvironment.privateModelField = true
+failureEnvironment.listener(0, "owner_snapshot")
+failureEnvironment.now = 31
+failureView:prerender()
+expect(not failureBar.children[1].enabled, "private model result fails closed")
+failureEnvironment.privateModelField = false
+for frame = 32, 40 do failureEnvironment.now = frame; failureView:prerender() end
+equal(failureEnvironment.modelBuilds, 2, "malformed model result is consumed")
+
+local pendingEnvironment = makeEnvironment()
+pendingEnvironment.refreshPending = true
+expect(pendingEnvironment.integration.install().ok, "pending refresh integration installs")
+local pendingBar = makeBar(pendingEnvironment, "Axe")
+local pendingView = makeView(pendingEnvironment, 0, { pendingBar }, true)
+pendingView:prerender()
+for frame = 1, 30 do pendingEnvironment.now = frame; pendingView:prerender() end
+equal(pendingEnvironment.refresh[1], 1, "pending refresh coalesces within deadline")
+
+local clockEnvironment = makeEnvironment()
+expect(clockEnvironment.integration.install().ok, "clock integration installs")
+local clockBar = makeBar(clockEnvironment, "Axe")
+local clockView = makeView(clockEnvironment, 0, { clockBar })
+clockEnvironment.clockThrows = true
+local beforePrior = clockEnvironment.priorPrerender
+local clockOk = pcall(function() clockView:prerender() end)
+expect(clockOk, "clock failure is contained")
+equal(clockEnvironment.priorPrerender, beforePrior + 1, "wrapper failure never repeats vanilla")
+
+local ownershipEnvironment = makeEnvironment()
+expect(ownershipEnvironment.integration.install().ok, "ownership integration installs")
+ownershipEnvironment.CharacterInfo.render = function() end
+local ownership = ownershipEnvironment.integration.install()
+equal(ownership.ok, false, "lost wrapper ownership fails closed")
+equal(ownership.code, "hook_ownership_lost", "lost ownership code")
+equal(ownershipEnvironment.listenerSets, 1, "lost ownership does not replace listener")
+
+local vanillaThrowEnvironment = makeEnvironment()
+expect(vanillaThrowEnvironment.integration.install().ok, "vanilla throw integration installs")
+local vanillaThrowView = makeView(vanillaThrowEnvironment, 0, {})
+vanillaThrowView.throwRender = true
+local renderOk = pcall(function() vanillaThrowView:render() end)
+expect(not renderOk, "vanilla render throw propagates")
+equal(vanillaThrowEnvironment.priorRender, 1, "throwing vanilla render called once")
+
+return assertions
