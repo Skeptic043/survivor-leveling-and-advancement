@@ -1,0 +1,1 @@
+[pscustomobject]@{ Label='C10-W Build42AdvancementTransport'; Spec='tests/runtime/Build42AdvancementTransportSpec.lua'; Sources=@([pscustomobject]@{Global='Build42AdvancementTransport';Path='Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport.lua'}) }
