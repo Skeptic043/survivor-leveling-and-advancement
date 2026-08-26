@@ -14,10 +14,13 @@ if evidence == nil then
         install = function() evidence.installs = evidence.installs + 1; return { ok = true } end,
         status = function() return { ok = true } end,
         clientState = function() return { ok = true, present = false } end,
+        requestAdvancement = function() return { ok = false } end,
+        advancementStatus = function() return { ok = true, pending = false } end,
     }
     evidence.owner = owner
     evidence.runtimeFactory = {}
     evidence.advancementSession = {}
+    evidence.advancementTransport = {}
     local lifecycle = {
         create = function(argument)
             evidence.creates = evidence.creates + 1
@@ -31,6 +34,7 @@ if evidence == nil then
         if path == "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle" then return lifecycle end
         if path == "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory" then return evidence.runtimeFactory end
         if path == "SurvivorLevelingAdvancement/Runtime/AdvancementSession" then return evidence.advancementSession end
+        if path == "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport" then return evidence.advancementTransport end
         return {}
     end
     evidence.perkFactory, evidence.perks, evidence.options, evidence.vars, evidence.math = {}, {}, {}, {}, {}
@@ -46,10 +50,11 @@ elseif evidence.phase == 1 then
     check(evidence.requires["SurvivorLevelingAdvancement/Runtime/Build42Lifecycle"] == 1, "lifecycle required exactly once")
     check(evidence.created.modules.Build42RuntimeFactory == evidence.runtimeFactory, "exact runtime factory")
     check(evidence.created.modules.AdvancementSession == evidence.advancementSession, "exact advancement session factory")
+    check(evidence.created.modules.Build42AdvancementTransport == evidence.advancementTransport, "exact advancement transport factory")
     check(evidence.created.globals.PerkFactory == evidence.perkFactory and evidence.created.globals.Events == evidence.events, "exact globals")
     check(evidence.owner.modules == nil and type(rawget(_G, key).owner.status) == "function", "no dependencies exposed")
     local required = {
-        "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
+        "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
         "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog", "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter", "SurvivorLevelingAdvancement/Adapters/Build42NormalizationSnapshot", "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider", "SurvivorLevelingAdvancement/Adapters/Build42SandboxMultiplier", "SurvivorLevelingAdvancement/Adapters/Build42XpPositionArithmetic",
         "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/Core/PostMax", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Runtime/AdvancementSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
     }
@@ -58,11 +63,17 @@ elseif evidence.phase == 1 then
     evidence.phase = 2
 elseif evidence.phase == 2 then
     check(rawget(_G, "C10TBootstrapCollision").code == "lifecycle_sentinel_collision", "malformed collision")
-    rawset(_G, key, { signature = signature, owner = { install = function() error("install boom") end, status = function() end, clientState = function() end } })
+    rawset(_G, key, { signature = signature, owner = {
+        install = function() error("install boom") end, status = function() end, clientState = function() end,
+        requestAdvancement = function() end, advancementStatus = function() end,
+    } })
     evidence.phase = 3
 elseif evidence.phase == 3 then
     check(rawget(_G, "C10TBootstrapThrow").code == "lifecycle_install_threw", "thrown install")
-    rawset(_G, key, { signature = signature, owner = { install = function() return "bad" end, status = function() end, clientState = function() end } })
+    rawset(_G, key, { signature = signature, owner = {
+        install = function() return "bad" end, status = function() end, clientState = function() end,
+        requestAdvancement = function() end, advancementStatus = function() end,
+    } })
     evidence.phase = 4
 elseif evidence.phase == 4 then
     check(rawget(_G, "C10TBootstrapMalformed").code == "lifecycle_install_invalid", "malformed install")
@@ -73,7 +84,8 @@ elseif evidence.phase == 5 then
     check(rawget(_G, "C10TBootstrapMalformedOwner").code == "lifecycle_create_invalid", "malformed owner leaves no sentinel")
     check(rawget(_G, key) == nil, "malformed owner sentinel absent")
     rawset(_G, key, { signature = signature, owner = {
-        install = function() return { ok = true } end, status = function() end, clientState = function() end, dependencies = {},
+        install = function() return { ok = true } end, status = function() end, clientState = function() end,
+        requestAdvancement = function() end, advancementStatus = function() end, dependencies = {},
     } })
     evidence.phase = 6
 elseif evidence.phase == 6 then

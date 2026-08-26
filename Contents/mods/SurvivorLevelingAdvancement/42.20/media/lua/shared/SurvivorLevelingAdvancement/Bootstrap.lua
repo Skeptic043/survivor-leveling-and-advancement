@@ -12,10 +12,19 @@ local function validSentinel(value)
     if rawget(value, "signature") ~= SENTINEL_SIGNATURE then return false end
     local owner = rawget(value, "owner")
     if type(owner) ~= "table" or getmetatable(owner) ~= nil then return false end
-    local ownerAllowed = { install = true, status = true, clientState = true }
+    local ownerAllowed = {
+        install = true,
+        status = true,
+        clientState = true,
+        requestAdvancement = true,
+        advancementStatus = true,
+    }
     for key in pairs(owner) do if type(key) ~= "string" or not ownerAllowed[key] then return false end end
-    return type(rawget(owner, "install")) == "function" and type(rawget(owner, "status")) == "function"
+    return type(rawget(owner, "install")) == "function"
+        and type(rawget(owner, "status")) == "function"
         and type(rawget(owner, "clientState")) == "function"
+        and type(rawget(owner, "requestAdvancement")) == "function"
+        and type(rawget(owner, "advancementStatus")) == "function"
 end
 
 local function installOwner(owner)
@@ -39,6 +48,7 @@ local modules = {
     Build42Lifecycle = require "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle",
     Build42RuntimeFactory = require "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory",
     Build42OwnerTransport = require "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport",
+    Build42AdvancementTransport = require "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport",
     ClientOwnerState = require "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
     Build42PerkCatalog = require "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog",
     VanillaProgressionAdapter = require "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter",

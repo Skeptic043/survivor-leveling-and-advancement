@@ -1,36 +1,39 @@
 local Build42Lifecycle = {}
 
-local function failure(code, detail)
-    return { ok = false, code = code, detail = detail }
+local MODULE = "SurvivorLevelingAdvancement"
+local MAX_SAFE_INTEGER = 9007199254740991
+local nextLocalRequest = 0
+
+local function failure(code, detail, committed)
+    local result = { ok = false, code = code, detail = detail }
+    if committed ~= nil then result.committed = committed end
+    return result
 end
 
-local function bounded(result, code, detail)
-    if type(result) == "table" and result.ok == false
-        and type(result.code) == "string" and result.code ~= "" and #result.code <= 64
-        and (function(value)
-            for index = 1, #value do
-                local byte = string.byte(value, index)
-                if not ((byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90)
-                    or (byte >= 97 and byte <= 122) or byte == 95 or byte == 46 or byte == 58 or byte == 45) then
-                    return false
-                end
-            end
-            return true
-        end)(result.code)
-        and type(result.detail) == "string" and result.detail ~= "" and #result.detail <= 160
-        and result.detail:find("[%c]") == nil then
-        return failure(result.code, result.detail)
+local function callable(value) return type(value) == "function" end
+
+local function safeInteger(value)
+    return type(value) == "number" and value == value and value >= 0
+        and value <= MAX_SAFE_INTEGER and value == math.floor(value)
+end
+
+local function safeText(value, maximum, identifier)
+    if type(value) ~= "string" or #value == 0 or #value > maximum then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        if identifier then
+            local allowed = (byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90)
+                or (byte >= 97 and byte <= 122) or byte == 95 or byte == 46
+                or byte == 58 or byte == 45
+            if not allowed then return false end
+        elseif byte < 32 or byte > 126 then
+            return false
+        end
     end
-    return failure(code, detail)
+    return true
 end
 
-local function callable(value)
-    return type(value) == "function"
-end
-
-local function validSlot(value)
-    return type(value) == "number" and value == math.floor(value) and value >= 0 and value <= 3
-end
+local function safeId(value, maximum) return safeText(value, maximum, true) end
 
 local function exactTable(value, fields)
     if type(value) ~= "table" or getmetatable(value) ~= nil then return false end
@@ -39,185 +42,460 @@ local function exactTable(value, fields)
     return true
 end
 
+local function bounded(result, code, detail)
+    if type(result) == "table" and rawget(result, "ok") == false
+        and safeId(rawget(result, "code"), 64)
+        and safeText(rawget(result, "detail"), 160, false) then
+        local committed = rawget(result, "committed")
+        if committed == nil or type(committed) == "boolean" then
+            return failure(rawget(result, "code"), rawget(result, "detail"), committed)
+        end
+    end
+    return failure(code, detail)
+end
+
+local function validSlot(value) return safeInteger(value) and value <= 3 end
+
 local function eventSet(events, names)
     if type(events) ~= "table" then return nil end
     local captured = {}
     for index = 1, #names do
         local name = names[index]
-        local event = events[name]
-        if type(event) ~= "table" or not callable(event.Add) then return nil end
+        local event = rawget(events, name)
+        if type(event) ~= "table" or not callable(rawget(event, "Add")) then return nil end
         captured[name] = event
     end
     return captured
 end
 
+local function service(result, field, methods)
+    if not exactTable(result, { ok = true, [field] = true }) or rawget(result, "ok") ~= true then return nil end
+    local value = rawget(result, field)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+    local captured = { value = value }
+    for index = 1, #methods do
+        local name = methods[index]
+        if not callable(rawget(value, name)) then return nil end
+        captured[name] = rawget(value, name)
+    end
+    return captured
+end
+
+local function acceptance(result)
+    if exactTable(result, { ok = true, accepted = true })
+        and rawget(result, "ok") == true and rawget(result, "accepted") == true then return true end
+    if exactTable(result, { ok = true, accepted = true, code = true })
+        and rawget(result, "ok") == true and rawget(result, "accepted") == false
+        and rawget(result, "code") == "stale_snapshot" then return false, "stale_snapshot" end
+    return nil
+end
+
+local function detachSummary(value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil
+        or type(rawget(value, "ok")) ~= "boolean"
+        or not safeId(rawget(value, "requestId"), 64)
+        or not safeId(rawget(value, "perkId"), 128) then return nil end
+    local fields
+    if rawget(value, "ok") == true and rawget(value, "applied") == true then
+        fields = { ok = true, applied = true, requestId = true, perkId = true,
+            apCost = true, mastered = true, snapshotAccepted = true }
+        if rawget(value, "snapshotCode") ~= nil then fields.snapshotCode = true end
+    elseif rawget(value, "ok") == true and rawget(value, "applied") == false then
+        fields = { ok = true, applied = true, requestId = true, perkId = true, code = true, detail = true }
+        if rawget(value, "snapshotAccepted") ~= nil then fields.snapshotAccepted = true end
+        if rawget(value, "snapshotCode") ~= nil then fields.snapshotCode = true end
+    elseif rawget(value, "ok") == false and rawget(value, "applied") == nil then
+        fields = { ok = true, requestId = true, perkId = true, code = true, detail = true, committed = true }
+    elseif rawget(value, "ok") == false and type(rawget(value, "applied")) == "boolean" then
+        fields = { ok = true, applied = true, requestId = true, perkId = true,
+            code = true, detail = true, committed = true }
+        if rawget(value, "applied") == true then fields.apCost, fields.mastered = true, true
+        else fields.upstreamCode, fields.upstreamDetail = true, true end
+    end
+    if fields == nil or not exactTable(value, fields) then return nil end
+    local copy = {}
+    for key, item in pairs(value) do
+        if type(key) ~= "string" or not fields[key]
+            or (type(item) ~= "boolean" and type(item) ~= "number" and type(item) ~= "string") then return nil end
+        copy[key] = item
+    end
+    if rawget(value, "applied") ~= nil and type(rawget(value, "applied")) ~= "boolean" then return nil end
+    if rawget(value, "apCost") ~= nil and rawget(value, "apCost") ~= 1 and rawget(value, "apCost") ~= 2 then return nil end
+    if rawget(value, "mastered") ~= nil and type(rawget(value, "mastered")) ~= "boolean" then return nil end
+    if rawget(value, "apCost") ~= nil
+        and rawget(value, "mastered") ~= (rawget(value, "apCost") == 2) then return nil end
+    if rawget(value, "snapshotAccepted") ~= nil and type(rawget(value, "snapshotAccepted")) ~= "boolean" then return nil end
+    if rawget(value, "committed") ~= nil and type(rawget(value, "committed")) ~= "boolean" then return nil end
+    if rawget(value, "code") ~= nil and not safeId(rawget(value, "code"), 64) then return nil end
+    if rawget(value, "detail") ~= nil and not safeText(rawget(value, "detail"), 160, false) then return nil end
+    if rawget(value, "snapshotCode") ~= nil and rawget(value, "snapshotCode") ~= "stale_snapshot" then return nil end
+    if rawget(value, "snapshotCode") ~= nil and rawget(value, "snapshotAccepted") ~= false then return nil end
+    if rawget(value, "upstreamCode") ~= nil and not safeId(rawget(value, "upstreamCode"), 64) then return nil end
+    if rawget(value, "upstreamDetail") ~= nil and not safeText(rawget(value, "upstreamDetail"), 160, false) then return nil end
+    return copy
+end
+
+local function detachStatus(value)
+    if exactTable(value, { ok = true, pending = true })
+        and rawget(value, "ok") == true and rawget(value, "pending") == false then
+        return { ok = true, pending = false }
+    end
+    if exactTable(value, { ok = true, pending = true, requestId = true, perkId = true })
+        and rawget(value, "ok") == true and rawget(value, "pending") == true
+        and safeId(rawget(value, "requestId"), 64) and safeId(rawget(value, "perkId"), 128) then
+        return { ok = true, pending = true, requestId = rawget(value, "requestId"), perkId = rawget(value, "perkId") }
+    end
+    if exactTable(value, { ok = true, pending = true, result = true })
+        and rawget(value, "ok") == true and rawget(value, "pending") == false then
+        local result = detachSummary(rawget(value, "result"))
+        if result ~= nil then return { ok = true, pending = false, result = result } end
+    end
+    return nil
+end
+
+local function ownerHandled(value)
+    if exactTable(value, { ok = true, handled = true, accepted = true }) then
+        return rawget(value, "ok") == true and rawget(value, "handled") == true
+            and rawget(value, "accepted") == true
+    end
+    if exactTable(value, { ok = true, handled = true, accepted = true, code = true }) then
+        return rawget(value, "ok") == true and rawget(value, "handled") == true
+            and rawget(value, "accepted") == false and safeId(rawget(value, "code"), 64)
+    end
+    return false
+end
+
+local function advancementHandled(value)
+    return exactTable(value, { ok = true, handled = true, result = true })
+        and rawget(value, "ok") == true and rawget(value, "handled") == true
+        and detachSummary(rawget(value, "result")) ~= nil
+end
+
+local function applied(result, requestId, perkId)
+    return exactTable(result, {
+        ok = true, applied = true, requestId = true, perkId = true,
+        apCost = true, mastered = true, snapshot = true,
+    }) and rawget(result, "ok") == true and rawget(result, "applied") == true
+        and rawget(result, "requestId") == requestId and rawget(result, "perkId") == perkId
+        and (rawget(result, "apCost") == 1 or rawget(result, "apCost") == 2)
+        and rawget(result, "mastered") == (rawget(result, "apCost") == 2)
+        and type(rawget(result, "snapshot")) == "table"
+end
+
+local function rejected(result, requestId, perkId)
+    if type(result) ~= "table" or getmetatable(result) ~= nil then return false end
+    local fields = { ok = true, applied = true, requestId = true, perkId = true, code = true, detail = true }
+    local snapshot = rawget(result, "snapshot")
+    if snapshot ~= nil then fields.snapshot = true end
+    return exactTable(result, fields) and rawget(result, "ok") == true
+        and rawget(result, "applied") == false and rawget(result, "requestId") == requestId
+        and rawget(result, "perkId") == perkId and safeId(rawget(result, "code"), 64)
+        and safeText(rawget(result, "detail"), 160, false)
+        and (snapshot == nil or (rawget(result, "code") == "stale_revision" and type(snapshot) == "table"))
+end
+
 function Build42Lifecycle.create(dependencies)
-    if type(dependencies) ~= "table" or type(dependencies.modules) ~= "table" or type(dependencies.globals) ~= "table" then
+    if type(dependencies) ~= "table" or type(rawget(dependencies, "modules")) ~= "table"
+        or type(rawget(dependencies, "globals")) ~= "table" then
         return failure("invalid_dependencies", "modules and globals are required")
     end
-    local modules, globals = dependencies.modules, dependencies.globals
-    if type(modules.Build42RuntimeFactory) ~= "table" or not callable(modules.Build42RuntimeFactory.create)
-        or type(modules.Build42OwnerTransport) ~= "table" or not callable(modules.Build42OwnerTransport.createServer)
-        or not callable(modules.Build42OwnerTransport.createClient)
-        or type(modules.ClientOwnerState) ~= "table" or not callable(modules.ClientOwnerState.create)
-        or not callable(modules.ClientOwnerState.validate) then
+    local modules, globals = rawget(dependencies, "modules"), rawget(dependencies, "globals")
+    local runtimeFactory, ownerFactory = rawget(modules, "Build42RuntimeFactory"), rawget(modules, "Build42OwnerTransport")
+    local advancementFactory, clientState = rawget(modules, "Build42AdvancementTransport"), rawget(modules, "ClientOwnerState")
+    if type(runtimeFactory) ~= "table" or not callable(rawget(runtimeFactory, "create"))
+        or type(ownerFactory) ~= "table" or not callable(rawget(ownerFactory, "createServer"))
+        or not callable(rawget(ownerFactory, "createClient"))
+        or type(advancementFactory) ~= "table" or not callable(rawget(advancementFactory, "createServer"))
+        or not callable(rawget(advancementFactory, "createClient"))
+        or type(clientState) ~= "table" or not callable(rawget(clientState, "create"))
+        or not callable(rawget(clientState, "validate")) then
         return failure("invalid_dependencies", "lifecycle module capabilities are required")
     end
-    local snapshotValidator = { validate = modules.ClientOwnerState.validate }
-    if not callable(globals.isServer) or not callable(globals.isClient)
-        or not callable(globals.sendClientCommand) or not callable(globals.sendServerCommand) then
-        return failure("invalid_dependencies", "lifecycle global capabilities are required")
-    end
-
-    local serverCalled, server = pcall(globals.isServer)
-    local clientCalled, client = pcall(globals.isClient)
-    if not serverCalled or not clientCalled or type(server) ~= "boolean" or type(client) ~= "boolean" then
+    local createRuntime = rawget(runtimeFactory, "create")
+    local createOwnerServer, createOwnerClient = rawget(ownerFactory, "createServer"), rawget(ownerFactory, "createClient")
+    local createAdvServer, createAdvClient = rawget(advancementFactory, "createServer"), rawget(advancementFactory, "createClient")
+    local validateSnapshot = rawget(clientState, "validate")
+    local isServer, isClient = rawget(globals, "isServer"), rawget(globals, "isClient")
+    if not callable(isServer) or not callable(isClient) then return failure("invalid_dependencies", "mode globals are required") end
+    local serverCalled, serverMode = pcall(isServer)
+    local clientCalled, clientMode = pcall(isClient)
+    if not serverCalled or not clientCalled or type(serverMode) ~= "boolean" or type(clientMode) ~= "boolean" then
         return failure("mode_invalid", "isServer and isClient must return booleans")
     end
-    local mode
-    if server and client then return failure("mode_invalid", "server and client cannot both be true") end
-    if server then mode = "server" elseif client then mode = "client" else mode = "single_player" end
+    if serverMode and clientMode then return failure("mode_invalid", "server and client cannot both be true") end
+    local mode = serverMode and "server" or clientMode and "client" or "single_player"
+    local sendCommand = mode == "server" and rawget(globals, "sendServerCommand") or rawget(globals, "sendClientCommand")
+    if not callable(sendCommand) then return failure("invalid_dependencies", "mode command sender is required") end
 
-    local clientTransport = nil
-    local clientGet = nil
+    local ownerClient, advancementClient
     if mode ~= "server" then
-        local called, created = pcall(modules.Build42OwnerTransport.createClient, {
-            ClientOwnerState = modules.ClientOwnerState,
-            sendClientCommand = globals.sendClientCommand,
-        })
-        if not called or type(created) ~= "table" or created.ok ~= true or type(created.client) ~= "table"
-            or not callable(created.client.ready) or not callable(created.client.handle) or not callable(created.client.reset)
-            or not callable(created.client.resetSlot) or not callable(created.client.acceptLocal) or not callable(created.client.get) then
-            return bounded(created, "client_transport_invalid", "Build42OwnerTransport.createClient")
+        local called, created = pcall(createOwnerClient, { ClientOwnerState = clientState, sendClientCommand = sendCommand })
+        ownerClient = called and service(created, "client", { "ready", "handle", "reset", "resetSlot", "acceptLocal", "get", "status" }) or nil
+        if ownerClient == nil then return bounded(created, "owner_client_invalid", "Build42OwnerTransport.createClient") end
+        if mode == "client" then
+            called, created = pcall(createAdvClient, { ownerClient = ownerClient.value, sendClientCommand = sendCommand })
+            advancementClient = called and service(created, "client", { "request", "handle", "status", "resetSlot", "reset" }) or nil
+            if advancementClient == nil then return bounded(created, "advancement_client_invalid", "Build42AdvancementTransport.createClient") end
         end
-        clientTransport = created.client
-        clientGet = clientTransport.get
     end
 
-    local names = mode == "server" and { "OnServerStarted", "OnClientCommand" }
+    local eventNames = mode == "server" and { "OnServerStarted", "OnClientCommand" }
         or mode == "client" and { "OnCreatePlayer", "OnServerCommand", "OnDisconnect" }
         or { "OnGameStart", "OnCreatePlayer" }
-    local events = eventSet(globals.Events, names)
+    local events = eventSet(rawget(globals, "Events"), eventNames)
     if events == nil then return failure("invalid_dependencies", "required lifecycle events are required") end
 
     local installed, installAttempted, startupAttempted, started = false, false, false, false
-    local retainedFailure, runtime, serverTransport = nil, nil, nil
-    local pending = {}
-    local owner = {}
-    local readySingle
+    local retainedFailure, ownerServerHandle, advancementServerHandle
+    local ownerSessionReady, advancementRequest
+    local pendingPlayers, readyPlayers, singlePlayerResults = {}, {}, {}
+    local owner, readySingle = {}, nil
 
     local function retain(result, code, detail)
         retainedFailure = bounded(result, code, detail)
         return retainedFailure
     end
 
-    local function ownEvents()
-        if type(globals.Events) ~= "table" then
-            retain(nil, "event_ownership_lost", "Events")
-            return false
+    local function startupFailure(result, code, detail)
+        if mode == "single_player" then
+            for slot = 0, 3 do pendingPlayers[slot] = nil end
         end
-        for index = 1, #names do
-            local name = names[index]
-            if type(globals.Events[name]) ~= "table" or globals.Events[name] ~= events[name] then
-                retain(nil, "event_ownership_lost", name)
-                return false
-            end
+        return retain(result, code, detail)
+    end
+
+    local function ownEvents()
+        local current = rawget(globals, "Events")
+        if type(current) ~= "table" then retain(nil, "event_ownership_lost", "Events"); return false end
+        for index = 1, #eventNames do
+            local name = eventNames[index]
+            if rawget(current, name) ~= events[name] then retain(nil, "event_ownership_lost", name); return false end
         end
         return true
+    end
+
+    local function trusted(callableValue, code, detail, ...)
+        local called, result = pcall(callableValue, ...)
+        if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
+            return nil, retain(result, code, detail)
+        end
+        return result
     end
 
     local function startup()
         if startupAttempted then return retainedFailure or { ok = started } end
         startupAttempted = true
-        local called, created = pcall(modules.Build42RuntimeFactory.create, { modules = modules, globals = globals })
-        if not called or type(created) ~= "table" or created.ok ~= true or type(created.runtime) ~= "table"
-            or type(created.runtime.catalog) ~= "table"
-            or type(created.runtime.services) ~= "table" then
-            return retain(created, "runtime_factory_invalid", "Build42RuntimeFactory.create")
+        local called, created = pcall(createRuntime, { modules = modules, globals = globals })
+        if not called or type(created) ~= "table" or rawget(created, "ok") ~= true
+            or type(rawget(created, "runtime")) ~= "table"
+            or type(rawget(rawget(created, "runtime"), "catalog")) ~= "table"
+            or type(rawget(rawget(created, "runtime"), "services")) ~= "table" then
+            return startupFailure(created, "runtime_factory_invalid", "Build42RuntimeFactory.create")
         end
-        local services = created.runtime.services
-        if type(services.xpSource) ~= "table" or not callable(services.xpSource.install)
-            or type(services.ownerSession) ~= "table" or not callable(services.ownerSession.ready)
-            or not callable(services.ownerSession.snapshot) or not callable(services.ownerSession.isReady)
-            or not callable(services.ownerSession.clearPlayer) then
-            return retain(nil, "runtime_factory_invalid", "runtime service surface")
+        local services = rawget(rawget(created, "runtime"), "services")
+        local xpSource, ownerSession, advancementSession = rawget(services, "xpSource"), rawget(services, "ownerSession"), rawget(services, "advancementSession")
+        if type(xpSource) ~= "table" or not callable(rawget(xpSource, "install"))
+            or type(ownerSession) ~= "table" or not callable(rawget(ownerSession, "ready"))
+            or not callable(rawget(ownerSession, "snapshot")) or not callable(rawget(ownerSession, "isReady"))
+            or not callable(rawget(ownerSession, "clearPlayer"))
+            or type(advancementSession) ~= "table" or not callable(rawget(advancementSession, "request")) then
+            return startupFailure(nil, "runtime_factory_invalid", "runtime service surface")
         end
-        runtime = created.runtime
-        local sourceCalled, sourceResult = pcall(services.xpSource.install)
-        if not sourceCalled or type(sourceResult) ~= "table" or sourceResult.ok ~= true then
-            return retain(sourceResult, "xp_source_install_invalid", "xpSource.install")
+        local sourceCalled, sourceResult = pcall(rawget(xpSource, "install"))
+        if not sourceCalled or type(sourceResult) ~= "table" or rawget(sourceResult, "ok") ~= true then
+            return startupFailure(sourceResult, "xp_source_install_invalid", "xpSource.install")
         end
         if mode == "server" then
-            local transportCalled, transportCreated = pcall(modules.Build42OwnerTransport.createServer, {
-                ownerSession = services.ownerSession,
-                snapshotValidator = snapshotValidator,
-                sendServerCommand = globals.sendServerCommand,
+            local ownerCalled, ownerCreated = pcall(createOwnerServer, {
+                ownerSession = ownerSession, snapshotValidator = { validate = validateSnapshot }, sendServerCommand = sendCommand,
             })
-            if not transportCalled or type(transportCreated) ~= "table" or transportCreated.ok ~= true
-                or type(transportCreated.server) ~= "table" or not callable(transportCreated.server.handle)
-                or not callable(transportCreated.server.clearPlayer) then
-                return retain(transportCreated, "server_transport_invalid", "Build42OwnerTransport.createServer")
-            end
-            serverTransport = transportCreated.server
+            local ownerEndpoint = ownerCalled and service(ownerCreated, "server", { "handle", "clearPlayer" }) or nil
+            if ownerEndpoint == nil then return startupFailure(ownerCreated, "owner_server_invalid", "Build42OwnerTransport.createServer") end
+            local advCalled, advCreated = pcall(createAdvServer, {
+                advancementSession = advancementSession, snapshotValidator = validateSnapshot, sendServerCommand = sendCommand,
+            })
+            local advEndpoint = advCalled and service(advCreated, "server", { "handle" }) or nil
+            if advEndpoint == nil then return startupFailure(advCreated, "advancement_server_invalid", "Build42AdvancementTransport.createServer") end
+            ownerServerHandle, advancementServerHandle = ownerEndpoint.handle, advEndpoint.handle
         end
-        started = true
-        retainedFailure = nil
+        ownerSessionReady = rawget(ownerSession, "ready")
+        advancementRequest = rawget(advancementSession, "request")
+        started, retainedFailure = true, nil
         if mode == "single_player" then
-            local function drain(slot)
-                local player = pending[slot]
-                pending[slot] = nil
+            for slot = 0, 3 do
+                local player = pendingPlayers[slot]
+                pendingPlayers[slot] = nil
                 if player ~= nil then readySingle(slot, player) end
             end
-            drain(0); drain(1); drain(2); drain(3)
         end
         return { ok = true }
     end
 
     readySingle = function(localSlot, player)
-        local resetCalled, reset = pcall(clientTransport.resetSlot, localSlot)
-        if not resetCalled or type(reset) ~= "table" or reset.ok ~= true then return retain(reset, "client_reset_invalid", "client.resetSlot") end
-        local called, result = pcall(runtime.services.ownerSession.ready, player)
-        if not called or type(result) ~= "table" or result.ok ~= true or type(result.snapshot) ~= "table" then
-            return retain(result, "session_ready_invalid", "ownerSession.ready")
+        readyPlayers[localSlot], singlePlayerResults[localSlot] = nil, nil
+        if trusted(ownerClient.resetSlot, "owner_slot_reset_invalid", "ownerClient.resetSlot", localSlot) == nil then return retainedFailure end
+        local ready = trusted(ownerSessionReady, "session_ready_invalid", "ownerSession.ready", player)
+        if ready == nil or type(rawget(ready, "snapshot")) ~= "table" then
+            return ready == nil and retainedFailure or retain(ready, "session_ready_invalid", "ownerSession.ready")
         end
-        local acceptCalled, accepted = pcall(clientTransport.acceptLocal, localSlot, result.snapshot)
-        if not acceptCalled or type(accepted) ~= "table" or accepted.ok ~= true then return retain(accepted, "client_accept_invalid", "client.acceptLocal") end
+        local accepted = trusted(ownerClient.acceptLocal, "owner_accept_invalid", "ownerClient.acceptLocal", localSlot, rawget(ready, "snapshot"))
+        if accepted == nil or acceptance(accepted) ~= true then
+            return accepted == nil and retainedFailure or retain(accepted, "owner_accept_invalid", "ownerClient.acceptLocal")
+        end
+        readyPlayers[localSlot] = player
         return { ok = true }
     end
 
-    local function transportCall(callable, failureCode, detail, ...)
-        local called, result = pcall(callable, ...)
-        if not called or type(result) ~= "table" or type(result.ok) ~= "boolean" or result.ok ~= true then
-            return retain(result, failureCode, detail)
+    local function readyMultiplayer(localSlot, player)
+        readyPlayers[localSlot] = nil
+        if trusted(advancementClient.resetSlot, "advancement_slot_reset_invalid", "advancementClient.resetSlot", localSlot) == nil then return retainedFailure end
+        if trusted(ownerClient.ready, "owner_ready_invalid", "ownerClient.ready", localSlot, player) == nil then return retainedFailure end
+        readyPlayers[localSlot] = player
+        return { ok = true }
+    end
+
+    local function serverDispatch(endpoint, code, detail, module, command, player, args)
+        local called, result = pcall(endpoint, module, command, player, args)
+        if called and exactTable(result, { ok = true, handled = true })
+            and rawget(result, "ok") == true and rawget(result, "handled") == true then
+            return
         end
-        return result
+        if called and type(result) == "table" and rawget(result, "ok") == false then
+            local resultCode = rawget(result, "code")
+            local contained = (resultCode == "invalid_request" or resultCode == "protocol_mismatch")
+                and exactTable(result, { ok = true, code = true, detail = true })
+                and safeText(rawget(result, "detail"), 160, false)
+            if contained then return end
+        end
+        retain(result, code, detail)
+    end
+
+    local function clientView(localSlot)
+        if mode == "server" then return failure("client_state_unavailable", "server mode") end
+        local called, result = pcall(ownerClient.get, localSlot)
+        if not called then return failure("client_state_threw", "ownerClient.get") end
+        if exactTable(result, { ok = true, present = true }) and rawget(result, "ok") == true
+            and rawget(result, "present") == false then return { ok = true, present = false } end
+        if exactTable(result, { ok = true, present = true, snapshot = true })
+            and rawget(result, "ok") == true and rawget(result, "present") == true
+            and type(rawget(result, "snapshot")) == "table" then
+            local calledValidate, validated = pcall(validateSnapshot, rawget(result, "snapshot"))
+            if calledValidate and exactTable(validated, { ok = true, snapshot = true })
+                and rawget(validated, "ok") == true and type(rawget(validated, "snapshot")) == "table" then
+                return { ok = true, present = true, snapshot = rawget(validated, "snapshot") }
+            end
+            return failure("client_state_invalid", "client snapshot")
+        end
+        return bounded(result, "client_state_invalid", "ownerClient.get")
+    end
+
+    local function acceptResult(localSlot, result, wasApplied)
+        local called, accepted = pcall(ownerClient.acceptLocal, localSlot, rawget(result, "snapshot"))
+        local didAccept, acceptCode
+        if called then didAccept, acceptCode = acceptance(accepted) end
+        if didAccept == nil then
+            retain(accepted, "sp_snapshot_accept_invalid", "ownerClient.acceptLocal")
+            local summary = {
+                ok = false, applied = wasApplied, requestId = rawget(result, "requestId"),
+                perkId = rawget(result, "perkId"), code = "snapshot_rejected",
+                detail = "ownerClient.acceptLocal", committed = wasApplied,
+            }
+            if wasApplied then summary.apCost, summary.mastered = rawget(result, "apCost"), rawget(result, "mastered")
+            else summary.upstreamCode, summary.upstreamDetail = rawget(result, "code"), rawget(result, "detail") end
+            return summary
+        end
+        local summary = {
+            ok = true, applied = wasApplied, requestId = rawget(result, "requestId"),
+            perkId = rawget(result, "perkId"), snapshotAccepted = didAccept,
+        }
+        if wasApplied then summary.apCost, summary.mastered = rawget(result, "apCost"), rawget(result, "mastered")
+        else summary.code, summary.detail = rawget(result, "code"), rawget(result, "detail") end
+        if acceptCode ~= nil then summary.snapshotCode = acceptCode end
+        return summary
+    end
+
+    local function requestSingle(localSlot, perkId)
+        if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        if not safeId(perkId, 128) then return failure("invalid_perk", "perkId") end
+        local player = readyPlayers[localSlot]
+        if not started or player == nil then return failure("player_not_ready", "localSlot") end
+        local view, snapshot = clientView(localSlot), nil
+        snapshot = rawget(view, "snapshot")
+        if rawget(view, "ok") ~= true or rawget(view, "present") ~= true or type(snapshot) ~= "table"
+            or rawget(snapshot, "ready") ~= true or not safeInteger(rawget(snapshot, "revision")) then
+            return failure("owner_state_not_ready", "localSlot")
+        end
+        if nextLocalRequest >= MAX_SAFE_INTEGER then return failure("request_id_exhausted", "counter") end
+        nextLocalRequest = nextLocalRequest + 1
+        local requestId = "advancement-local:" .. tostring(nextLocalRequest)
+        local request = { requestId = requestId, perkId = perkId, expectedRevision = rawget(snapshot, "revision") }
+        local called, result = pcall(advancementRequest, player, request)
+        local summary
+        if called and applied(result, requestId, perkId) then
+            summary = acceptResult(localSlot, result, true)
+        elseif called and rejected(result, requestId, perkId) then
+            summary = rawget(result, "snapshot") ~= nil and acceptResult(localSlot, result, false) or {
+                ok = true, applied = false, requestId = requestId, perkId = perkId,
+                code = rawget(result, "code"), detail = rawget(result, "detail"),
+            }
+        elseif called and exactTable(result, { ok = true, code = true, detail = true, committed = true })
+            and rawget(result, "ok") == false and safeId(rawget(result, "code"), 64)
+            and safeText(rawget(result, "detail"), 160, false) and type(rawget(result, "committed")) == "boolean" then
+            summary = failure(rawget(result, "code"), rawget(result, "detail"), rawget(result, "committed"))
+            summary.requestId, summary.perkId = requestId, perkId
+        else
+            local committed = true
+            retain(result, "sp_advancement_invalid", "advancementSession.request")
+            summary = failure(called and "session_request_invalid" or "session_request_threw", "advancementSession.request", committed)
+            summary.requestId, summary.perkId = requestId, perkId
+        end
+        singlePlayerResults[localSlot] = summary
+        return detachSummary(summary)
     end
 
     local callbacks = {}
     callbacks.OnServerStarted = function() if ownEvents() then startup() end end
     callbacks.OnGameStart = function() if ownEvents() then startup() end end
     callbacks.OnClientCommand = function(module, command, player, args)
-        if ownEvents() and serverTransport ~= nil then
-            transportCall(serverTransport.handle, "server_handle_invalid", "server.handle", module, command, player, args)
+        if not ownEvents() or not started or module ~= MODULE then return end
+        if command == "ownerReady" then
+            serverDispatch(ownerServerHandle, "owner_server_handle_invalid", "ownerServer.handle", module, command, player, args)
+        elseif command == "advancementRequest" then
+            serverDispatch(advancementServerHandle, "advancement_server_handle_invalid", "advancementServer.handle", module, command, player, args)
         end
     end
     callbacks.OnCreatePlayer = function(localSlot, player)
         if not ownEvents() or not validSlot(localSlot) or player == nil then return end
-        if mode == "client" then
-            transportCall(clientTransport.ready, "client_ready_invalid", "client.ready", localSlot, player)
-        elseif started then
-            readySingle(localSlot, player)
-        else
-            pending[localSlot] = player
-        end
+        if mode == "client" then readyMultiplayer(localSlot, player)
+        elseif started then readySingle(localSlot, player)
+        elseif not startupAttempted then pendingPlayers[localSlot] = player end
     end
     callbacks.OnServerCommand = function(module, command, args)
-        if ownEvents() then transportCall(clientTransport.handle, "client_handle_invalid", "client.handle", module, command, args) end
+        if not ownEvents() or module ~= MODULE then return end
+        if command == "ownerSnapshot" then
+            local called, result = pcall(ownerClient.handle, module, command, args)
+            if not called or not ownerHandled(result) then
+                retain(result, "owner_client_handle_invalid", "ownerClient.handle")
+            end
+        elseif command == "advancementResult" then
+            local called, result = pcall(advancementClient.handle, module, command, args)
+            if not called or not advancementHandled(result) then
+                retain(result, "advancement_client_handle_invalid", "advancementClient.handle")
+            end
+        end
     end
     callbacks.OnDisconnect = function()
-        if ownEvents() then
-            transportCall(clientTransport.reset, "client_reset_invalid", "client.reset")
+        local ownsEvents = ownEvents()
+        for slot = 0, 3 do readyPlayers[slot] = nil end
+        local firstFailure = not ownsEvents and retainedFailure or nil
+        local called, result = pcall(ownerClient.reset)
+        if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
+            firstFailure = firstFailure or bounded(result, "owner_reset_invalid", "ownerClient.reset")
         end
+        called, result = pcall(advancementClient.reset)
+        if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
+            firstFailure = firstFailure or bounded(result, "advancement_reset_invalid", "advancementClient.reset")
+        end
+        if firstFailure ~= nil then retain(firstFailure, firstFailure.code, firstFailure.detail) end
     end
 
     function owner.install()
@@ -226,10 +504,9 @@ function Build42Lifecycle.create(dependencies)
             return installed and { ok = true } or retainedFailure or failure("install_failed", "event registration")
         end
         installAttempted = true
-        for index = 1, #names do
-            local name = names[index]
-            local called = pcall(events[name].Add, callbacks[name])
-            if not called then return retain(nil, "event_register_threw", name) end
+        for index = 1, #eventNames do
+            local name = eventNames[index]
+            if not pcall(rawget(events[name], "Add"), callbacks[name]) then return retain(nil, "event_register_threw", name) end
         end
         installed = true
         return { ok = true }
@@ -241,27 +518,42 @@ function Build42Lifecycle.create(dependencies)
         return result
     end
 
-    function owner.clientState(localSlot)
-        if mode == "server" then return failure("client_state_unavailable", "server mode") end
-        local called, result = pcall(clientGet, localSlot)
-        if not called then return failure("client_state_threw", "client.get") end
-        if exactTable(result, { ok = true, present = true }) and result.ok == true and result.present == false then
-            return { ok = true, present = false }
+    function owner.clientState(localSlot) return clientView(localSlot) end
+
+    function owner.requestAdvancement(localSlot, perkId)
+        if mode == "server" then return failure("advancement_unavailable", "server mode") end
+        if mode == "single_player" then return requestSingle(localSlot, perkId) end
+        if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        local player = readyPlayers[localSlot]
+        if player == nil then return failure("player_not_ready", "localSlot") end
+        local called, result = pcall(advancementClient.request, localSlot, player, perkId)
+        if not called or type(result) ~= "table" or type(rawget(result, "ok")) ~= "boolean" then
+            return retain(result, "advancement_request_invalid", "advancementClient.request")
         end
-        if exactTable(result, { ok = true, present = true, snapshot = true })
-            and result.ok == true and result.present == true and type(result.snapshot) == "table" then
-            local validatedCalled, validated = pcall(snapshotValidator.validate, result.snapshot)
-            if not validatedCalled or not exactTable(validated, { ok = true, snapshot = true })
-                or validated.ok ~= true or type(validated.snapshot) ~= "table" then
-                return failure("client_state_invalid", "client snapshot")
-            end
-            return { ok = true, present = true, snapshot = validated.snapshot }
+        if exactTable(result, { ok = true, requestId = true }) and rawget(result, "ok") == true
+            and safeId(rawget(result, "requestId"), 64) then return { ok = true, requestId = rawget(result, "requestId") } end
+        local failureFields = { ok = true, code = true, detail = true }
+        if rawget(result, "committed") ~= nil then failureFields.committed = true end
+        if exactTable(result, failureFields) and rawget(result, "ok") == false
+            and safeId(rawget(result, "code"), 64)
+            and safeText(rawget(result, "detail"), 160, false)
+            and (rawget(result, "committed") == nil or type(rawget(result, "committed")) == "boolean") then
+            return failure(rawget(result, "code"), rawget(result, "detail"), rawget(result, "committed"))
         end
-        if exactTable(result, { ok = true, code = true, detail = true }) and result.ok == false then
-            local retained = bounded(result, "client_state_invalid", "client.get")
-            return retained
+        return retain(result, "advancement_request_invalid", "advancementClient.request")
+    end
+
+    function owner.advancementStatus(localSlot)
+        if mode == "server" then return failure("advancement_unavailable", "server mode") end
+        if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        if mode == "single_player" then
+            local result = detachSummary(singlePlayerResults[localSlot])
+            return result == nil and { ok = true, pending = false } or { ok = true, pending = false, result = result }
         end
-        return failure("client_state_invalid", "client.get")
+        local called, result = pcall(advancementClient.status, localSlot)
+        local detached = called and detachStatus(result) or nil
+        if detached == nil then return retain(result, "advancement_status_invalid", "advancementClient.status") end
+        return detached
     end
 
     return { ok = true, owner = owner }
