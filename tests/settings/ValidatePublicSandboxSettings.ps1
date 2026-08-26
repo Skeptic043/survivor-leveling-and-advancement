@@ -1,0 +1,98 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$mod = Join-Path $root 'Contents/mods/SurvivorLevelingAdvancement/42.20'
+$optionsPath = Join-Path $mod 'media/sandbox-options.txt'
+$infoPath = Join-Path $mod 'mod.info'
+$jsonPath = Join-Path $mod 'media/lua/shared/Translate/EN/Sandbox.json'
+
+$assertions = 0
+function Assert($condition, [string]$message) {
+    $script:assertions++
+    if (-not $condition) { throw "ASSERTION FAILED: $message" }
+}
+
+function Field([string]$body, [string]$name) {
+    $m = [regex]::Match($body, "(?m)^\s*$([regex]::Escape($name))\s*=\s*(\{[^}]*\}|[^,\r\n]+)")
+    if (-not $m.Success) { return $null }
+    return $m.Groups[1].Value.Trim()
+}
+
+$ids = @('Fitness','Strength','Sprinting','Lightfoot','Nimble','Sneak','Axe','Blunt','SmallBlunt','LongBlade','SmallBlade','Spear','Maintenance','Farming','Husbandry','Woodwork','Carving','Cooking','Electricity','Doctor','FlintKnapping','Masonry','Mechanics','Blacksmith','Pottery','Tailoring','MetalWelding','Aiming','Reloading','Fishing','PlantScavenging','Tracking','Trapping','Butchering','Glassmaking')
+$text = Get-Content -Raw $optionsPath
+Assert ($text -match '(?m)^VERSION\s*=\s*1,\s*$') 'VERSION must be 1'
+$blocks = @([regex]::Matches($text, '(?ms)^option\s+([^\s{]+)\s*\{(.*?)^\}'))
+Assert ($blocks.Count -eq 41) 'exactly six main and 35 per-skill options are required'
+
+$main = @{
+    'SurvivorXpMultiplier' = @('double','0','10','1','SLA')
+    'FitnessStrengthContribution' = @('double','0.001','1','0.067230769','SLA')
+    'AutomaticCurveNormalization' = @('boolean','','','true','SLA')
+    'AllotmentMode' = @('enum','','','1','SLA')
+    'GlobalAdvancementLimit' = @('integer','0','100','3','SLA')
+    'PerSkillDefaultLimit' = @('integer','0','10','1','SLA')
+}
+$seen = @()
+foreach ($b in $blocks) {
+    $name = $b.Groups[1].Value
+    $body = $b.Groups[2].Value
+    if ($name -match '^SurvivorLevelingAdvancement\.(SurvivorXpMultiplier|FitnessStrengthContribution|AutomaticCurveNormalization|AllotmentMode|GlobalAdvancementLimit|PerSkillDefaultLimit)$') {
+        $key = $Matches[1]; $seen += $key; $expected = $main[$key]
+        Assert ((Field $body 'type') -eq $expected[0]) "$key type"
+        if ($expected[1]) { Assert ((Field $body 'min') -eq $expected[1] -and (Field $body 'max') -eq $expected[2]) "$key range" }
+        Assert ((Field $body 'default') -eq $expected[3]) "$key default"
+        Assert ((Field $body 'page') -eq $expected[4]) "$key page"
+        Assert (Field $body 'translation') "$key translation"
+        if ($key -eq 'AllotmentMode') { Assert ((Field $body 'numValues') -eq '3' -and (Field $body 'valueTranslation')) 'allotment enum encoding' }
+    }
+}
+Assert ((@($seen | Sort-Object -Unique) -join ',') -eq (($main.Keys | Sort-Object) -join ',')) 'exact six main settings'
+
+$actualIds = @($blocks | ForEach-Object { if ($_.Groups[1].Value -match '^SurvivorLevelingAdvancement\.PerSkillLimit_(.+)$') { $Matches[1] } })
+Assert (($actualIds -join ',') -eq ($ids -join ',')) 'ordered vanilla override IDs'
+foreach ($b in $blocks | Where-Object { $_.Groups[1].Value -match 'PerSkillLimit_' }) {
+    $body = $b.Groups[2].Value
+    Assert ((Field $body 'type') -eq 'enum' -and (Field $body 'numValues') -eq '12' -and (Field $body 'default') -eq '1') 'per-skill enum shape'
+    Assert ((Field $body 'page') -eq 'SLA_PerSkill' -and (Field $body 'valueTranslation') -eq 'SLA_PerSkillLimit') 'per-skill page/value translation'
+    Assert ((Field $body 'valueTranslation') -eq 'SLA_PerSkillLimit') 'per-skill enum value translation'
+}
+
+$info = @{}
+foreach ($line in Get-Content $infoPath) { if ($line -match '^([^=]+)=(.*)$') { $info[$Matches[1]] = $Matches[2] } }
+Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,id,name,versionMax,versionMin') 'metadata has no extra fields'
+Assert ($info.name -eq 'Survivor Leveling & Advancement' -and $info.id -eq 'SurvivorLevelingAdvancement') 'metadata name and id'
+Assert ($info.versionMin -eq '42.20.3' -and $info.versionMax -eq '42.20.3') 'metadata version bounds'
+Assert ($info.description -eq 'Earn Survivor Levels through skill XP and spend Advancement Points to raise trainable skills.') 'metadata behavior description'
+
+$jsonText = Get-Content -Raw $jsonPath
+$keys = [regex]::Matches($jsonText, '(?m)"((?:[^"\\]|\\.)*)"\s*:') | ForEach-Object { $_.Groups[1].Value }
+Assert (@($keys | Group-Object | Where-Object Count -gt 1).Count -eq 0) 'translation JSON has no duplicate keys'
+$translations = $jsonText | ConvertFrom-Json
+foreach ($b in $blocks) {
+    foreach ($field in @('translation')) {
+        $key = Field ($b.Groups[2].Value) $field
+        Assert ($key -and $translations.("Sandbox_" + $key)) "automatic translation mapping $key"
+    }
+}
+Assert ($translations.Sandbox_SLA -and $translations.Sandbox_SLA_PerSkill) 'page translation coverage'
+Assert ($translations.Sandbox_SLA_PerSkillLimit_option1 -and $translations.Sandbox_SLA_PerSkillLimit_option12) 'shared enum translation coverage'
+Assert ($translations.Sandbox_SLA_tooltip -eq 'Control Survivor XP pacing and how many skill advancements may be active at once.') 'main page tooltip wording'
+Assert ($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip -eq 'Multiplies Survivor XP gained from trainable skill XP. This does not change skill XP.') 'XP multiplier tooltip wording'
+Assert ($translations.Sandbox_SLA_FitnessStrengthContribution_tooltip -eq 'Scales Survivor XP from Fitness and Strength before the Survivor XP multiplier. The default is about 6.7%.') 'Fitness and Strength tooltip wording'
+Assert ($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip -eq 'Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.') 'custom skill normalization tooltip wording'
+Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Choose whether active advancements share one global limit, use limits per skill, or have no limit.') 'allotment tooltip wording'
+Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
+Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value; vanilla skills can override it on the Per-Skill Limits page.') 'default limit tooltip wording'
+Assert ($translations.Sandbox_SLA_PerSkill_tooltip -eq 'Set active-advancement limits for vanilla skills. Use Default inherits the default per-skill limit.') 'per-skill page tooltip wording'
+$labels = @{'Sprinting'='Running';'Lightfoot'='Lightfooted';'Sneak'='Sneaking';'Farming'='Agriculture';'Husbandry'='Animal Care';'Woodwork'='Carpentry';'Doctor'='First Aid';'FlintKnapping'='Knapping';'Blacksmith'='Blacksmithing';'MetalWelding'='Welding';'PlantScavenging'='Foraging';'Electricity'='Electrical'}
+foreach ($id in $ids) {
+    $key = "SLA_PerSkill_$id"
+    Assert ($translations.("Sandbox_" + $key)) "skill translation $id"
+    if ($labels.ContainsKey($id)) { Assert ($translations.("Sandbox_" + $key) -eq $labels[$id]) "vanilla English label $id" }
+}
+
+$forbidden = 'inherit|post.?maximum|digital.?watch|admin|runtime|poll|network|ui|poster|icon|workshop|client'
+Assert (-not ($text -match "(?i)$forbidden")) 'sandbox file contains no deferred settings or claims'
+Assert (-not ($info.Values -join ' ' -match "(?i)$forbidden")) 'metadata contains no deferred claims'
+Write-Output "Public sandbox settings: $assertions assertions passed."
