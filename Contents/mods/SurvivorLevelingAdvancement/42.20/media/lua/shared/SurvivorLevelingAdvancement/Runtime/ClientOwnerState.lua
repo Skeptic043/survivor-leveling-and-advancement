@@ -277,13 +277,20 @@ local function validateSnapshot(snapshot)
     return checked
 end
 
+function ClientOwnerState.validate(snapshot)
+    local checked, invalid = validateSnapshot(snapshot)
+    if checked == nil then return invalid end
+    return { ok = true, snapshot = checked }
+end
+
 function ClientOwnerState.create()
     local current = nil
     local state = {}
 
     function state.accept(snapshot)
-        local checked, invalid = validateSnapshot(snapshot)
-        if checked == nil then return invalid end
+        local validated = ClientOwnerState.validate(snapshot)
+        if not validated.ok then return validated end
+        local checked = validated.snapshot
         if current ~= nil and checked.sequence <= current.sequence then
             return { ok = true, accepted = false, code = "stale_snapshot" }
         end

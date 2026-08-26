@@ -97,6 +97,38 @@ local function acceptedSnapshot(state)
     return result.snapshot
 end
 
+local validationInput = validSnapshot(7, 3, false)
+local validated = ClientOwnerState.validate(validationInput)
+expectEqual(validated.ok, true, "stateless validation succeeds")
+expect(exactFields(validated, { ok = true, snapshot = true }), "stateless validation result shape")
+expect(sameShape(validated.snapshot, validationInput), "stateless validation preserves the exact snapshot")
+expect(validated.snapshot ~= validationInput, "stateless validation detaches the root")
+expect(validated.snapshot.survivor ~= validationInput.survivor, "stateless validation detaches survivor")
+expect(validated.snapshot.perks ~= validationInput.perks, "stateless validation detaches perk map")
+expect(validated.snapshot.perks.Axe ~= validationInput.perks.Axe, "stateless validation detaches perk records")
+expect(validated.snapshot.perks.Axe.activeTargets ~= validationInput.perks.Axe.activeTargets, "stateless validation detaches target arrays")
+expect(validated.snapshot.perks.Axe.activeTargets[1] ~= validationInput.perks.Axe.activeTargets[1], "stateless validation detaches targets")
+validationInput.survivor.level = 99
+validationInput.perks.Axe.activeTargets[1].targetPosition = 99
+expectEqual(validated.snapshot.survivor.level, 5, "validated copy ignores later input mutation")
+expectEqual(validated.snapshot.perks.Axe.activeTargets[1].targetPosition, 5.5, "validated nested copy ignores later input mutation")
+validated.snapshot.survivor.spent = 5
+expectEqual(validationInput.survivor.spent, 2, "validated output mutation does not reach input")
+local invalidValidation = validSnapshot(8)
+invalidValidation.privateRoot = true
+expectFailure(ClientOwnerState.validate(invalidValidation), "invalid_snapshot", "fields")
+
+local originalValidate = ClientOwnerState.validate
+local validationCalls = 0
+ClientOwnerState.validate = function(value)
+    validationCalls = validationCalls + 1
+    return originalValidate(value)
+end
+local reuseState = ClientOwnerState.create().state
+expectEqual(reuseState.accept(validSnapshot(1)).accepted, true, "accept succeeds through public validator")
+expectEqual(validationCalls, 1, "accept reuses public stateless validator exactly once")
+ClientOwnerState.validate = originalValidate
+
 local created = ClientOwnerState.create()
 expectEqual(created.ok, true, "create succeeds")
 expect(exactFields(created, { ok = true, state = true }), "create result shape")

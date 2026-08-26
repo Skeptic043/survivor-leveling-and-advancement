@@ -23,14 +23,23 @@ local FAILURE_FIELDS = {
     code = true,
     detail = true,
 }
+local VALIDATION_SUCCESS_FIELDS = { ok = true, snapshot = true }
 
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }
 end
 
 local function safeId(value, maximumLength)
-    return type(value) == "string" and #value > 0 and #value <= maximumLength
-        and value:match("^[%w%._:%-]+$") ~= nil
+    if type(value) ~= "string" or #value == 0 or #value > maximumLength then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        local allowed = (byte >= 48 and byte <= 57)
+            or (byte >= 65 and byte <= 90)
+            or (byte >= 97 and byte <= 122)
+            or byte == 95 or byte == 46 or byte == 58 or byte == 45
+        if not allowed then return false end
+    end
+    return true
 end
 
 local function printable(value, maximumLength)
@@ -124,6 +133,22 @@ local function sessionSnapshot(callable, operation, player)
     )
 end
 
+local function validateServerSnapshot(snapshotValidator, snapshot)
+    local called, result = pcall(snapshotValidator.validate, snapshot)
+    if not called then
+        return nil, failure("snapshot_validation_threw", "snapshotValidator.validate")
+    end
+    if exactPlainTable(result, VALIDATION_SUCCESS_FIELDS)
+        and result.ok == true and type(result.snapshot) == "table" then
+        return result.snapshot
+    end
+    return nil, boundedDependencyFailure(
+        result,
+        "snapshot_validation_invalid",
+        "snapshotValidator.validate"
+    )
+end
+
 local function sendServer(send, player, envelope)
     local called = pcall(send, player, MODULE, SNAPSHOT_COMMAND, envelope)
     if not called then return failure("send_threw", "sendServerCommand") end
@@ -165,6 +190,10 @@ function Build42OwnerTransport.createServer(dependencies)
         or type(ownerSession.clearPlayer) ~= "function" then
         return failure("invalid_dependencies", "ownerSession")
     end
+    local snapshotValidator = dependencies.snapshotValidator
+    if type(snapshotValidator) ~= "table" or type(snapshotValidator.validate) ~= "function" then
+        return failure("invalid_dependencies", "snapshotValidator.validate")
+    end
     local send = dependencies.sendServerCommand
     if type(send) ~= "function" then
         return failure("invalid_dependencies", "sendServerCommand")
@@ -190,7 +219,14 @@ function Build42OwnerTransport.createServer(dependencies)
             return readyFailure
         end
 
-        local sent = sendServer(send, player, serverSuccess(correlationId, snapshot))
+        local checkedSnapshot, validationFailure = validateServerSnapshot(snapshotValidator, snapshot)
+        if checkedSnapshot == nil then
+            local sentFailure = sendServer(send, player, serverFailure(correlationId, validationFailure))
+            if not sentFailure.ok then return sentFailure end
+            return validationFailure
+        end
+
+        local sent = sendServer(send, player, serverSuccess(correlationId, checkedSnapshot))
         if not sent.ok then return sent end
         bindings[player] = correlationId
         return { ok = true, handled = true }
@@ -208,7 +244,14 @@ function Build42OwnerTransport.createServer(dependencies)
             return snapshotFailure
         end
 
-        local sent = sendServer(send, player, serverSuccess(correlationId, snapshot))
+        local checkedSnapshot, validationFailure = validateServerSnapshot(snapshotValidator, snapshot)
+        if checkedSnapshot == nil then
+            local sentFailure = sendServer(send, player, serverFailure(correlationId, validationFailure))
+            if not sentFailure.ok then return sentFailure end
+            return validationFailure
+        end
+
+        local sent = sendServer(send, player, serverSuccess(correlationId, checkedSnapshot))
         if not sent.ok then return sent end
         return { ok = true, published = true }
     end

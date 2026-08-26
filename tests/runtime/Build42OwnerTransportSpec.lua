@@ -83,13 +83,21 @@ failed(Build42OwnerTransport.createServer({}), "invalid_dependencies", "ownerSes
 failed(Build42OwnerTransport.createServer({ ownerSession = {} }), "invalid_dependencies", "ownerSession")
 failed(Build42OwnerTransport.createServer({
     ownerSession = { ready = function() end, snapshot = function() end, clearPlayer = function() end },
+}), "invalid_dependencies", "snapshotValidator.validate")
+failed(Build42OwnerTransport.createServer({
+    ownerSession = { ready = function() end, snapshot = function() end, clearPlayer = function() end },
+    snapshotValidator = {},
+}), "invalid_dependencies", "snapshotValidator.validate")
+failed(Build42OwnerTransport.createServer({
+    ownerSession = { ready = function() end, snapshot = function() end, clearPlayer = function() end },
+    snapshotValidator = ClientOwnerState,
 }), "invalid_dependencies", "sendServerCommand")
 failed(Build42OwnerTransport.createClient(nil), "invalid_dependencies", "dependencies")
 failed(Build42OwnerTransport.createClient({}), "invalid_dependencies", "ClientOwnerState.create")
 failed(Build42OwnerTransport.createClient({ ClientOwnerState = {} }), "invalid_dependencies", "ClientOwnerState.create")
 failed(Build42OwnerTransport.createClient({ ClientOwnerState = ClientOwnerState }), "invalid_dependencies", "sendClientCommand")
 
-local serverCalls = { ready = 0, snapshot = 0, clear = 0, sends = {} }
+local serverCalls = { ready = 0, snapshot = 0, clear = 0, validate = 0, sends = {} }
 local readySnapshot = snapshot(1, 4, 3)
 local publishedSnapshot = snapshot(2, 5, 4)
 local serverPlayer = {}
@@ -118,8 +126,15 @@ local function captureServerSend(player, module, command, args)
         args = args,
     }
 end
+local serverValidator = {
+    validate = function(value)
+        serverCalls.validate = serverCalls.validate + 1
+        return ClientOwnerState.validate(value)
+    end,
+}
 local serverCreated = Build42OwnerTransport.createServer({
     ownerSession = session,
+    snapshotValidator = serverValidator,
     sendServerCommand = captureServerSend,
 })
 expect(same(serverCreated, { ok = true, server = serverCreated.server }), "server creation shape")
@@ -146,6 +161,8 @@ invalidRequest({ protocolVersion = 1, correlationId = "ok", username = "private"
 invalidRequest({ protocolVersion = 2, correlationId = "ok" }, "protocol_mismatch", "protocolVersion")
 invalidRequest({ protocolVersion = 1, correlationId = "" }, "invalid_request", "correlationId")
 invalidRequest({ protocolVersion = 1, correlationId = "bad id" }, "invalid_request", "correlationId")
+local unicodeId = "ready-" .. string.char(195, 169)
+invalidRequest({ protocolVersion = 1, correlationId = unicodeId }, "invalid_request", "correlationId")
 invalidRequest({ protocolVersion = 1, correlationId = string.rep("a", 65) }, "invalid_request", "correlationId")
 local metatableRequest = request("meta")
 setmetatable(metatableRequest, {})
@@ -155,6 +172,7 @@ local correlation64 = string.rep("a", 64)
 local handled = server.handle("SurvivorLevelingAdvancement", "ownerReady", serverPlayer, request(correlation64))
 expect(same(handled, { ok = true, handled = true }), "ready request handled")
 equal(serverCalls.ready, 1, "ready called once")
+equal(serverCalls.validate, 1, "ready snapshot validated once")
 equal(serverCalls.readyPlayer, serverPlayer, "callback player is authoritative identity")
 equal(#serverCalls.sends, 1, "ready sends once")
 local sent = serverCalls.sends[1]
@@ -165,7 +183,14 @@ expect(exact(sent.args, { protocolVersion = true, correlationId = true, ok = tru
 equal(sent.args.protocolVersion, 1, "success response protocol")
 equal(sent.args.correlationId, correlation64, "success echoes correlation")
 equal(sent.args.ok, true, "success flag")
-equal(sent.args.snapshot, readySnapshot, "session snapshot sent directly")
+expect(sent.args.snapshot ~= readySnapshot, "server sends the validator's detached snapshot")
+expect(same(sent.args.snapshot, readySnapshot), "validated snapshot preserves the exact public shape")
+expect(sent.args.snapshot.survivor ~= readySnapshot.survivor, "validated survivor is detached")
+expect(sent.args.snapshot.perks.Axe ~= readySnapshot.perks.Axe, "validated perk is detached")
+readySnapshot.survivor.level = 99
+readySnapshot.perks.Axe.activeTargets[1].targetPosition = 99
+equal(sent.args.snapshot.survivor.level, 3, "sent snapshot ignores later session-output mutation")
+equal(sent.args.snapshot.perks.Axe.activeTargets[1].targetPosition, 4.5, "sent nested snapshot ignores later session-output mutation")
 equal(sent.args.player, nil, "response carries no player object")
 equal(sent.args.playerIndex, nil, "response carries no player index")
 equal(sent.args.username, nil, "response carries no username")
@@ -173,10 +198,12 @@ equal(sent.args.username, nil, "response carries no username")
 local published = server.publish(serverPlayer)
 expect(same(published, { ok = true, published = true }), "publish succeeds")
 equal(serverCalls.snapshot, 1, "snapshot called once")
+equal(serverCalls.validate, 2, "published snapshot validated once")
 equal(serverCalls.snapshotPlayer, serverPlayer, "publish uses exact bound player")
 equal(#serverCalls.sends, 2, "publish sends once")
 equal(serverCalls.sends[2].args.correlationId, correlation64, "publish reuses bound correlation")
-equal(serverCalls.sends[2].args.snapshot, publishedSnapshot, "publish sends subsequent snapshot")
+expect(serverCalls.sends[2].args.snapshot ~= publishedSnapshot, "publish sends detached validated output")
+expect(same(serverCalls.sends[2].args.snapshot, publishedSnapshot), "publish preserves exact public snapshot")
 
 expect(same(server.clearPlayer(serverPlayer), { ok = true }), "clear succeeds")
 equal(serverCalls.clear, 1, "session clear called once")
@@ -184,8 +211,8 @@ equal(serverCalls.clearPlayer, serverPlayer, "session clear uses exact player")
 failed(server.publish(serverPlayer), "not_bound", "player route")
 equal(serverCalls.snapshot, 1, "unbound publish does not call snapshot")
 
-local function serverHarness(readyResult, snapshotResult, sendFunction, clearResult)
-    local calls = { ready = 0, snapshot = 0, clear = 0, sends = {} }
+local function serverHarness(readyResult, snapshotResult, sendFunction, clearResult, validator)
+    local calls = { ready = 0, snapshot = 0, clear = 0, validate = 0, sends = {} }
     local owner = {
         ready = function(player)
             calls.ready = calls.ready + 1
@@ -206,7 +233,17 @@ local function serverHarness(readyResult, snapshotResult, sendFunction, clearRes
     local sender = sendFunction or function(player, module, command, args)
         calls.sends[#calls.sends + 1] = { player = player, module = module, command = command, args = args }
     end
-    return Build42OwnerTransport.createServer({ ownerSession = owner, sendServerCommand = sender }).server, calls
+    local checkedValidator = validator or {
+        validate = function(value)
+            calls.validate = calls.validate + 1
+            return ClientOwnerState.validate(value)
+        end,
+    }
+    return Build42OwnerTransport.createServer({
+        ownerSession = owner,
+        snapshotValidator = checkedValidator,
+        sendServerCommand = sender,
+    }).server, calls
 end
 
 local rejectedServer, rejectedCalls = serverHarness(
@@ -235,6 +272,39 @@ local unsafeServer, unsafeCalls = serverHarness({ ok = false, code = "bad code",
 failed(unsafeServer.handle("SurvivorLevelingAdvancement", "ownerReady", serverPlayer, request("unsafe")), "session_ready_invalid", "ownerSession.ready")
 equal(unsafeCalls.sends[1].args.code, "session_ready_invalid", "unsafe dependency code is replaced")
 
+local function validatorFailureCase(label, sessionSnapshot, validator, expectedCode, expectedDetail)
+    local checkedServer, calls = serverHarness(
+        { ok = true, snapshot = sessionSnapshot },
+        { ok = true, snapshot = snapshot(2) },
+        nil,
+        nil,
+        validator
+    )
+    failed(checkedServer.handle("SurvivorLevelingAdvancement", "ownerReady", serverPlayer, request(label)), expectedCode, expectedDetail)
+    equal(calls.ready, 1, label .. " calls ready once")
+    equal(#calls.sends, 1, label .. " sends only a bounded failure envelope")
+    equal(calls.sends[1].args.ok, false, label .. " never sends snapshot success")
+    equal(calls.sends[1].args.snapshot, nil, label .. " failure envelope has no snapshot")
+    equal(calls.sends[1].args.code, expectedCode, label .. " failure response code")
+    failed(checkedServer.publish(serverPlayer), "not_bound", "player route")
+end
+
+local privateRootSnapshot = snapshot(1)
+privateRootSnapshot.rawModData = { private = true }
+validatorFailureCase("private-root", privateRootSnapshot, ClientOwnerState, "invalid_snapshot", "fields")
+local privateNestedSnapshot = snapshot(1)
+privateNestedSnapshot.perks.Axe.adapterId = "private.adapter"
+validatorFailureCase("private-nested", privateNestedSnapshot, ClientOwnerState, "invalid_perk", "fields")
+validatorFailureCase("validator-throw", snapshot(1), {
+    validate = function() error("private validator detail") end,
+}, "snapshot_validation_threw", "snapshotValidator.validate")
+validatorFailureCase("validator-malformed", snapshot(1), {
+    validate = function(value) return { ok = true, snapshot = value, extra = true } end,
+}, "snapshot_validation_invalid", "snapshotValidator.validate")
+validatorFailureCase("validator-explicit", snapshot(1), {
+    validate = function() return { ok = false, code = "invalid_snapshot", detail = "fields" } end,
+}, "invalid_snapshot", "fields")
+
 local sendThrowsServer, sendThrowsCalls = serverHarness(
     { ok = true, snapshot = snapshot(1) },
     { ok = true, snapshot = snapshot(2) },
@@ -253,6 +323,28 @@ failed(publishFailureServer.publish(serverPlayer), "store_load_failed", "unavail
 equal(publishFailureCalls.snapshot, 1, "failed publish calls snapshot once")
 equal(#publishFailureCalls.sends, 2, "failed publish sends bounded response")
 equal(publishFailureCalls.sends[2].args.ok, false, "publish failure response flag")
+
+local publishValidationCount = 0
+local publishValidationServer, publishValidationCalls = serverHarness(
+    { ok = true, snapshot = snapshot(1) },
+    { ok = true, snapshot = snapshot(2) },
+    nil,
+    nil,
+    {
+        validate = function(value)
+            publishValidationCount = publishValidationCount + 1
+            if publishValidationCount == 1 then return ClientOwnerState.validate(value) end
+            return { ok = false, code = "invalid_snapshot", detail = "fields" }
+        end,
+    }
+)
+expect(publishValidationServer.handle("SurvivorLevelingAdvancement", "ownerReady", serverPlayer, request("publish-validation")).ok, "validator accepts ready snapshot")
+failed(publishValidationServer.publish(serverPlayer), "invalid_snapshot", "fields")
+equal(publishValidationCalls.snapshot, 1, "publish validator failure follows one session snapshot")
+equal(publishValidationCount, 2, "every successful session snapshot is validated once")
+equal(#publishValidationCalls.sends, 2, "publish validator failure sends one bounded failure after ready success")
+equal(publishValidationCalls.sends[2].args.ok, false, "publish validator failure is not a success response")
+equal(publishValidationCalls.sends[2].args.snapshot, nil, "publish validator failure sends no snapshot")
 
 local clearFailureServer, clearFailureCalls = serverHarness(
     { ok = true, snapshot = snapshot(1) },
@@ -414,8 +506,10 @@ invalidResponse({}, "invalid_response", "response shape")
 invalidResponse({ protocolVersion = 1, correlationId = replacementReady.correlationId, ok = true, snapshot = snapshot(1), playerIndex = 0 }, "invalid_response", "response shape")
 invalidResponse({ protocolVersion = 2, correlationId = replacementReady.correlationId, ok = true, snapshot = snapshot(1) }, "protocol_mismatch", "protocolVersion")
 invalidResponse({ protocolVersion = 1, correlationId = "bad id", ok = true, snapshot = snapshot(1) }, "invalid_response", "correlationId")
+invalidResponse({ protocolVersion = 1, correlationId = unicodeId, ok = true, snapshot = snapshot(1) }, "invalid_response", "correlationId")
 invalidResponse({ protocolVersion = 1, correlationId = replacementReady.correlationId, ok = true, snapshot = 4 }, "invalid_response", "snapshot")
 invalidResponse({ protocolVersion = 1, correlationId = replacementReady.correlationId, ok = false, code = "bad code", detail = "bounded" }, "invalid_response", "failure detail")
+invalidResponse({ protocolVersion = 1, correlationId = replacementReady.correlationId, ok = false, code = "bad" .. string.char(195, 169), detail = "bounded" }, "invalid_response", "failure detail")
 invalidResponse({ protocolVersion = 1, correlationId = replacementReady.correlationId, ok = false, code = "safe", detail = "bad\nvalue" }, "invalid_response", "failure detail")
 local metaResponse = { protocolVersion = 1, correlationId = replacementReady.correlationId, ok = true, snapshot = snapshot(1) }
 setmetatable(metaResponse, {})
