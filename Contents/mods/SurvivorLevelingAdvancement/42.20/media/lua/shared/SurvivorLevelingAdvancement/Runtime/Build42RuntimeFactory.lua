@@ -87,7 +87,9 @@ function Factory.create(dependencies)
     local normalization; normalization, err = resultField(snapshot, "normalizationByPerk", "normalization_build_failed"); if err then return err end
     local providerResult; providerResult, err = call("Build42WorldSettingsProvider.create", m.Build42WorldSettingsProvider.create, { readSandboxVars = function() return g.SandboxVars end }); if err then return err end
     local provider; provider, err = resultField(providerResult, "provider", "world_provider_create_failed"); if err then return err end
-    local resolverResult; resolverResult, err = call("Build42SandboxMultiplier.create", m.Build42SandboxMultiplier.create, { SandboxOptions = g.SandboxOptions, PZMath = g.PZMath }); if err then return err end
+    local singletonRead, singleton = pcall(function() return g.SandboxOptions.instance end)
+    if not singletonRead or singleton == nil then return fail("sandbox_options_instance_missing", "SandboxOptions.instance is required") end
+    local resolverResult; resolverResult, err = call("Build42SandboxMultiplier.create", m.Build42SandboxMultiplier.create, { SandboxOptions = singleton, PZMath = g.PZMath }); if err then return err end
     local resolver; resolver, err = resultField(resolverResult, "resolver", "sandbox_multiplier_create_failed"); if err then return err end
     local arithmeticResult; arithmeticResult, err = call("Build42XpPositionArithmetic.create", m.Build42XpPositionArithmetic.create, { environment = { globals = g } }); if err then return err end
     local arithmetic; arithmetic, err = resultField(arithmeticResult, "arithmetic", "position_arithmetic_create_failed"); if err then return err end

@@ -51,7 +51,12 @@ elseif evidence.phase == 1 then
     check(evidence.created.modules.Build42RuntimeFactory == evidence.runtimeFactory, "exact runtime factory")
     check(evidence.created.modules.AdvancementSession == evidence.advancementSession, "exact advancement session factory")
     check(evidence.created.modules.Build42AdvancementTransport == evidence.advancementTransport, "exact advancement transport factory")
-    check(evidence.created.globals.PerkFactory == evidence.perkFactory and evidence.created.globals.Events == evidence.events, "exact globals")
+    check(evidence.created.globals == _G, "bootstrap passes exact global table")
+    local originalAddXp = addXp
+    local replacementAddXp = function() end
+    evidence.created.globals.addXp = replacementAddXp
+    check(addXp == replacementAddXp, "lifecycle globals owns real addXp cell")
+    addXp = originalAddXp
     check(evidence.owner.modules == nil and type(rawget(_G, key).owner.status) == "function", "no dependencies exposed")
     local required = {
         "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",

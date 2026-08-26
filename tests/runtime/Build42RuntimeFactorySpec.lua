@@ -3,7 +3,8 @@ local function eq(a, b, m) assertions = assertions + 1; if a ~= b then error(m o
 local function ok(r, m) eq(r.ok, true, m .. ": " .. tostring(r.code) .. " " .. tostring(r.detail)) end
 
 local function globals()
-    return { PerkFactory = { PerkList = {} }, Perks = { None = {} }, SandboxOptions = {}, SandboxVars = {}, PZMath = { clampFloat = function(v) return v end }, Events = {}, addXp = function() end, addXpNoMultiplier = function() end, isClient = function() return false end, instanceof = function() return true end }
+    local sandboxSingleton = {}
+    return { PerkFactory = { PerkList = {} }, Perks = { None = {} }, SandboxOptions = { instance = sandboxSingleton }, SandboxVars = {}, PZMath = { clampFloat = function(v) return v end }, Events = {}, addXp = function() end, addXpNoMultiplier = function() end, isClient = function() return false end, instanceof = function() return true end }
 end
 
 local function makeModules(log, g)
@@ -17,7 +18,7 @@ local function makeModules(log, g)
         VanillaProgressionAdapter = { build = function() end, describe = function() end, inspect = function() end },
         Build42NormalizationSnapshot = { build = function(a) log[#log + 1] = "normalization"; eq(a.catalog, catalog, "catalog identity"); return { ok = true, normalizationByPerk = { Cooking = 3 } } end },
         Build42WorldSettingsProvider = { create = function(a) log[#log + 1] = "provider"; eq(a.readSandboxVars(), g.SandboxVars, "live sandbox vars"); return { ok = true, provider = {} } end },
-        Build42SandboxMultiplier = { create = function(a) log[#log + 1] = "multiplier"; eq(a.SandboxOptions, g.SandboxOptions, "options identity"); return { ok = true, resolver = { resolve = function() end } } end },
+        Build42SandboxMultiplier = { create = function(a) log[#log + 1] = "multiplier"; eq(a.SandboxOptions, g.SandboxOptions.instance, "options singleton identity"); return { ok = true, resolver = { resolve = function() end } } end },
         Build42XpPositionArithmetic = { create = function(a) log[#log + 1] = "arithmetic"; eq(a.environment.globals, g, "globals identity"); return { ok = true, arithmetic = { add = function() end } } end },
         ServiceComposition = { create = function(a) log[#log + 1] = "composition"; eq(a.catalog, catalog, "composition catalog"); eq(a.normalizationByPerk.Cooking, 3, "normalization map"); eq(a.OwnerSnapshot, ownerSnapshot, "snapshot factory identity"); eq(a.OwnerSession, ownerSession, "session factory identity"); eq(a.AdvancementSession, advancementSession, "advancement factory identity"); eq(a.authority.describe().authoritative, true, "authority"); eq(a.playerIdentity.isPlayer({}), true, "identity"); return { ok = true, services = services } end },
         StateCodec = { decode = function() end, encode = function() end }, PlayerStateStore = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, AdvancementSession = advancementSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
@@ -101,4 +102,28 @@ assertRefreshCountsRejected({ ok = true, skippedCount = 0 }, "missing accepted c
 assertRefreshCountsRejected({ ok = true, acceptedCount = 1, skippedCount = 0.5 }, "fractional skipped count")
 assertRefreshCountsRejected({ ok = true, acceptedCount = math.huge, skippedCount = 0 }, "nonfinite accepted count")
 assertRefreshCountsRejected({ ok = true, acceptedCount = 1, skippedCount = -1 }, "inconsistent count")
+
+local function assertSingletonRejected(options, message)
+    local localGlobals = globals()
+    localGlobals.SandboxOptions = options
+    local localLog = {}
+    local localModules = makeModules(localLog, localGlobals)
+    local multiplierCalls, compositionCalls = 0, 0
+    localModules.Build42SandboxMultiplier.create = function()
+        multiplierCalls = multiplierCalls + 1
+        return { ok = true, resolver = { resolve = function() end } }
+    end
+    localModules.ServiceComposition.create = function()
+        compositionCalls = compositionCalls + 1
+        return { ok = true, services = {} }
+    end
+    local rejected = Build42RuntimeFactory.create({ modules = localModules, globals = localGlobals })
+    eq(rejected.ok, false, message .. " rejected")
+    eq(rejected.code, "sandbox_options_instance_missing", message .. " code")
+    eq(multiplierCalls, 0, message .. " stops before multiplier")
+    eq(compositionCalls, 0, message .. " stops before composition")
+end
+
+assertSingletonRejected({}, "missing singleton")
+assertSingletonRejected(setmetatable({}, { __index = function() error("instance lookup") end }), "throwing singleton")
 return assertions

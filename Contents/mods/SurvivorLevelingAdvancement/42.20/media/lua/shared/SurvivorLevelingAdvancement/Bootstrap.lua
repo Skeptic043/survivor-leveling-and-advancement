@@ -74,23 +74,7 @@ local modules = {
     ServiceComposition = require "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
 }
 
-local globals = {
-    PerkFactory = PerkFactory,
-    Perks = Perks,
-    SandboxOptions = SandboxOptions,
-    SandboxVars = SandboxVars,
-    PZMath = PZMath,
-    Events = Events,
-    addXp = addXp,
-    addXpNoMultiplier = addXpNoMultiplier,
-    isServer = isServer,
-    isClient = isClient,
-    instanceof = instanceof,
-    sendClientCommand = sendClientCommand,
-    sendServerCommand = sendServerCommand,
-}
-
-local created = modules.Build42Lifecycle.create({ modules = modules, globals = globals })
+local created = modules.Build42Lifecycle.create({ modules = modules, globals = _G })
 if type(created) ~= "table" or created.ok ~= true or type(created.owner) ~= "table" then
     return type(created) == "table" and created or failure("lifecycle_create_invalid", "Build42Lifecycle.create")
 end
