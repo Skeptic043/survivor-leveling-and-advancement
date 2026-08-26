@@ -2,10 +2,10 @@ local Build42SkillsUi = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
 local REFRESH_MILLIS = 1000
-local STATUS_GAP = 12
-local OUTER_PADDING = 14
-local BLUE_R, BLUE_G, BLUE_B = 0.25, 0.60, 1.00
-local RED_R, RED_G, RED_B = 0.72, 0.18, 0.18
+local TARGET_R, TARGET_G, TARGET_B = 0.12, 0.32, 0.65
+local POSITION_R, POSITION_G, POSITION_B = 0.35, 0.72, 1.00
+local RECOVERY_R, RECOVERY_G, RECOVERY_B = 0.45, 0.08, 0.08
+local RECOVERY_POSITION_R, RECOVERY_POSITION_G, RECOVERY_POSITION_B = 0.95, 0.25, 0.25
 
 local REASON_KEYS = {
     pending = "IGUI_SLA_Reason_Pending",
@@ -260,30 +260,16 @@ local function validModelView(value)
         local allowed = {
             currentLevel = true, effectiveMaximum = true, nextTargetLevel = true,
             apCost = true, enabled = true, reasonCode = true, activeCount = true,
-            limit = true, activeTargetLevels = true, naturalPosition = true,
+            limit = true, activeTargets = true, naturalPosition = true,
             highWaterPosition = true,
         }
         if not safeId(perkId, 128) or type(row) ~= "table" or getmetatable(row) ~= nil
             or type(rawget(row, "enabled")) ~= "boolean"
             or not nonnegativeInteger(rawget(row, "currentLevel"))
             or not positiveInteger(rawget(row, "effectiveMaximum"))
-            or rawget(row, "currentLevel") > rawget(row, "effectiveMaximum")
-            or type(rawget(row, "activeTargetLevels")) ~= "table"
-            or getmetatable(rawget(row, "activeTargetLevels")) ~= nil then return false end
+            or rawget(row, "currentLevel") > rawget(row, "effectiveMaximum") then return false end
         for key in pairs(row) do
             if type(key) ~= "string" or not allowed[key] then return false end
-        end
-        local levels = rawget(row, "activeTargetLevels")
-        local count = 0
-        for key, level in pairs(levels) do
-            if type(key) ~= "number" or not positiveInteger(key)
-                or not positiveInteger(level)
-                or level > rawget(row, "effectiveMaximum") then return false end
-            count = count + 1
-        end
-        for index = 1, count do
-            if rawget(levels, index) == nil
-                or (index > 1 and rawget(levels, index) <= rawget(levels, index - 1)) then return false end
         end
         if (rawget(row, "nextTargetLevel") == nil) ~= (rawget(row, "apCost") == nil) then return false end
         if rawget(row, "nextTargetLevel") ~= nil then
@@ -300,13 +286,43 @@ local function validModelView(value)
                 and (not nonnegativeInteger(rawget(row, "activeCount"))
                     or not nonnegativeInteger(rawget(row, "limit")))) then return false end
         if (mode == "PerSkill") ~= (rawget(row, "activeCount") ~= nil) then return false end
-        if (rawget(row, "naturalPosition") == nil) ~= (rawget(row, "highWaterPosition") == nil)
-            or (rawget(row, "naturalPosition") ~= nil
-                and (not finite(rawget(row, "naturalPosition"))
-                    or not finite(rawget(row, "highWaterPosition"))
-                    or rawget(row, "naturalPosition") < 0
-                    or rawget(row, "highWaterPosition") < rawget(row, "naturalPosition"))) then return false end
+        if mode == "Free" then
+            if rawget(row, "activeTargets") ~= nil
+                or rawget(row, "naturalPosition") ~= nil
+                or rawget(row, "highWaterPosition") ~= nil then return false end
+        else
+            local targets = rawget(row, "activeTargets")
+            if type(targets) ~= "table" or getmetatable(targets) ~= nil then return false end
+            local count, previousLevel, previousPosition = 0, 0, -1
+            for key, target in pairs(targets) do
+                if type(key) ~= "number" or not positiveInteger(key)
+                    or not exactPlainTable(target, { targetLevel = true, targetPosition = true })
+                    or not positiveInteger(rawget(target, "targetLevel"))
+                    or rawget(target, "targetLevel") > rawget(row, "effectiveMaximum")
+                    or not finite(rawget(target, "targetPosition"))
+                    or rawget(target, "targetPosition") < 0 then return false end
+                count = count + 1
+            end
+            for index = 1, count do
+                local target = rawget(targets, index)
+                if target == nil or rawget(target, "targetLevel") <= previousLevel
+                    or rawget(target, "targetPosition") <= previousPosition then return false end
+                previousLevel = rawget(target, "targetLevel")
+                previousPosition = rawget(target, "targetPosition")
+            end
+            if (rawget(row, "naturalPosition") == nil) ~= (rawget(row, "highWaterPosition") == nil)
+                or (rawget(row, "naturalPosition") ~= nil
+                    and (not finite(rawget(row, "naturalPosition"))
+                        or not finite(rawget(row, "highWaterPosition"))
+                        or rawget(row, "naturalPosition") < 0
+                        or rawget(row, "highWaterPosition") < rawget(row, "naturalPosition"))) then return false end
+            if count > 0 and rawget(row, "naturalPosition") == nil then return false end
+        end
         if rawget(row, "reasonCode") ~= nil and REASON_KEYS[rawget(row, "reasonCode")] == nil then return false end
+        if mode == "Free" and rawget(row, "reasonCode") ~= nil
+            and rawget(row, "reasonCode") ~= "pending"
+            and rawget(row, "reasonCode") ~= "at_maximum"
+            and rawget(row, "reasonCode") ~= "insufficient_ap" then return false end
         if rawget(row, "enabled") and rawget(row, "reasonCode") ~= nil then return false end
         if not rawget(row, "enabled") and rawget(row, "reasonCode") == nil then return false end
         if rawget(row, "enabled") and (rawget(row, "currentLevel") >= rawget(row, "effectiveMaximum")
@@ -426,13 +442,17 @@ function Build42SkillsUi.create(dependencies)
             order = {},
             baseWidth = nil,
             appliedWidth = nil,
+            contentLeft = nil,
+            outerGutter = nil,
             layoutParent = nil,
             baseY = nil,
             appliedY = nil,
             vanillaHeight = nil,
             appliedHeight = nil,
             inset = nil,
-            statusText = nil,
+            statusLeftText = nil,
+            statusRightText = nil,
+            statusLeft = nil,
             statusRight = nil,
             statusY = nil,
         }
@@ -462,7 +482,10 @@ function Build42SkillsUi.create(dependencies)
         end
         state.disabled = true
         state.cache = nil
-        state.statusText = nil
+        state.statusLeftText = nil
+        state.statusRightText = nil
+        state.statusLeft = nil
+        state.statusRight = nil
         for bar in pairs(state.bars) do
             local barState = bars[bar]
             if barState and barState.button and callable(barState.button.setEnable) then
@@ -532,7 +555,7 @@ function Build42SkillsUi.create(dependencies)
             return { supported = false, perkId = perkId }
         end
         if callable(button.setBorderRGBA) then
-            pcall(button.setBorderRGBA, button, BLUE_R, BLUE_G, BLUE_B, 0.75)
+            pcall(button.setBorderRGBA, button, TARGET_R, TARGET_G, TARGET_B, 0.75)
         end
         barState.button = button
         return barState
@@ -606,20 +629,90 @@ function Build42SkillsUi.create(dependencies)
 
     local function validOverlay(barState, row)
         if row == nil or rawget(row, "effectiveMaximum") ~= barState.effectiveMaximum then return false end
-        local levels = rawget(row, "activeTargetLevels")
-        if type(levels) ~= "table" or getmetatable(levels) ~= nil then return false end
-        for index, level in ipairs(levels) do
-            if not positiveInteger(level) or level > barState.effectiveMaximum then return false end
-            if index > 1 and level <= levels[index - 1] then return false end
+        local targets = rawget(row, "activeTargets")
+        if type(targets) ~= "table" or getmetatable(targets) ~= nil then return false end
+        for index, target in ipairs(targets) do
+            if not exactPlainTable(target, { targetLevel = true, targetPosition = true })
+                or not positiveInteger(rawget(target, "targetLevel"))
+                or rawget(target, "targetLevel") > barState.effectiveMaximum
+                or not finite(rawget(target, "targetPosition"))
+                or rawget(target, "targetPosition") < 0 then return false end
+            if index > 1
+                and (rawget(target, "targetLevel") <= rawget(targets[index - 1], "targetLevel")
+                    or rawget(target, "targetPosition") <= rawget(targets[index - 1], "targetPosition")) then
+                return false
+            end
         end
         local natural, high = rawget(row, "naturalPosition"), rawget(row, "highWaterPosition")
         if (natural == nil) ~= (high == nil) then return false end
+        if #targets > 0 and natural == nil then return false end
         if natural ~= nil and (not finite(natural) or not finite(high) or natural < 0 or high < natural
             or high > barState.thresholds[barState.effectiveMaximum]) then return false end
         return true
     end
 
-    local function tooltipFor(row, overlayValid)
+    local function formatRemaining(value)
+        if not finite(value) or value < 0 then return nil end
+        if value == 0 then return "0" end
+        if value < 0.01 then return "<0.01" end
+        local rounded = value
+        if value <= MAX_SAFE_INTEGER / 100 then
+            rounded = math.floor(value * 100 + 0.5) / 100
+        end
+        local called, formatted = pcall(string.format, "%.2f", rounded)
+        if not called or type(formatted) ~= "string" then return nil end
+        if string.sub(formatted, -3) == ".00" then
+            formatted = string.sub(formatted, 1, -4)
+        elseif string.sub(formatted, -1) == "0" then
+            formatted = string.sub(formatted, 1, -2)
+        end
+        return formatted
+    end
+
+    local function containsHorizontal(value, left, right, finalRegion)
+        return finite(value) and finite(left) and finite(right) and right >= left
+            and value >= left and (value < right or (finalRegion and value == right))
+    end
+
+    local function hoverTooltip(barState, mouseX)
+        if not barState.tracked or not barState.overlayValid or not finite(mouseX) then return nil end
+        local row = barState.row
+        local natural = rawget(row, "naturalPosition")
+        local high = rawget(row, "highWaterPosition")
+        if natural ~= nil and natural < high then
+            local left = curvePosition(barState, natural)
+            local right = curvePosition(barState, high)
+            if left ~= nil and right ~= nil and containsHorizontal(mouseX, left, right, true) then
+                local amount = formatRemaining(math.max(0, high - natural))
+                local first = amount and localized("IGUI_SLA_RecoveryXpLeft", amount) or nil
+                local second = localized("IGUI_SLA_RecoveryNoSurvivorXp")
+                if first == nil or second == nil then return nil end
+                return first .. " <LINE> " .. second
+            end
+        end
+
+        local targets = rawget(row, "activeTargets")
+        local visibleCount = 0
+        for index = 1, #targets do
+            if rawget(targets[index], "targetLevel") <= 10 then visibleCount = index end
+        end
+        local stride = barState.baseWidth / 10
+        for index = 1, visibleCount do
+            local target = targets[index]
+            local left = (rawget(target, "targetLevel") - 1) * stride
+            local right = left + barState.height
+            if containsHorizontal(mouseX, left, right, index == visibleCount) then
+                local amount = formatRemaining(math.max(0, rawget(target, "targetPosition") - natural))
+                local first = amount and localized("IGUI_SLA_TargetXpLeft", amount) or nil
+                local second = localized("IGUI_SLA_TargetCatchUp")
+                if first == nil or second == nil then return nil end
+                return first .. " <LINE> " .. second
+            end
+        end
+        return nil
+    end
+
+    local function buttonTooltipFor(row)
         local lines = {}
         local reason = rawget(row, "reasonCode")
         if reason ~= nil then
@@ -637,28 +730,16 @@ function Build42SkillsUi.create(dependencies)
             if value == nil then return nil end
             lines[#lines + 1] = value
         end
-        if overlayValid and #rawget(row, "activeTargetLevels") > 0 then
-            local value = localized("IGUI_SLA_Targets")
-            if value == nil then return nil end
-            lines[#lines + 1] = value
-        end
-        if overlayValid and rawget(row, "naturalPosition") ~= nil then
-            local key = rawget(row, "naturalPosition") < rawget(row, "highWaterPosition")
-                and "IGUI_SLA_Recovery" or "IGUI_SLA_HighWater"
-            local value = localized(key)
-            if value == nil then return nil end
-            lines[#lines + 1] = value
-        end
         return table.concat(lines, " <LINE> ")
     end
 
-    local function statusFor(cache)
-        local ap = localized("IGUI_SLA_StatusAP", cache.survivor.availableAp)
-        if ap == nil then return nil end
-        if cache.allotment.mode ~= "Global" then return ap end
-        local active = localized("IGUI_SLA_StatusActive", cache.allotment.activeCount, cache.allotment.limit)
-        if active == nil then return nil end
-        return ap .. "  " .. active
+    local function headerTexts(cache)
+        local left = localized("IGUI_SLA_StatusAP", cache.survivor.availableAp)
+        if left == nil then return nil, nil end
+        if cache.allotment.mode ~= "Global" then return left, nil end
+        local right = localized("IGUI_SLA_StatusActive", cache.allotment.activeCount, cache.allotment.limit)
+        if right == nil then return nil, nil end
+        return left, right
     end
 
     local function setButton(barState, enabled, tooltip)
@@ -670,16 +751,21 @@ function Build42SkillsUi.create(dependencies)
 
     local function applyCache(state)
         local cache = state.cache
-        state.statusText = cache and statusFor(cache) or nil
-        if cache and state.statusText == nil then disableView(state); return false end
+        local left, right = nil, nil
+        if cache then left, right = headerTexts(cache) end
+        state.statusLeftText = left
+        state.statusRightText = right
+        if cache and left == nil then disableView(state); return false end
         for index = 1, #state.order do
             local barState = bars[state.order[index]]
             if barState and barState.supported then
                 local row = cache and cache.rows[barState.perkId] or nil
-                local overlay = row ~= nil and validOverlay(barState, row)
+                local tracked = cache ~= nil and cache.allotment.mode ~= "Free"
+                local overlay = row ~= nil and (not tracked or validOverlay(barState, row))
                 barState.row = row
+                barState.tracked = tracked
                 barState.overlayValid = overlay
-                local tooltip = row and tooltipFor(row, overlay) or nil
+                local tooltip = row and buttonTooltipFor(row) or nil
                 if row and tooltip == nil then disableView(state); return false end
                 local enabled = row ~= nil and row.enabled == true and overlay
                     and cache.pending ~= true
@@ -789,22 +875,8 @@ function Build42SkillsUi.create(dependencies)
         local left = firstButton and readNumber(firstButton, "getRight") or nil
         local y = firstButton and readNumber(firstButton, "getY") or nil
         local height = firstButton and readNumber(firstButton, "getHeight") or nil
-        if y == nil or height == nil or height <= 0 then return nil, nil, nil end
-        return left or OUTER_PADDING, y, height
-    end
-
-    local function categoryGeometry(view)
-        local sorted = type(view) == "table" and rawget(view, "sorted") or nil
-        local category = type(sorted) == "table" and rawget(sorted, 1) or nil
-        local lookupCalled, getName = pcall(function() return category and category.getName or nil end)
-        if not lookupCalled or not callable(getName) then return nil, nil, nil end
-        local calledName, name = pcall(getName, category)
-        if not calledName or type(name) ~= "string" then return nil, nil, nil end
-        local calledMeasure, width = pcall(measureText, name)
-        if not calledMeasure or not finite(width) or width < 0 then return nil, nil, nil end
-        local left, y, height = firstButtonGeometry(view)
-        if left == nil then return nil, nil, nil, nil end
-        return left, width, y, height
+        if left == nil or y == nil or height == nil or height <= 0 then return nil, nil, nil end
+        return left, y, height
     end
 
     local function prepareHeader(view, state)
@@ -858,8 +930,15 @@ function Build42SkillsUi.create(dependencies)
         if state.vanillaHeight ~= nil and not propagate(view, state.vanillaHeight, "height") then
             restored = false
         end
+        if state.baseWidth ~= nil and not propagate(view, state.baseWidth, "width") then restored = false end
+        for index = 1, #state.order do
+            local barState = bars[state.order[index]]
+            if barState and barState.supported
+                and not writeNumber(state.order[index], "setWidth", barState.baseWidth) then restored = false end
+        end
         state.appliedY = nil
         state.appliedHeight = nil
+        state.appliedWidth = nil
         return restored
     end
 
@@ -867,7 +946,7 @@ function Build42SkillsUi.create(dependencies)
         local currentWidth = readNumber(view, "getWidth")
         if currentWidth == nil then return false end
         state.baseWidth = currentWidth
-        local baseRight, expandedRight = 0, 0
+        local baseRight, controlRight = 0, 0
         for index = 1, #state.order do
             local bar = state.order[index]
             local barState = bars[bar]
@@ -881,24 +960,35 @@ function Build42SkillsUi.create(dependencies)
                     or not writeNumber(bar, "setWidth", expanded) then return false end
                 barState.appliedWidth = expanded
                 baseRight = math.max(baseRight, x + barState.baseWidth)
-                expandedRight = math.max(expandedRight, x + expanded)
+                controlRight = math.max(controlRight, x + expanded)
             end
         end
         if baseRight == 0 then return true end
         local gutter = state.baseWidth - baseRight
         if not finite(gutter) or gutter < 0 then return false end
-        local desiredRight = expandedRight
-        if state.statusText ~= nil then
-            local left, categoryWidth, y = categoryGeometry(view)
-            local measuredCalled, statusWidth = pcall(measureText, state.statusText)
-            if left == nil or not measuredCalled or not finite(statusWidth) or statusWidth < 0 then return false end
-            desiredRight = math.max(desiredRight, left + categoryWidth + STATUS_GAP + statusWidth)
-            state.statusRight = desiredRight
+        state.outerGutter = gutter
+        local requiredRight = controlRight
+        if state.statusLeftText ~= nil then
+            local contentLeft, y = firstButtonGeometry(view)
+            local leftCalled, leftWidth = pcall(measureText, state.statusLeftText)
+            if contentLeft == nil or not leftCalled or not finite(leftWidth) or leftWidth < 0 then return false end
+            local headerRight = contentLeft + leftWidth
+            if state.statusRightText ~= nil then
+                local gapCalled, gapWidth = pcall(measureText, "  ")
+                local rightCalled, rightWidth = pcall(measureText, state.statusRightText)
+                if not gapCalled or not finite(gapWidth) or gapWidth < 0
+                    or not rightCalled or not finite(rightWidth) or rightWidth < 0 then return false end
+                headerRight = headerRight + gapWidth + rightWidth
+            end
+            requiredRight = math.max(requiredRight, headerRight)
+            state.contentLeft = contentLeft
+            state.statusLeft = contentLeft
+            state.statusRight = state.statusRightText ~= nil and requiredRight or nil
             state.statusY = y
         else
-            state.statusRight, state.statusY = nil, nil
+            state.statusLeft, state.statusRight, state.statusY = nil, nil, nil
         end
-        local desiredWidth = desiredRight + gutter
+        local desiredWidth = requiredRight + gutter
         if not propagate(view, desiredWidth, "width") then return false end
         state.appliedWidth = desiredWidth
         return true
@@ -937,13 +1027,19 @@ function Build42SkillsUi.create(dependencies)
             disableView(state)
             return
         end
-        if state.statusText ~= nil and state.statusRight ~= nil then
+        if state.statusLeftText ~= nil and state.statusLeft ~= nil then
             local parent = rawget(view, "parent")
             local viewX = readNumber(view, "getX")
-            local drawStatus = type(parent) == "table" and parent.drawTextRight or nil
-            if viewX == nil or not callable(drawStatus)
-                or not pcall(drawStatus, parent, state.statusText, viewX + state.statusRight,
-                    state.baseY + state.statusY, 1, 1, 1, 1, smallFont) then
+            local drawLeft = type(parent) == "table" and parent.drawText or nil
+            local drawRight = type(parent) == "table" and parent.drawTextRight or nil
+            local y = state.baseY + state.statusY
+            local leftOk = viewX ~= nil and callable(drawLeft)
+                and pcall(drawLeft, parent, state.statusLeftText, viewX + state.statusLeft,
+                    y, 1, 1, 1, 1, smallFont)
+            local rightOk = state.statusRightText == nil or (viewX ~= nil and callable(drawRight)
+                and pcall(drawRight, parent, state.statusRightText, viewX + state.statusRight,
+                    y, 1, 1, 1, 1, smallFont))
+            if not leftOk or not rightOk then
                 disableView(state)
             end
         end
@@ -952,37 +1048,42 @@ function Build42SkillsUi.create(dependencies)
     local function onOverlay(bar)
         local barState = bars[bar]
         if barState == nil or not barState.supported or not barState.overlayValid
-            or barState.row == nil then return end
+            or not barState.tracked or barState.row == nil then return end
         local drawBorder = bar.drawRectBorder
         local drawRect = bar.drawRect
         if not callable(drawBorder) or not callable(drawRect) then return end
         local stride = barState.baseWidth / 10
         local cell = barState.height
-        for _, level in ipairs(barState.row.activeTargetLevels) do
+        for _, target in ipairs(barState.row.activeTargets) do
+            local level = target.targetLevel
             if level <= 10 then
                 pcall(drawBorder, bar, (level - 1) * stride, 0, cell, cell,
-                    0.95, BLUE_R, BLUE_G, BLUE_B)
+                    0.95, TARGET_R, TARGET_G, TARGET_B)
             end
         end
         local natural, high = barState.row.naturalPosition, barState.row.highWaterPosition
         if natural == nil then return end
         local highX = curvePosition(barState, high)
         if highX ~= nil then
-            pcall(drawRect, bar, highX - 1, 0, 2, cell, 0.85, BLUE_R, BLUE_G, BLUE_B)
+            pcall(drawRect, bar, highX - 1, 0, 2, cell, 0.85,
+                POSITION_R, POSITION_G, POSITION_B)
         end
         if natural < high then
             local naturalX = curvePosition(barState, natural)
             if naturalX ~= nil and highX ~= nil and highX > naturalX then
                 pcall(drawRect, bar, naturalX, cell - 3, highX - naturalX, 2,
-                    0.75, RED_R, RED_G, RED_B)
+                    0.75, RECOVERY_R, RECOVERY_G, RECOVERY_B)
+                pcall(drawRect, bar, naturalX - 1, 0, 2, cell, 0.90,
+                    RECOVERY_POSITION_R, RECOVERY_POSITION_G, RECOVERY_POSITION_B)
             end
         end
     end
 
     local function onTooltip(bar)
         local barState = bars[bar]
-        if barState == nil or barState.row == nil then return end
-        local addition = tooltipFor(barState.row, barState.overlayValid)
+        if barState == nil or barState.row == nil or not barState.tracked then return end
+        local mouseX = readNumber(bar, "getMouseX")
+        local addition = mouseX ~= nil and hoverTooltip(barState, mouseX) or nil
         if addition == nil or addition == "" then return end
         local vanilla = rawget(bar, "message")
         if type(vanilla) == "string" and vanilla ~= "" then

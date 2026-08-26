@@ -20,13 +20,14 @@ local function exact(value, fields)
 end
 
 local translations = {
-    IGUI_SLA_StatusAP = "AP: %1 unspent",
-    IGUI_SLA_StatusActive = "Active advancements: %1 / %2",
+    IGUI_SLA_StatusAP = "AP: %1",
+    IGUI_SLA_StatusActive = "Advancement Slots: %1/%2",
     IGUI_SLA_Advance = "Advance to level %1 for %2 AP.",
-    IGUI_SLA_PerSkillActive = "Active advancements: %1 / %2.",
-    IGUI_SLA_Targets = "Blue boxes are active AP advancements.",
-    IGUI_SLA_HighWater = "The blue marker shows natural XP progress.",
-    IGUI_SLA_Recovery = "Red shows natural XP recovery still needed.",
+    IGUI_SLA_PerSkillActive = "Advancement Slots: %1/%2.",
+    IGUI_SLA_TargetXpLeft = "%1 natural skill XP left",
+    IGUI_SLA_TargetCatchUp = "Catch up to free this advancement slot.",
+    IGUI_SLA_RecoveryXpLeft = "%1 lost skill XP left",
+    IGUI_SLA_RecoveryNoSurvivorXp = "No Survivor XP during recovery.",
     IGUI_SLA_Reason_Pending = "An advancement request is pending.",
     IGUI_SLA_Reason_MaximumMismatch = "This skill's progression curve changed.",
     IGUI_SLA_Reason_AtMaximum = "This skill is already at its maximum.",
@@ -261,10 +262,15 @@ local function makeEnvironment(options)
                     nextTargetLevel = source.currentLevel + 1,
                     apCost = source.currentLevel + 1 == source.effectiveMaximum and 2 or 1,
                     enabled = reason == nil,
-                    activeTargetLevels = evidence.targetLevels or { 2, 4 },
-                    naturalPosition = evidence.naturalPosition or 100,
-                    highWaterPosition = evidence.highWaterPosition or 150,
                 }
+                if input.allotment.mode ~= "Free" then
+                    row.activeTargets = evidence.activeTargets or {
+                        { targetLevel = 2, targetPosition = 200 },
+                        { targetLevel = 4, targetPosition = 400 },
+                    }
+                    row.naturalPosition = evidence.naturalPosition == nil and 100 or evidence.naturalPosition
+                    row.highWaterPosition = evidence.highWaterPosition == nil and 150 or evidence.highWaterPosition
+                end
                 if reason ~= nil then row.reasonCode = reason end
                 if input.allotment.mode == "PerSkill" then
                     row.activeCount = 1
@@ -408,9 +414,22 @@ local function makeParent(width, height, ancestor, x, y)
     function parent:getHeight() return self.height end
     function parent:setWidth(value) self.width = value end
     function parent:setHeight(value) self.height = value end
+    function parent:drawText(text, drawX, drawY, r, g, b, a, font)
+        if self.throwDraw then error("parent draw boom") end
+        self.statusDraws[#self.statusDraws + 1] = {
+            kind = "left",
+            text = text,
+            x = drawX,
+            y = drawY,
+            screenX = self.x + drawX - self.xScroll,
+            screenY = self.y + drawY - self.yScroll,
+            font = font,
+        }
+    end
     function parent:drawTextRight(text, drawX, drawY, r, g, b, a, font)
         if self.throwDraw then error("parent draw boom") end
         self.statusDraws[#self.statusDraws + 1] = {
+            kind = "right",
             text = text,
             x = drawX,
             y = drawY,
@@ -439,6 +458,7 @@ local function makeBar(environment, id, options)
         y = options.y or 40,
         width = options.width or 200,
         height = options.height or 20,
+        mouseX = options.mouseX or -1,
         children = {},
         draws = {},
     }
@@ -446,6 +466,7 @@ local function makeBar(environment, id, options)
     function bar:getY() return self.y end
     function bar:getWidth() return self.width end
     function bar:getHeight() return self.height end
+    function bar:getMouseX() return self.mouseX end
     function bar:setWidth(value) self.width = value end
     function bar:addChild(child) self.children[#self.children + 1] = child end
     function bar:drawRectBorder(x, y, width, height, alpha, r, g, b)
@@ -527,6 +548,13 @@ local function total(list)
     return result
 end
 
+local function lastDraw(list, kind)
+    for index = #list, 1, -1 do
+        if list[index].kind == kind then return list[index] end
+    end
+    return nil
+end
+
 expect(type(Build42SkillsUi) == "table", "module loads")
 expect(type(Build42SkillsUi.create) == "function", "module exposes create")
 equal(SkillsUiBootstrapHarness, 19, "bootstrap harness checks")
@@ -559,7 +587,8 @@ local axe = makeBar(environment, "Axe", { player = player })
 local view = makeView(environment, 0, { axe }, true)
 local dockedParent = view.parent
 local dockedOuter = view.outer
-expect(type(view.parent.drawTextRight) == "function", "containing parent exposes ordinary text drawing")
+expect(type(view.parent.drawText) == "function", "containing parent exposes ordinary left text drawing")
+expect(type(view.parent.drawTextRight) == "function", "containing parent exposes ordinary right text drawing")
 equal(view.parent.drawTextRightStatic, nil, "live-faithful parent exposes no static text helper")
 view:prerender()
 equal(environment.priorPrerender, 1, "first prerender chains vanilla once")
@@ -708,20 +737,111 @@ equal(string.find(axeButton.tooltip or "", "secret", 1, true), nil, "backend det
 
 axe:renderPerkRect()
 equal(environment.drawOrder[1], "gold", "vanilla gold renders before overlays")
-equal(#axe.draws, 4, "two targets, marker, and recovery span draw")
+equal(#axe.draws, 5, "two targets, accounting marker, recovery span, and recovery marker draw")
 equal(axe.draws[1].kind, "border", "first overlay is target outline")
 equal(axe.draws[1].x, 20, "level two outline boundary")
 equal(axe.draws[2].x, 60, "level four outline boundary")
 equal(axe.draws[3].x, 29, "fractional high-water marker")
 equal(axe.draws[4].x, 20, "red recovery starts at natural position")
 equal(axe.draws[4].width, 10, "red recovery ends at high-water")
+equal(axe.draws[5].x, 19, "bright recovery marker tracks current natural position")
+expect(axe.draws[1].b < axe.draws[3].b, "target outline is darker than accounting marker")
+expect(axe.draws[4].r < axe.draws[5].r, "recovery span is darker than recovery marker")
 
-axe:updateTooltip(1)
+axe.mouseX = 20
+axe:updateTooltip()
 equal(environment.priorTooltip, 1, "vanilla tooltip runs once")
 expect(string.find(axe.message, "Vanilla tooltip", 1, true) == 1, "vanilla tooltip retained")
-expect(string.find(axe.message, "Blue boxes", 1, true) ~= nil, "target explanation appended")
-expect(string.find(axe.message, "Red shows", 1, true) ~= nil, "recovery explanation appended")
+expect(string.find(axe.message, "50 lost skill XP left", 1, true) ~= nil, "recovery amount uses high-water minus natural XP")
+expect(string.find(axe.message, "No Survivor XP during recovery.", 1, true) ~= nil, "recovery consequence appended")
+equal(string.find(axe.message, "natural skill XP left", 1, true), nil, "red recovery wins blue overlap")
 equal(string.find(axe.message, ";", 1, true), nil, "row tooltip has no semicolon")
+
+axe.mouseX = 30
+axe:updateTooltip()
+expect(string.find(axe.message, "50 lost skill XP left", 1, true) ~= nil,
+    "final red outer edge belongs to recovery region")
+axe.mouseX = 35
+axe:updateTooltip()
+expect(string.find(axe.message, "100 natural skill XP left", 1, true) ~= nil,
+    "first target uses its target-specific remaining XP")
+expect(string.find(axe.message, "Catch up to free this advancement slot.", 1, true) ~= nil,
+    "target consequence appended")
+equal(string.find(axe.message, "Advance to level", 1, true), nil,
+    "skill tooltip never receives button action copy")
+equal(string.find(axe.message, "You need more AP", 1, true), nil,
+    "skill tooltip never receives button reason copy")
+equal(string.find(axe.message, "lost skill XP left", 1, true), nil,
+    "blue-only region omits recovery copy")
+axe.mouseX = 45
+axe:updateTooltip()
+equal(axe.message, "Vanilla tooltip", "gap outside exact overlay regions appends no SLA line")
+axe.mouseX = 60
+axe:updateTooltip()
+expect(string.find(axe.message, "300 natural skill XP left", 1, true) ~= nil,
+    "second target uses its own remaining XP")
+axe.mouseX = 80
+axe:updateTooltip()
+expect(string.find(axe.message, "300 natural skill XP left", 1, true) ~= nil,
+    "final blue outer edge belongs to last visible target")
+
+local boundaryEnvironment = makeEnvironment()
+boundaryEnvironment.activeTargets = {
+    { targetLevel = 2, targetPosition = 200 },
+    { targetLevel = 3, targetPosition = 300 },
+}
+boundaryEnvironment.naturalPosition = 100
+boundaryEnvironment.highWaterPosition = 100
+expect(boundaryEnvironment.integration.install().ok, "boundary integration installs")
+local boundaryBar = makeBar(boundaryEnvironment, "Axe")
+local boundaryView = makeView(boundaryEnvironment, 0, { boundaryBar })
+boundaryView:prerender()
+boundaryBar.mouseX = 20
+boundaryBar:updateTooltip()
+expect(string.find(boundaryBar.message, "100 natural skill XP left", 1, true) ~= nil,
+    "target left edge is inclusive")
+boundaryBar.mouseX = 39.999
+boundaryBar:updateTooltip()
+expect(string.find(boundaryBar.message, "100 natural skill XP left", 1, true) ~= nil,
+    "target interior remains owned by first region")
+boundaryBar.mouseX = 40
+boundaryBar:updateTooltip()
+expect(string.find(boundaryBar.message, "200 natural skill XP left", 1, true) ~= nil,
+    "adjacent exact boundary belongs only to next target")
+equal(string.find(boundaryBar.message, "100 natural skill XP left", 1, true), nil,
+    "adjacent exact boundary excludes previous target")
+boundaryBar.mouseX = 60
+boundaryBar:updateTooltip()
+expect(string.find(boundaryBar.message, "200 natural skill XP left", 1, true) ~= nil,
+    "last adjacent target owns its final outer edge")
+boundaryBar.mouseX = 60.001
+boundaryBar:updateTooltip()
+equal(boundaryBar.message, "Vanilla tooltip", "position beyond final outer edge is outside")
+
+local formatCases = {
+    { targetPosition = 100, expected = "0 natural skill XP left", label = "zero" },
+    { targetPosition = 100.125, expected = "0.13 natural skill XP left", label = "ordinary decimal" },
+    { targetPosition = 100.005, expected = "<0.01 natural skill XP left", label = "positive below hundredth" },
+    { targetPosition = 100.3000000000007, expected = "0.3 natural skill XP left", label = "subtraction noise" },
+}
+for index = 1, #formatCases do
+    local formatCase = formatCases[index]
+    local formatEnvironment = makeEnvironment()
+    formatEnvironment.activeTargets = {
+        { targetLevel = 2, targetPosition = formatCase.targetPosition },
+    }
+    formatEnvironment.naturalPosition = 100
+    formatEnvironment.highWaterPosition = 100
+    expect(formatEnvironment.integration.install().ok, formatCase.label .. " formatter integration installs")
+    local formatBar = makeBar(formatEnvironment, "Axe", { mouseX = 25 })
+    local formatView = makeView(formatEnvironment, 0, { formatBar })
+    formatView:prerender()
+    formatBar:updateTooltip()
+    expect(string.find(formatBar.message, formatCase.expected, 1, true) ~= nil,
+        formatCase.label .. " remaining XP format")
+    equal(string.find(formatBar.message, "e+", 1, true), nil,
+        formatCase.label .. " format avoids scientific notation")
+end
 
 local buttonsBeforeRepeatedRender = environment.buttonCreates
 view:render()
@@ -738,8 +858,8 @@ local rowScreenY = view.parent.y + view.y + view:getYScroll() + axe.y
 view:setYScroll(-60)
 local statusDrawsBeforeScroll = #view.statusDraws
 view:render()
-equal(#view.statusDraws, statusDrawsBeforeScroll + 1,
-    "ordinary containing parent receives exactly one status draw")
+equal(#view.statusDraws, statusDrawsBeforeScroll + 2,
+    "ordinary containing parent receives one split Global header")
 equal(view.statusDraws[#view.statusDraws].screenY, stableStatusY,
     "status screen position stays fixed while skill rows scroll")
 equal(view.parent.y + view.y + view:getYScroll() + axe.y, rowScreenY - 60,
@@ -765,10 +885,12 @@ equal(view.parent.width, view.x + view.width, "view width propagates absolutely 
 equal(view.outer.width, view.parent.x + view.parent.width, "width propagates through every ancestor")
 expect(#view.statusDraws > 0, "status draws on first category row")
 equal(view.statusDraws[#view.statusDraws].y, 18, "status uses fixed parent-local header coordinates")
-expect(string.find(view.statusDraws[#view.statusDraws].text, "AP: 3 unspent", 1, true) ~= nil,
-    "status includes AP")
-expect(string.find(view.statusDraws[#view.statusDraws].text, "Active advancements: 2 / 6", 1, true) ~= nil,
-    "Global status includes active count")
+local globalLeft = lastDraw(view.statusDraws, "left")
+local globalRight = lastDraw(view.statusDraws, "right")
+equal(globalLeft.text, "AP: 3", "Global status binds compact AP left")
+equal(globalLeft.x, 30, "Global AP binds to captured content-left edge")
+equal(globalRight.text, "Advancement Slots: 2/6", "Global status binds slots right")
+equal(globalRight.x, axe.x + axe.width, "Global slots bind to required content-right edge")
 
 local narrowEnvironment = makeEnvironment()
 narrowEnvironment.measureScale = 10
@@ -781,8 +903,10 @@ narrowView.parent.width = 220
 narrowView:prerender()
 narrowView:render()
 local narrowStatus = narrowView.statusDraws[#narrowView.statusDraws]
-local requiredStatusRight = 30 + (#"Long category" * 10) + 12 + (#narrowStatus.text * 10)
-expect(narrowStatus.x >= requiredStatusRight, "long category and status preserve measured spacing")
+local requiredStatusRight = 30 + (#"AP: 3" * 10) + (#"  " * 10)
+    + (#"Advancement Slots: 2/6" * 10)
+equal(narrowStatus.x, requiredStatusRight, "Global labels use independent widths and exact measured gap")
+equal(narrowView.width, requiredStatusRight + 50, "Global width follows exact header equation plus captured gutter")
 expect(narrowView.width > 200 and narrowView.parent.width > 220,
     "narrow view and containing window widen for measured copy")
 
@@ -859,13 +983,16 @@ expect(hostileOk, "throwing Java-like perk lookup is contained")
 equal(#hostilePerk.children, 0, "throwing perk lookup stays vanilla-only")
 
 local aboveTenEnvironment = makeEnvironment()
-aboveTenEnvironment.targetLevels = { 10, 11 }
+aboveTenEnvironment.activeTargets = {
+    { targetLevel = 10, targetPosition = 1000 },
+    { targetLevel = 11, targetPosition = 1100 },
+}
 expect(aboveTenEnvironment.integration.install().ok, "above-ten integration installs")
 local aboveTen = makeBar(aboveTenEnvironment, "LongCurve", { maximum = 12 })
 local aboveTenView = makeView(aboveTenEnvironment, 0, { aboveTen })
 aboveTenView:prerender()
 aboveTen:renderPerkRect()
-equal(#aboveTen.draws, 3, "level eleven is not fabricated beyond ten cells")
+equal(#aboveTen.draws, 4, "level eleven is not fabricated beyond ten cells")
 equal(aboveTen.draws[1].x, 180, "level ten uses last vanilla cell")
 
 local invalidOverlayEnvironment = makeEnvironment()
@@ -917,19 +1044,30 @@ for index = 1, #modes do
         allotment.perSkillOverrides.Axe = 9
         equal(modeEnvironment.lastRawSettings.perSkillOverrides.Axe, 4,
             "model input mutation cannot alter provider result")
-        expect(string.find(modeBar.children[1].tooltip, "Active advancements: 1 / 4.", 1, true) ~= nil,
+        expect(string.find(modeBar.children[1].tooltip, "Advancement Slots: 1/4.", 1, true) ~= nil,
             "Per Skill count is in row tooltip")
+        modeBar.mouseX = 35
+        modeBar:updateTooltip()
+        equal(string.find(modeBar.message, "Advancement Slots", 1, true), nil,
+            "Per Skill slot count never enters skill tooltip")
     else
         expect(exact(allotment, { mode = true }), "Free projection exact")
-        equal(string.find(modeBar.children[1].tooltip, "Active advancements", 1, true), nil,
+        equal(string.find(modeBar.children[1].tooltip, "Advancement Slots", 1, true), nil,
             "Free tooltip omits limits")
+        modeBar:renderPerkRect()
+        equal(#modeBar.draws, 0, "Free draws no accounting overlay")
+        modeBar.mouseX = 25
+        modeBar:updateTooltip()
+        equal(modeBar.message, "Vanilla tooltip", "Free skill tooltip appends no accounting copy")
     end
     modeView:render()
     local statusText = modeView.statusDraws[#modeView.statusDraws].text
-    expect(string.find(statusText, "AP: 3 unspent", 1, true) ~= nil,
+    expect(string.find(statusText, "AP: 3", 1, true) ~= nil,
         modes[index] .. " status includes AP")
-    equal(string.find(statusText, "Active advancements", 1, true), nil,
+    equal(string.find(statusText, "Advancement Slots", 1, true), nil,
         modes[index] .. " status omits global count")
+    equal(lastDraw(modeView.statusDraws, "right"), nil, modes[index] .. " header makes no right draw")
+    equal(modeView.width, 420, modes[index] .. " width uses max control edge plus captured gutter")
 end
 
 local reasons = {
@@ -1022,6 +1160,8 @@ equal(#drawFailureView.statusDraws, 0, "throwing parent records no status draw")
 expect(not drawFailureBar.children[1].enabled, "throwing parent disables only SLA control")
 equal(drawFailureView.y, 8, "throwing parent restores vanilla Y")
 equal(drawFailureView.height, 300, "throwing parent restores vanilla height")
+equal(drawFailureView.width, 400, "throwing parent restores vanilla width")
+equal(drawFailureBar.width, 200, "throwing parent restores vanilla bar width")
 drawFailureView:render()
 equal(drawFailureEnvironment.priorRender, 2, "disabled SLA view keeps later vanilla rendering")
 equal(#drawFailureView.statusDraws, 0, "disabled SLA view does not retry parent drawing")

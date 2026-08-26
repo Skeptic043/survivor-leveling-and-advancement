@@ -152,7 +152,7 @@ local function validatedSnapshot(validate, snapshot)
     return rawget(result, "snapshot")
 end
 
-local function validOwnerSnapshot(snapshot)
+local function validOwnerSnapshot(snapshot, mode)
     if not exactPlainTable(snapshot, {
         protocolVersion = true,
         ready = true,
@@ -186,6 +186,7 @@ local function validOwnerSnapshot(snapshot)
     end
     local perks = rawget(snapshot, "perks")
     if type(perks) ~= "table" or getmetatable(perks) ~= nil then return false end
+    if mode == "Free" then return true end
     for perkId, record in pairs(perks) do
         if not safeId(perkId)
             or not exactPlainTable(record, {
@@ -234,25 +235,30 @@ local function activeCounts(snapshot)
     return counts, total
 end
 
-local function targetLevels(record)
+local function activeTargets(record)
     if record == nil then return {}, false end
     if type(record) ~= "table" or getmetatable(record) ~= nil then return nil end
     local targets = rawget(record, "activeTargets")
     local length = denseLength(targets)
     if length == nil then return nil end
-    local levels = {}
+    local detached = {}
     for index = 1, length do
         local target = rawget(targets, index)
-        if type(target) ~= "table" or getmetatable(target) ~= nil
-            or not positiveInteger(rawget(target, "targetLevel")) then return nil end
-        levels[index] = rawget(target, "targetLevel")
+        if not exactPlainTable(target, { targetLevel = true, targetPosition = true })
+            or not positiveInteger(rawget(target, "targetLevel"))
+            or not finite(rawget(target, "targetPosition"))
+            or rawget(target, "targetPosition") < 0 then return nil end
+        detached[index] = {
+            targetLevel = rawget(target, "targetLevel"),
+            targetPosition = rawget(target, "targetPosition"),
+        }
     end
-    return levels, true
+    return detached, true
 end
 
-local function containsLevel(levels, targetLevel)
-    for index = 1, #levels do
-        if levels[index] == targetLevel then return true end
+local function containsLevel(targets, targetLevel)
+    for index = 1, #targets do
+        if targets[index].targetLevel == targetLevel then return true end
     end
     return false
 end
@@ -323,6 +329,13 @@ local function disabledReason(pending, mismatch, atMaximum, red, availableAp, ap
     return nil
 end
 
+local function freeDisabledReason(pending, atMaximum, availableAp, apCost)
+    if pending then return "pending" end
+    if atMaximum then return "at_maximum" end
+    if availableAp < apCost then return "insufficient_ap" end
+    return nil
+end
+
 local function snapshotHeader(snapshot)
     local survivor = rawget(snapshot, "survivor")
     if type(survivor) ~= "table" or getmetatable(survivor) ~= nil
@@ -365,31 +378,74 @@ function SkillsViewModel.create(dependencies)
             return failure("invalid_input", "fields")
         end
         local snapshot = validatedSnapshot(validate, rawget(input, "snapshot"))
-        if snapshot == nil or not validOwnerSnapshot(snapshot) then
+        if snapshot == nil then
+            return failure("invalid_snapshot", "ClientOwnerState.validate")
+        end
+        local config = validateConfiguration(rawget(input, "allotment"))
+        if config == nil then return failure("invalid_allotment", "configuration") end
+        if not validOwnerSnapshot(snapshot, config.mode) then
             return failure("invalid_snapshot", "ClientOwnerState.validate")
         end
         if rawget(snapshot, "ready") ~= true then
             return failure("invalid_snapshot", "not_ready")
         end
-        local config = validateConfiguration(rawget(input, "allotment"))
-        if config == nil then return failure("invalid_allotment", "configuration") end
         local rows = validateRows(rawget(input, "rows"))
         if rows == nil then return failure("invalid_rows", "rows") end
-        local counts, globalActive = activeCounts(snapshot)
-        if counts == nil then return failure("invalid_snapshot", "perks") end
         local header = snapshotHeader(snapshot)
         if header == nil then return failure("invalid_snapshot", "header") end
+
+        if config.mode == "Free" then
+            local viewRows = {}
+            for index = 1, #rows do
+                local source = rows[index]
+                local atMaximum = source.currentLevel == source.effectiveMaximum
+                local nextTargetLevel = not atMaximum and source.currentLevel + 1 or nil
+                local apCost = nextTargetLevel ~= nil
+                    and (nextTargetLevel == source.effectiveMaximum and 2 or 1) or nil
+                local reason = freeDisabledReason(
+                    rawget(input, "pending"),
+                    atMaximum,
+                    header.survivor.availableAp,
+                    apCost or 0
+                )
+                local row = {
+                    currentLevel = source.currentLevel,
+                    effectiveMaximum = source.effectiveMaximum,
+                    enabled = reason == nil,
+                }
+                if nextTargetLevel ~= nil then
+                    row.nextTargetLevel = nextTargetLevel
+                    row.apCost = apCost
+                end
+                if reason ~= nil then row.reasonCode = reason end
+                viewRows[source.perkId] = row
+            end
+            return {
+                ok = true,
+                view = {
+                    sequence = header.sequence,
+                    revision = header.revision,
+                    survivor = header.survivor,
+                    allotment = { mode = "Free" },
+                    pending = rawget(input, "pending"),
+                    rows = viewRows,
+                },
+            }
+        end
+
+        local counts, globalActive = activeCounts(snapshot)
+        if counts == nil then return failure("invalid_snapshot", "perks") end
 
         local viewRows = {}
         for index = 1, #rows do
             local source = rows[index]
             local record = rawget(snapshot.perks, source.perkId)
-            local levels, published = targetLevels(record)
-            if levels == nil then return failure("invalid_snapshot", "targets") end
+            local targets, published = activeTargets(record)
+            if targets == nil then return failure("invalid_snapshot", "targets") end
             local atMaximum = source.currentLevel == source.effectiveMaximum
             local nextTargetLevel = not atMaximum and source.currentLevel + 1 or nil
             local mastery = nextTargetLevel ~= nil and nextTargetLevel == source.effectiveMaximum
-            local reboost = nextTargetLevel ~= nil and containsLevel(levels, nextTargetLevel)
+            local reboost = nextTargetLevel ~= nil and containsLevel(targets, nextTargetLevel)
             local addsTarget = nextTargetLevel ~= nil and not mastery and not reboost
             local evaluated = evaluateAllotment(
                 evaluate,
@@ -419,7 +475,7 @@ function SkillsViewModel.create(dependencies)
                 currentLevel = source.currentLevel,
                 effectiveMaximum = source.effectiveMaximum,
                 enabled = reason == nil,
-                activeTargetLevels = levels,
+                activeTargets = targets,
             }
             if nextTargetLevel ~= nil then
                 row.nextTargetLevel = nextTargetLevel

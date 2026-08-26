@@ -165,14 +165,17 @@ expect(exactFields(axe, {
     nextTargetLevel = true,
     apCost = true,
     enabled = true,
-    activeTargetLevels = true,
+    activeTargets = true,
     naturalPosition = true,
     highWaterPosition = true,
 }), "enabled published row shape")
 expectEqual(axe.enabled, true, "reboost bypasses full global capacity")
 expectEqual(axe.nextTargetLevel, 4, "ordinary next target")
 expectEqual(axe.apCost, 1, "ordinary cost")
-expectEqual(axe.activeTargetLevels[1], 4, "target level projected")
+expect(exactFields(axe.activeTargets[1], { targetLevel = true, targetPosition = true }),
+    "target projection is exact")
+expectEqual(axe.activeTargets[1].targetLevel, 4, "target level projected")
+expectEqual(axe.activeTargets[1].targetPosition, 250, "target cumulative position projected")
 expectEqual(axe.naturalPosition, 100, "natural position projected")
 expectEqual(axe.highWaterPosition, 100, "high-water position projected")
 
@@ -181,7 +184,7 @@ expectEqual(cooking.enabled, false, "ordinary add blocked at global capacity")
 expectEqual(cooking.reasonCode, "allotment_capacity", "capacity reason")
 expectEqual(cooking.nextTargetLevel, 3, "absent record still gets next target")
 expectEqual(cooking.apCost, 1, "absent record ordinary cost")
-expectEqual(#cooking.activeTargetLevels, 0, "absent record has no target overlays")
+expectEqual(#cooking.activeTargets, 0, "absent record has no target overlays")
 expectEqual(cooking.naturalPosition, nil, "absent record has no natural position")
 expectEqual(cooking.highWaterPosition, nil, "absent record has no high-water position")
 
@@ -285,14 +288,69 @@ expectEqual(fullAligned.ok, true, "aligned capacity build succeeds")
 expectEqual(fullAligned.view.rows.Woodwork.enabled, false, "per-skill capacity blocks new target")
 expectEqual(fullAligned.view.rows.Woodwork.reasonCode, "allotment_capacity", "per-skill capacity reason")
 
-local free = build(model, snapshot(), { mode = "Free" }, false, {
+local freeEvaluations = 0
+local freeModel = SkillsViewModel.create({
+    ClientOwnerState = {
+        validate = function(value) return { ok = true, snapshot = value } end,
+    },
+    Allotment = {
+        evaluate = function()
+            freeEvaluations = freeEvaluations + 1
+            error("Free must not evaluate allotment")
+        end,
+    },
+}).model
+local hostileFreeSnapshot = snapshot()
+hostileFreeSnapshot.perks = {
+    Frozen = setmetatable({}, { __index = function() error("frozen record inspected") end }),
+}
+local free = build(freeModel, hostileFreeSnapshot, { mode = "Free" }, false, {
     { perkId = "Cooking", currentLevel = 2, effectiveMaximum = 10 },
+    { perkId = "Aiming", currentLevel = 9, effectiveMaximum = 10 },
+    { perkId = "Maxed", currentLevel = 10, effectiveMaximum = 10 },
 })
 expectEqual(free.ok, true, "free build succeeds")
 expect(exactFields(free.view.allotment, { mode = true }), "free mode has no limits")
+expectEqual(free.view.survivor.availableAp, 4, "free header retains AP")
 expectEqual(free.view.rows.Cooking.enabled, true, "free mode admits ordinary target")
-expectEqual(free.view.rows.Cooking.activeCount, nil, "free row has no active count")
-expectEqual(free.view.rows.Cooking.limit, nil, "free row has no limit")
+expectEqual(free.view.rows.Cooking.apCost, 1, "free ordinary advancement costs one AP")
+expect(exactFields(free.view.rows.Cooking, {
+    currentLevel = true,
+    effectiveMaximum = true,
+    nextTargetLevel = true,
+    apCost = true,
+    enabled = true,
+}), "free enabled row exposes only action fields")
+expectEqual(free.view.rows.Aiming.apCost, 2, "free final advancement costs two AP")
+expectEqual(free.view.rows.Aiming.enabled, true, "free final advancement is enabled with two AP")
+expect(exactFields(free.view.rows.Maxed, {
+    currentLevel = true,
+    effectiveMaximum = true,
+    enabled = true,
+    reasonCode = true,
+}), "free maximum row exposes only stable blocked fields")
+expectEqual(free.view.rows.Maxed.reasonCode, "at_maximum", "free maximum reason is stable")
+expectEqual(freeEvaluations, 0, "Free never invokes Allotment.evaluate")
+
+local freeLowApSnapshot = snapshot(1)
+freeLowApSnapshot.perks = hostileFreeSnapshot.perks
+local freeLowAp = build(freeModel, freeLowApSnapshot, { mode = "Free" }, false, {
+    { perkId = "Aiming", currentLevel = 9, effectiveMaximum = 10 },
+})
+expectEqual(freeLowAp.ok, true, "free low-AP build succeeds with hostile frozen state")
+expectEqual(freeLowAp.view.rows.Aiming.enabled, false, "one AP cannot buy free final advancement")
+expectEqual(freeLowAp.view.rows.Aiming.reasonCode, "insufficient_ap", "free insufficient AP reason")
+expectEqual(freeLowAp.view.rows.Aiming.activeTargets, nil, "free row omits active targets")
+expectEqual(freeLowAp.view.rows.Aiming.naturalPosition, nil, "free row omits natural position")
+expectEqual(freeLowAp.view.rows.Aiming.highWaterPosition, nil, "free row omits high-water position")
+expectEqual(freeLowAp.view.rows.Aiming.activeCount, nil, "free row omits active count")
+expectEqual(freeLowAp.view.rows.Aiming.limit, nil, "free row omits slot limit")
+local freePending = build(freeModel, hostileFreeSnapshot, { mode = "Free" }, true, {
+    { perkId = "Cooking", currentLevel = 2, effectiveMaximum = 10 },
+})
+expectEqual(freePending.view.rows.Cooking.enabled, false, "pending disables Free advancement")
+expectEqual(freePending.view.rows.Cooking.reasonCode, "pending", "Free pending reason is stable")
+expectEqual(freeEvaluations, 0, "repeated Free builds never invoke Allotment.evaluate")
 
 local split = build(model, snapshot(), globalConfig(), false, {
     { perkId = "Cooking", currentLevel = 2, effectiveMaximum = 10 },
@@ -314,13 +372,14 @@ mutationConfig.perSkillOverrides.Axe = 9
 mutationRows[1].currentLevel = 9
 expectEqual(detached.view.survivor.level, 6, "survivor detached from caller")
 expectEqual(detached.view.rows.Axe.naturalPosition, 100, "position detached from caller")
-expectEqual(detached.view.rows.Axe.activeTargetLevels[1], 4, "target levels detached from caller")
+expectEqual(detached.view.rows.Axe.activeTargets[1].targetLevel, 4, "target levels detached from caller")
+expectEqual(detached.view.rows.Axe.activeTargets[1].targetPosition, 250, "target positions detached from caller")
 expectEqual(detached.view.rows.Axe.limit, 0, "limit detached from caller")
 expectEqual(detached.view.rows.Axe.currentLevel, 3, "row detached from caller")
-detached.view.rows.Axe.activeTargetLevels[1] = 77
+detached.view.rows.Axe.activeTargets[1].targetLevel = 77
 detached.view.survivor.level = 77
 local rebuilt = build(model, snapshot(), perSkillConfig(), false, perSkillRows)
-expectEqual(rebuilt.view.rows.Axe.activeTargetLevels[1], 4, "returned array mutation does not affect later build")
+expectEqual(rebuilt.view.rows.Axe.activeTargets[1].targetLevel, 4, "returned array mutation does not affect later build")
 expectEqual(rebuilt.view.survivor.level, 6, "returned survivor mutation does not affect later build")
 
 local function expectFailure(result, code)

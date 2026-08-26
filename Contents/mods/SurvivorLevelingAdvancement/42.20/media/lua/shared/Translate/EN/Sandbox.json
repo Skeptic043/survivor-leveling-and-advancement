@@ -8,7 +8,7 @@
     "Sandbox_SLA_AutomaticCurveNormalization": "Automatic custom-skill normalization",
     "Sandbox_SLA_AutomaticCurveNormalization_tooltip": "Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.",
     "Sandbox_SLA_AllotmentMode": "Advancement allotment mode",
-    "Sandbox_SLA_AllotmentMode_tooltip": "Choose whether active advancements share one global limit, use limits per skill, or have no limit.",
+    "Sandbox_SLA_AllotmentMode_tooltip": "Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes Advancement Slots and accounting for natural or lost skill XP.",
     "Sandbox_SLA_GlobalAdvancementLimit": "Global advancement limit",
     "Sandbox_SLA_GlobalAdvancementLimit_tooltip": "Maximum active advancements across all skills. Used only in Global mode.",
     "Sandbox_SLA_PerSkillDefaultLimit": "Default per-skill advancement limit",

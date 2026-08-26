@@ -88,7 +88,7 @@ Assert ($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip -eq 'Multiplies S
 Assert ($translations.Sandbox_SLA_FitnessStrengthContribution_tooltip -eq 'Scales Survivor XP from Fitness and Strength before the Survivor XP multiplier. The default is about 6.7%%.') 'Fitness and Strength tooltip wording and escaping'
 Assert ((@([regex]::Matches($jsonText, '%')).Count -eq 2)) 'only the escaped Fitness and Strength literal percent is present'
 Assert ($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip -eq 'Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.') 'custom skill normalization tooltip wording'
-Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Choose whether active advancements share one global limit, use limits per skill, or have no limit.') 'allotment tooltip wording'
+Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes Advancement Slots and accounting for natural or lost skill XP.') 'allotment tooltip wording'
 Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
 Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value. Vanilla skills can override it below.') 'default limit tooltip wording'
 $sandboxTooltips = @($translations.PSObject.Properties | Where-Object Name -like '*_tooltip')
@@ -105,13 +105,14 @@ Assert (-not ($text -match "(?i)$forbidden")) 'sandbox file contains no deferred
 Assert (-not ($info.Values -join ' ' -match "(?i)$forbidden")) 'metadata contains no deferred claims'
 
 $requiredUi = [ordered]@{
-    'IGUI_SLA_StatusAP' = 'AP: %1 unspent'
-    'IGUI_SLA_StatusActive' = 'Active advancements: %1 / %2'
+    'IGUI_SLA_StatusAP' = 'AP: %1'
+    'IGUI_SLA_StatusActive' = 'Advancement Slots: %1/%2'
     'IGUI_SLA_Advance' = 'Advance to level %1 for %2 AP.'
-    'IGUI_SLA_PerSkillActive' = 'Active advancements: %1 / %2.'
-    'IGUI_SLA_Targets' = 'Blue boxes are active AP advancements.'
-    'IGUI_SLA_HighWater' = 'The blue marker shows natural XP progress.'
-    'IGUI_SLA_Recovery' = 'Red shows natural XP recovery still needed.'
+    'IGUI_SLA_PerSkillActive' = 'Advancement Slots: %1/%2.'
+    'IGUI_SLA_TargetXpLeft' = '%1 natural skill XP left'
+    'IGUI_SLA_TargetCatchUp' = 'Catch up to free this advancement slot.'
+    'IGUI_SLA_RecoveryXpLeft' = '%1 lost skill XP left'
+    'IGUI_SLA_RecoveryNoSurvivorXp' = 'No Survivor XP during recovery.'
     'IGUI_SLA_Reason_Pending' = 'An advancement request is pending.'
     'IGUI_SLA_Reason_MaximumMismatch' = "This skill's progression curve changed."
     'IGUI_SLA_Reason_AtMaximum' = 'This skill is already at its maximum.'
