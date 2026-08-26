@@ -104,9 +104,12 @@ end
 local function validateSettings(settings)
     if type(settings) ~= "table" then return failure("invalid_settings", "settings_not_table") end
     for key in pairs(settings) do
-        if key ~= "normalization" and key ~= "survivorMultiplier" and key ~= "postMax" then
+        if key ~= "accountingMode" and key ~= "normalization" and key ~= "survivorMultiplier" and key ~= "postMax" then
             return failure("invalid_settings", "unexpected_field:" .. tostring(key))
         end
+    end
+    if settings.accountingMode ~= "Tracked" and settings.accountingMode ~= "Free" then
+        return failure("invalid_settings", "accountingMode")
     end
     if not isFinite(settings.normalization) or settings.normalization <= 0 then
         return failure("invalid_settings", "normalization")
@@ -245,6 +248,29 @@ local function saveState(store, player, state)
     local saved = callResult(store.save, "store_save", player, state)
     if not saved.ok then return failure("award_save_failed", detailOf(saved)) end
     return { ok = true }
+end
+
+local function synchronizeAccountingMode(deps, player, state, desiredMode)
+    local synchronized = callResult(
+        deps.AccountingMode.synchronizeLoaded,
+        "accounting_mode",
+        player,
+        state,
+        desiredMode
+    )
+    if synchronized.ok ~= true then
+        return failure("accounting_mode_failed", detailOf(synchronized))
+    end
+    if type(synchronized.state) ~= "table"
+        or type(synchronized.transitioned) ~= "boolean"
+        or (synchronized.fromMode ~= "Tracked" and synchronized.fromMode ~= "Free")
+        or synchronized.toMode ~= desiredMode
+        or synchronized.state.accountingMode ~= desiredMode
+        or (synchronized.transitioned and synchronized.fromMode == desiredMode)
+        or (not synchronized.transitioned and (synchronized.fromMode ~= desiredMode or synchronized.state ~= state)) then
+        return failure("accounting_mode_failed", "result_invalid")
+    end
+    return synchronized
 end
 
 local function getObservation(observation, player, perkId)
@@ -420,6 +446,7 @@ function SupportedAwardProcessor.create(dependencies)
         { store, { "load", "save" }, "PlayerStateStore" },
         { dependencies.ActualObservation, { "get", "set" }, "ActualObservation" },
         { dependencies.recoveryService, { "recoverLoadedState" }, "recoveryService" },
+        { dependencies.AccountingMode, { "synchronizeLoaded" }, "AccountingMode" },
     }
     for index = 1, #required do
         if not hasMethods(required[index][1], required[index][2]) then
@@ -443,6 +470,7 @@ function SupportedAwardProcessor.create(dependencies)
         resolver = dependencies.resolver,
         loadOptions = dependencies.resolver.loadOptions,
         recoveryService = dependencies.recoveryService,
+        AccountingMode = dependencies.AccountingMode,
     }
     local service = {}
 
@@ -480,7 +508,56 @@ function SupportedAwardProcessor.create(dependencies)
             or state.revision < 0 then
             return failure("recovery_failed", "state_shape_invalid")
         end
+        local synchronized = synchronizeAccountingMode(deps, player, state, settings.accountingMode)
+        if not synchronized.ok then return synchronized end
+        state = synchronized.state
+        if type(state.perks) ~= "table"
+            or type(state.survivor) ~= "table"
+            or not isInteger(state.revision)
+            or state.revision < 0 then
+            return failure("accounting_mode_failed", "state_shape_invalid")
+        end
         local originalRevision = state.revision
+        local alreadyWritten = recovered.recovered == true or synchronized.transitioned == true
+
+        if state.accountingMode == "Free" then
+            if award.actualPositionAfter - award.actualPositionBefore ~= award.appliedDelta then
+                return failure("invalid_award", "applied_delta_position_mismatch")
+            end
+            local computed = { ok = true, award = zeroAward() }
+            if award.appliedDelta > 0 and award.survivorCreditBase > 0 then
+                computed = computeAward(deps, award.survivorCreditBase, settings, 1, settings.survivorMultiplier)
+            end
+            if not computed.ok then return computed end
+            local survivorXp = computed.award.survivorXp
+            local applied = deps.SurvivorEconomy.applyXp(state.survivor, survivorXp)
+            if type(applied) ~= "table" or not applied.ok then
+                return failure("survivor_transition_failed", detailOf(applied))
+            end
+            local stateChanged = applied.state.level ~= state.survivor.level
+                or applied.state.xpIntoLevel ~= state.survivor.xpIntoLevel
+                or applied.state.spent ~= state.survivor.spent
+            state.survivor = applied.state
+            if state.revision ~= originalRevision then
+                return failure("invalid_state", "revision_changed_during_award")
+            end
+            if stateChanged then
+                local saved = saveState(deps.store, player, state)
+                if not saved.ok then return saved end
+            end
+            return {
+                ok = true,
+                survivorXp = survivorXp,
+                levelsGained = applied.effects.levelsGained,
+                apGained = applied.effects.apGained,
+                recoveryApplied = 0,
+                naturalEligibleBase = computed.award.eligibleBase,
+                postMaxBase = 0,
+                postMaxXp = 0,
+                clearedTargetIds = {},
+                stateWritten = alreadyWritten or stateChanged,
+            }
+        end
 
         local resolved = resolveAdapter(deps.resolver, award.perkId)
         if not resolved.ok then return resolved end
@@ -588,7 +665,7 @@ function SupportedAwardProcessor.create(dependencies)
             postMaxBase = accounting.postMaxAward.eligibleBase,
             postMaxXp = accounting.postMaxXp,
             clearedTargetIds = clearedTargetIds,
-            stateWritten = stateChanged,
+            stateWritten = alreadyWritten or stateChanged,
         }
     end
 

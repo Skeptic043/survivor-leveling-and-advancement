@@ -61,6 +61,7 @@ end
 local function newState(level, spent)
     return {
         schemaVersion = 1,
+        accountingMode = "Tracked",
         revision = 0,
         survivor = { level = level or 3, xpIntoLevel = 0, spent = spent or 0 },
         perks = {},
@@ -131,7 +132,7 @@ local function makeStore(initial, events)
 end
 
 local function makeRuntime(events)
-    local adapter = { ensureCalls = 0, scopeSeen = false }
+    local adapter = { describeCalls = 0, inspectCalls = 0, ensureCalls = 0, scopeSeen = false }
     local handles = {}
     local thresholds = { [0] = 0, 100, 250, 450 }
     local function handleFor(perkId)
@@ -154,6 +155,7 @@ local function makeRuntime(events)
         return level
     end
     function adapter.describe(handle)
+        adapter.describeCalls = adapter.describeCalls + 1
         return {
             ok = true,
             adapterId = handle.adapterId,
@@ -163,6 +165,7 @@ local function makeRuntime(events)
         }
     end
     function adapter.inspect(handle, player)
+        adapter.inspectCalls = adapter.inspectCalls + 1
         local skill = player.skills[handle.perkId]
         if not skill then return { ok = false, code = "missing_skill", detail = handle.perkId } end
         local derived = derivedLevel(skill.position)
@@ -221,8 +224,10 @@ local function makeRuntime(events)
     end
     local resolver = {
         loadOptions = { loadedPerks = { marker = true } },
+        resolveCount = 0,
     }
     function resolver.resolve(perkId)
+        resolver.resolveCount = resolver.resolveCount + 1
         if perkId == "Unknown" then return { ok = false, code = "unsupported", detail = perkId } end
         return { ok = true, adapter = adapter, handle = handleFor(perkId) }
     end
@@ -230,6 +235,40 @@ local function makeRuntime(events)
 end
 
 local function dependenciesFor(store, resolver)
+    if store.accountingMode == nil then
+        store.accountingMode = { calls = 0 }
+        function store.accountingMode.synchronizeLoaded(player, state, desiredMode)
+            store.accountingMode.calls = store.accountingMode.calls + 1
+            store.accountingMode.lastState = state
+            store.accountingMode.lastDesiredMode = desiredMode
+            if state.accountingMode == desiredMode then
+                return {
+                    ok = true,
+                    state = state,
+                    transitioned = false,
+                    fromMode = desiredMode,
+                    toMode = desiredMode,
+                }
+            end
+            local candidate = clone(state)
+            local fromMode = candidate.accountingMode
+            candidate.accountingMode = desiredMode
+            candidate.revision = candidate.revision + 1
+            if desiredMode == "Tracked" then
+                candidate.perks = {}
+                candidate.orphanedPerks = {}
+            end
+            local saved = store.save(player, candidate)
+            if not saved.ok then return saved end
+            return {
+                ok = true,
+                state = candidate,
+                transitioned = true,
+                fromMode = fromMode,
+                toMode = desiredMode,
+            }
+        end
+    end
     return {
         NaturalLedger = NaturalLedger,
         SurvivorEconomy = SurvivorEconomy,
@@ -237,17 +276,41 @@ local function dependenciesFor(store, resolver)
         MutationScope = MutationScope,
         store = store,
         ActualObservation = ActualObservation,
+        AccountingMode = store.accountingMode,
         resolver = resolver,
     }
 end
 
-local function createService(store, adapter, resolver)
-    local created = ApTransaction.create(dependenciesFor(store, resolver))
+local function createService(store, adapter, resolver, overrides)
+    local dependencies = dependenciesFor(store, resolver)
+    if overrides then
+        for key, value in pairs(overrides) do dependencies[key] = value end
+    end
+    local created = ApTransaction.create(dependencies)
     assertTrue(created.ok, "service creation")
     return created.service
 end
 
 local globalThree = { mode = "Global", globalLimit = 3 }
+
+local function throwingFreeSentinels()
+    local function forbidden() error("tracked accounting must not run in Free") end
+    return {
+        NaturalLedger = {
+            baseline = forbidden,
+            inspect = forbidden,
+            reconcileExternal = forbidden,
+            appendTarget = forbidden,
+            master = forbidden,
+        },
+        Allotment = { evaluate = forbidden },
+        ActualObservation = {
+            get = forbidden,
+            set = forbidden,
+            clearPlayer = forbidden,
+        },
+    }
+end
 
 -- Volatile observation semantics and validation.
 do
@@ -402,13 +465,40 @@ do
 end
 do
     local state = newState(3, 0)
-    state.perks.Axe = newPerk(0, 0)
+    state.accountingMode = "Free"
+    state.perks.Axe = newPerk(17, 29, { { targetId = "frozen", targetLevel = 1, targetPosition = 100 } })
+    state.orphanedPerks.Old = newPerk(4, 9, {}, "Old")
+    local frozenPerks = clone(state.perks)
+    local frozenOrphans = clone(state.orphanedPerks)
     local store = makeStore(state)
     local adapter, resolver = makeRuntime()
-    local service = createService(store, adapter, resolver)
+    local service = createService(store, adapter, resolver, throwingFreeSentinels())
     local player = newPlayer("Axe", 2, 250)
     local result = service.spend(player, { perkId = "Axe", requestId = "master_free", expectedRevision = 0 }, { mode = "Free" })
     assertTrue(result.ok, "free mastery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
+    assertEqual(result.apCost, 2, "Free final step uses universal final cost")
+    assertFalse(result.mastered, "Free final step creates no mastery")
+    assertFalse(result.addedTarget, "Free final step creates no target")
+    assertEqual(#result.clearedTargetIds, 0, "Free final step clears no targets")
+    assertEqual(result.spent, 2)
+    assertEqual(result.revision, 1)
+    assertEqual(player.skills.Axe.level, 3)
+    assertEqual(player.skills.Axe.position, 450)
+    assertSame(store.current.perks, frozenPerks, "Free final step preserves frozen perk map byte-for-byte")
+    assertSame(store.current.orphanedPerks, frozenOrphans, "Free final step preserves frozen orphan map byte-for-byte")
+end
+do
+    local state = newState(1, 0)
+    state.accountingMode = "Free"
+    local before = clone(state)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver, throwingFreeSentinels())
+    local player = newPlayer("Axe", 2, 250)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "free_final_short", expectedRevision = 0 }, { mode = "Free" }), "no_ap")
+    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.saves, 0)
+    assertSame(store.current, before, "insufficient Free final step preserves state")
 end
 
 -- One AP and zero-limit configurations reject final mastery without reservation or engine mutation.
@@ -563,7 +653,8 @@ do
     assertEqual(adapter.ensureCalls, 0)
 end
 do
-    local store = makeStore(newState(3, 0))
+    local state = newState(3, 0)
+    local store = makeStore(state)
     local adapter, resolver = makeRuntime()
     local service = createService(store, adapter, resolver)
     local player = newPlayer("Axe", 0, 0)
@@ -573,11 +664,119 @@ do
     assertTrue(allowed.ok)
 end
 do
-    local store = makeStore(newState(3, 0))
+    local state = newState(3, 0)
+    state.accountingMode = "Free"
+    state.perks.Axe = newPerk(12, 34, { { targetId = "frozen", targetLevel = 2, targetPosition = 250 } })
+    state.orphanedPerks.Old = newPerk(5, 8, {}, "Old")
+    local frozenPerks = clone(state.perks)
+    local frozenOrphans = clone(state.orphanedPerks)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver, throwingFreeSentinels())
+    local player = newPlayer("Axe", 0, 0)
+    local result = service.spend(player, { perkId = "Axe", requestId = "free_one", expectedRevision = 0 }, { mode = "Free" })
+    assertTrue(result.ok)
+    assertEqual(result.apCost, 1, "ordinary Free step costs one AP")
+    assertFalse(result.mastered)
+    assertFalse(result.addedTarget)
+    assertEqual(#result.clearedTargetIds, 0)
+    assertEqual(store.saves, 2, "Free spend reserves and commits exactly once")
+    assertEqual(store.current.survivor.spent, 1)
+    assertEqual(store.current.revision, 1)
+    assertSame(store.current.perks, frozenPerks, "ordinary Free spend preserves frozen perks")
+    assertSame(store.current.orphanedPerks, frozenOrphans, "ordinary Free spend preserves frozen orphans")
+end
+do
+    local state = newState(3, 0)
+    state.accountingMode = "Free"
+    state.perks.Axe = newPerk(7, 11)
+    local before = clone(state)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver, throwingFreeSentinels())
+    local player = newPlayer("Axe", 0, 0)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "bad_mode", expectedRevision = 0 }, { mode = "Bogus" }), "allotment_invalid")
+    assertEqual(store.loads, 0, "unknown allotment mode does not load")
+    assertEqual(store.saves, 0, "unknown allotment mode does not save")
+    assertEqual(store.accountingMode.calls, 0, "unknown allotment mode does not synchronize")
+    assertEqual(resolver.resolveCount, 0, "unknown allotment mode does not resolve")
+    assertEqual(adapter.ensureCalls, 0, "unknown allotment mode does not mutate engine")
+    assertSame(store.current, before, "unknown allotment mode preserves persisted Free state")
+end
+do
+    local state = newState(3, 0)
+    state.perks.Axe = newPerk(3, 9)
+    local frozen = clone(state.perks)
+    local store = makeStore(state)
     local adapter, resolver = makeRuntime()
     local service = createService(store, adapter, resolver)
     local player = newPlayer("Axe", 0, 0)
-    assertTrue(service.spend(player, { perkId = "Axe", requestId = "free_one", expectedRevision = 0 }, { mode = "Free" }).ok)
+    local result = service.spend(player, { perkId = "Axe", requestId = "transition_stale", expectedRevision = 0 }, { mode = "Free" })
+    assertCode(result, "stale_revision")
+    assertEqual(store.loads, 1)
+    assertEqual(store.saves, 1, "Tracked-to-Free transition saves exactly once")
+    assertEqual(store.current.accountingMode, "Free")
+    assertEqual(store.current.revision, 1, "mode transition increments revision once")
+    assertSame(store.current.perks, frozen, "Tracked-to-Free transition freezes perk map")
+    assertEqual(resolver.resolveCount, 0, "transition-stale request does not resolve")
+    assertEqual(adapter.ensureCalls, 0, "transition-stale request does not mutate engine")
+end
+do
+    local cases = {
+        { name = "misaligned", level = 1, position = 0, code = "misaligned_progression" },
+        { name = "maxed", level = 3, position = 450, code = "at_maximum" },
+    }
+    for index = 1, #cases do
+        local state = newState(3, 0)
+        state.accountingMode = "Free"
+        state.perks.Axe = newPerk(2, 6)
+        local before = clone(state)
+        local store = makeStore(state)
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver, throwingFreeSentinels())
+        local player = newPlayer("Axe", cases[index].level, cases[index].position)
+        assertCode(service.spend(player, { perkId = "Axe", requestId = "free_" .. cases[index].name, expectedRevision = 0 }, { mode = "Free" }), cases[index].code)
+        assertEqual(store.saves, 0, "rejected Free validation does not save")
+        assertEqual(adapter.ensureCalls, 0, "rejected Free validation does not mutate engine")
+        assertSame(store.current, before, "rejected Free validation preserves state")
+    end
+end
+do
+    local state = newState(3, 0)
+    state.accountingMode = "Free"
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver, throwingFreeSentinels())
+    local player = newPlayer("Axe", 0, 0)
+    local held = MutationScope.begin(player, "Axe")
+    assertTrue(held.ok)
+    assertCode(service.spend(player, { perkId = "Axe", requestId = "free_scope", expectedRevision = 0 }, { mode = "Free" }), "scope_begin_failed")
+    assertEqual(store.saves, 0)
+    assertEqual(adapter.ensureCalls, 0)
+    assertTrue(MutationScope.finish(held.handle).ok)
+end
+do
+    local cases = {
+        { name = "reservation", failSave = 1, code = "reservation_save_failed", engine = false },
+        { name = "engine", behavior = { failNoWrite = true }, code = "engine_mutation_failed", engine = true },
+        { name = "commit", failSave = 2, code = "commit_save_failed", engine = true },
+    }
+    for index = 1, #cases do
+        local state = newState(3, 0)
+        state.accountingMode = "Free"
+        state.perks.Axe = newPerk(13, 21)
+        local frozen = clone(state.perks)
+        local store = makeStore(state)
+        if cases[index].failSave then store.failSaveAt[cases[index].failSave] = true end
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver, throwingFreeSentinels())
+        local player = newPlayer("Axe", 0, 0)
+        if cases[index].behavior then player.behavior.Axe = cases[index].behavior end
+        assertCode(service.spend(player, { perkId = "Axe", requestId = "free_" .. cases[index].name, expectedRevision = 0 }, { mode = "Free" }), cases[index].code)
+        assertEqual(adapter.ensureCalls, cases[index].engine and 1 or 0)
+        assertSame(store.current.perks, frozen, "Free failure preserves frozen perks")
+        assertFalse(MutationScope.isActive(player, "Axe"), "Free failure cleans mutation scope")
+    end
 end
 do
     local state = newState(2, 1)
@@ -703,6 +902,61 @@ local function reservationState(options)
         effectiveMaximum = 3,
     }
     return state
+end
+
+-- Free recovery derives universal costs and completes without touching frozen accounting.
+do
+    local cases = {
+        { final = false, level = 0, position = 0, cost = 1 },
+        { final = true, level = 2, position = 250, cost = 2 },
+    }
+    for index = 1, #cases do
+        local state = reservationState({ final = cases[index].final })
+        state.accountingMode = "Free"
+        state.perks.Axe.naturalPosition = 19
+        state.perks.Axe.highWaterPosition = 37
+        state.perks.Axe.activeTargets = { { targetId = "frozen", targetLevel = 2, targetPosition = 250 } }
+        state.orphanedPerks.Old = newPerk(4, 8, {}, "Old")
+        local frozenPerks = clone(state.perks)
+        local frozenOrphans = clone(state.orphanedPerks)
+        local store = makeStore(state)
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver, throwingFreeSentinels())
+        local player = newPlayer("Axe", cases[index].level, cases[index].position)
+        local result = service.recover(player)
+        assertTrue(result.ok, "Free recovery succeeds")
+        assertTrue(result.recovered)
+        assertEqual(result.apCost, cases[index].cost)
+        assertFalse(result.mastered, "Free recovery never reports mastery")
+        assertFalse(result.addedTarget, "Free recovery never adds a target")
+        assertEqual(#result.clearedTargetIds, 0, "Free recovery never clears targets")
+        assertEqual(store.saves, 1, "Free recovery commits exactly once")
+        assertEqual(store.current.revision, 1)
+        assertEqual(store.current.survivor.spent, cases[index].cost)
+        assertEqual(store.current.inFlightAdvancement, nil)
+        assertSame(store.current.perks, frozenPerks, "Free recovery preserves frozen perks")
+        assertSame(store.current.orphanedPerks, frozenOrphans, "Free recovery preserves frozen orphans")
+    end
+end
+
+-- Recovery completes under the persisted mode before a requested transition is synchronized.
+do
+    local state = reservationState()
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    local result = service.spend(player, { perkId = "Axe", requestId = "after_recovery_transition", expectedRevision = 0 }, { mode = "Free" })
+    assertCode(result, "stale_revision")
+    assertEqual(store.loads, 1, "recovery-transition spend loads once")
+    assertEqual(store.saves, 2, "recovery and transition each save once")
+    assertEqual(adapter.ensureCalls, 1, "only recovery mutates the engine")
+    assertEqual(resolver.resolveCount, 1, "stale post-transition request does not resolve again")
+    assertEqual(store.accountingMode.lastState.revision, 1, "synchronization receives recovered revision")
+    assertEqual(store.accountingMode.lastState.inFlightAdvancement, nil, "synchronization receives completed recovery")
+    assertEqual(store.current.accountingMode, "Free")
+    assertEqual(store.current.revision, 2, "recovery and transition each increment revision once")
+    assertEqual(store.current.survivor.spent, 1)
 end
 
 -- Loaded-state recovery returns the authoritative committed state without reloading.

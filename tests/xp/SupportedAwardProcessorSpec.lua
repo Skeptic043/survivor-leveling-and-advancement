@@ -41,6 +41,7 @@ end
 local function freshState()
     return {
         schemaVersion = 1,
+        accountingMode = "Tracked",
         revision = 0,
         survivor = { level = 0, xpIntoLevel = 0, spent = 0 },
         perks = {},
@@ -72,6 +73,7 @@ end
 
 local function settings(normalization, multiplier, enabled, allowance, diminished)
     return {
+        accountingMode = "Tracked",
         normalization = normalization or 1,
         survivorMultiplier = multiplier or 1,
         postMax = {
@@ -80,6 +82,12 @@ local function settings(normalization, multiplier, enabled, allowance, diminishe
             diminishedRate = diminished or 0,
         },
     }
+end
+
+local function freeSettings(normalization, multiplier)
+    local value = settings(normalization, multiplier)
+    value.accountingMode = "Free"
+    return value
 end
 
 local function award(base, applied, before, after, effective)
@@ -182,6 +190,7 @@ local function makeEnvironment(config)
     function resolver.resolve(perkId)
         resolver.resolveCount = resolver.resolveCount + 1
         log[#log + 1] = "resolve"
+        if config.throwResolve then error("resolver forbidden in Free") end
         if config.failResolve then return { ok = false, code = "not_found", detail = perkId } end
         return { ok = true, adapter = adapter, handle = {} }
     end
@@ -200,18 +209,67 @@ local function makeEnvironment(config)
         return { ok = true, recovered = config.recovered == true, state = loadedState }
     end
 
+    local accountingMode = config.accountingModeService or { count = 0 }
+    if accountingMode.synchronizeLoaded == nil then
+        function accountingMode.synchronizeLoaded(synchronizedPlayer, synchronizedState, desiredMode)
+            accountingMode.count = accountingMode.count + 1
+            log[#log + 1] = "synchronize"
+            if config.throwSynchronization then error("private synchronization detail") end
+            if config.malformedSynchronization then return "not-a-result" end
+            if config.malformedSynchronizationShape then
+                return {
+                    ok = true,
+                    state = synchronizedState,
+                    transitioned = "yes",
+                    fromMode = synchronizedState.accountingMode,
+                    toMode = desiredMode,
+                }
+            end
+            if config.failSynchronization then
+                return { ok = false, code = "sync_failed", detail = "fixture" }
+            end
+            if synchronizedState.accountingMode == desiredMode then
+                return {
+                    ok = true,
+                    state = synchronizedState,
+                    transitioned = false,
+                    fromMode = desiredMode,
+                    toMode = desiredMode,
+                }
+            end
+            local candidate = deepCopy(synchronizedState)
+            local fromMode = candidate.accountingMode
+            candidate.accountingMode = desiredMode
+            candidate.revision = candidate.revision + 1
+            if desiredMode == "Tracked" then
+                candidate.perks = {}
+                candidate.orphanedPerks = {}
+            end
+            local saved = store.save(synchronizedPlayer, candidate)
+            if not saved.ok then return saved end
+            return {
+                ok = true,
+                state = candidate,
+                transitioned = true,
+                fromMode = fromMode,
+                toMode = desiredMode,
+            }
+        end
+    end
+
     local observation = config.observation or makeObservation()
     if config.observed ~= nil then observation.set(player, "Aiming", config.observed) end
     if config.logObservation then observation.eventLog = log end
     local created = SupportedAwardProcessor.create({
-        NaturalLedger = NaturalLedger,
+        NaturalLedger = config.naturalLedger or NaturalLedger,
         SurvivorEconomy = SurvivorEconomy,
-        PostMax = PostMax,
+        PostMax = config.postMaxService or PostMax,
         MutationScope = config.mutationScope or MutationScope,
         PlayerStateStore = store,
         ActualObservation = observation,
         resolver = resolver,
         recoveryService = recovery,
+        AccountingMode = accountingMode,
     })
     expect(created.ok, "processor creation")
     return {
@@ -220,6 +278,7 @@ local function makeEnvironment(config)
         store = store,
         resolver = resolver,
         recovery = recovery,
+        accountingMode = accountingMode,
         observation = observation,
         log = log,
         loadOptions = loadOptions,
@@ -264,6 +323,9 @@ do
     equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "invalid normalization")
     badSettings = settings(1, 1, true, 1, 2)
     equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "invalid postmax rate")
+    badSettings = settings()
+    badSettings.accountingMode = "Bogus"
+    equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "accounting mode must be exact")
     equal(env.recovery.count, 0, "validation failures precede recovery")
     equal(env.store.loadCount, 0, "validation failures precede load")
 end
@@ -276,7 +338,8 @@ do
     expect(result.ok, "loaded-state recovery success")
     equal(env.log[1], "load", "store load occurs first")
     equal(env.log[2], "recover", "loaded-state recovery follows load")
-    equal(env.log[3], "resolve", "resolve follows loaded-state recovery")
+    equal(env.log[3], "synchronize", "mode synchronization follows loaded-state recovery")
+    equal(env.log[4], "resolve", "resolve follows mode synchronization")
     expect(env.store.lastOptions == env.loadOptions, "resolver load options passed exactly")
     expect(env.recovery.lastState == env.store.lastLoadedState, "recovery receives loaded working state directly")
     equal(env.store.loadCount, 1, "ordinary award loads once")
@@ -295,6 +358,166 @@ do
     equal(thrownResult.detail, "recovery_error:dependency_threw", "thrown recovery detail is deterministic")
     expect(not thrownResult.detail:find("private", 1, true), "thrown recovery detail hides runtime text")
     equal(thrown.store.loadCount, 1, "thrown recovery follows one load")
+end
+
+-- Free awards use only the authoritative envelope and Survivor economy.
+do
+    local function forbidden() error("tracked award dependency called in Free") end
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.perks.Aiming = perkRecord(7, 99, { target("frozen", 4, 40) }, 13)
+    state.orphanedPerks.Old = perkRecord(3, 8)
+    local frozenPerks = deepCopy(state.perks)
+    local frozenOrphans = deepCopy(state.orphanedPerks)
+    local env = makeEnvironment({
+        state = state,
+        position = 10,
+        throwResolve = true,
+        naturalLedger = {
+            baseline = forbidden,
+            inspect = forbidden,
+            applySupported = forbidden,
+            reconcileExternal = forbidden,
+        },
+        postMaxService = { apply = forbidden },
+        observation = { get = forbidden, set = forbidden },
+    })
+    local result = env.service.process(env.player, award(10, 10, 0, 10), freeSettings(2, 3))
+    expect(result.ok, "positive Free award succeeds")
+    equal(result.survivorXp, 60, "Free normalization and multiplier apply once")
+    equal(result.naturalEligibleBase, 10, "Free positive movement accepts the full base")
+    equal(result.recoveryApplied, 0, "Free has no red recovery")
+    equal(result.postMaxBase, 0, "Free has no post-max accounting")
+    equal(result.postMaxXp, 0, "Free has no post-max XP")
+    equal(#result.clearedTargetIds, 0, "Free clears no targets")
+    expect(result.stateWritten, "positive Free award writes Survivor state")
+    equal(env.store.saveCount, 1, "positive Free award saves once")
+    equal(env.store.state.revision, 0, "ordinary Free award does not change revision")
+    expect(deepEqual(env.store.state.perks, frozenPerks), "Free award preserves frozen perks byte-for-byte")
+    expect(deepEqual(env.store.state.orphanedPerks, frozenOrphans), "Free award preserves frozen orphans byte-for-byte")
+    equal(env.resolver.resolveCount, 0, "Free award does not resolve an adapter")
+end
+do
+    local cases = {
+        { name = "zero_movement", base = 9, applied = 0, before = 10, after = 10 },
+        { name = "zero_credit", base = 0, applied = 5, before = 10, after = 15 },
+        { name = "negative", base = 0, applied = -5, before = 10, after = 5 },
+    }
+    for index = 1, #cases do
+        local state = freshState()
+        state.accountingMode = "Free"
+        local env = makeEnvironment({ state = state, position = cases[index].after })
+        local result = env.service.process(
+            env.player,
+            award(cases[index].base, cases[index].applied, cases[index].before, cases[index].after),
+            freeSettings()
+        )
+        expect(result.ok, "Free zero/negative case succeeds: " .. cases[index].name)
+        equal(result.survivorXp, 0, "Free zero/negative movement grants zero")
+        equal(result.stateWritten, false, "Free zero/negative movement avoids a write")
+        equal(env.store.saveCount, 0, "Free zero/negative movement performs no save")
+        equal(env.resolver.resolveCount, 0, "Free zero/negative movement performs no resolve")
+        equal(env.observation.getCount, 0, "Free zero/negative movement performs no observation read")
+        equal(env.observation.setCount, 0, "Free zero/negative movement performs no observation write")
+    end
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.survivor.xpIntoLevel = 1195
+    state.perks.Aiming = perkRecord(0, 100)
+    local frozen = deepCopy(state.perks)
+    local env = makeEnvironment({ state = state, position = 10 })
+    local result = env.service.process(env.player, award(10, 10, 0, 10), freeSettings())
+    expect(result.ok, "Free re-earned threshold-crossing XP succeeds")
+    equal(result.survivorXp, 10, "threshold award Survivor XP")
+    equal(result.levelsGained, 1, "threshold award levels gained")
+    equal(result.apGained, 1, "threshold award AP gained")
+    equal(env.store.state.survivor.level, 1, "threshold award persisted level")
+    equal(env.store.state.survivor.xpIntoLevel, 5, "threshold award persisted remainder")
+    expect(deepEqual(env.store.state.perks, frozen), "re-earned Free XP leaves frozen high-water state unchanged")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    local env = makeEnvironment({ state = state, position = 4 })
+    local result = env.service.process(env.player, award(4, 5, 0, 4), freeSettings())
+    equal(result.code, "invalid_award", "Free signed movement must match the envelope positions")
+    equal(env.store.saveCount, 0, "invalid Free movement does not save")
+    equal(env.resolver.resolveCount, 0, "invalid Free movement does not resolve")
+end
+
+-- Mode boundaries select the synchronized branch exactly once.
+do
+    local state = freshState()
+    state.perks.Aiming = perkRecord(5, 12, { target("frozen", 2, 20) }, 7)
+    local frozen = deepCopy(state.perks)
+    local env = makeEnvironment({ state = state, position = 10 })
+    local result = env.service.process(env.player, award(10, 10, 0, 10), freeSettings())
+    expect(result.ok, "Tracked-to-Free boundary award succeeds")
+    equal(result.survivorXp, 10, "Tracked-to-Free boundary follows Free once")
+    equal(env.store.saveCount, 2, "transition and award each save once")
+    equal(env.store.state.accountingMode, "Free", "Tracked-to-Free persisted mode")
+    equal(env.store.state.revision, 1, "Tracked-to-Free persisted revision")
+    expect(deepEqual(env.store.state.perks, frozen), "Tracked-to-Free boundary freezes tracked map")
+    equal(env.resolver.resolveCount, 0, "Tracked-to-Free boundary does not enter tracked processing")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.perks.Aiming = perkRecord(50, 70, { target("discarded", 8, 80) }, 9)
+    state.orphanedPerks.Old = perkRecord(1, 2)
+    local env = makeEnvironment({ state = state, observed = 0, position = 10 })
+    local result = env.service.process(env.player, award(10, 10, 0, 10), settings())
+    expect(result.ok, "Free-to-Tracked boundary award succeeds")
+    equal(result.survivorXp, 10, "Free-to-Tracked boundary credits event once")
+    equal(env.store.saveCount, 2, "Free-to-Tracked transition and award each save once")
+    equal(env.store.state.accountingMode, "Tracked", "Free-to-Tracked persisted mode")
+    equal(env.store.state.revision, 1, "Free-to-Tracked persisted revision")
+    equal(env.store.state.perks.Aiming.naturalPosition, 10, "boundary baselines before and applies event once")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 10, "boundary applies high water once")
+    equal(env.store.state.orphanedPerks.Old, nil, "returning to Tracked clears frozen orphan map")
+end
+do
+    local state = freshState()
+    state.perks.Aiming = perkRecord(1, 2)
+    local env = makeEnvironment({ state = state, position = 0 })
+    local result = env.service.process(env.player, award(0, 0, 0, 0), freeSettings())
+    expect(result.ok, "transition-only zero Free award succeeds")
+    expect(result.stateWritten, "transition-only zero reports prior durable write")
+    equal(env.store.saveCount, 1, "transition-only zero avoids a second save")
+    equal(env.resolver.resolveCount, 0, "transition-only Free skips resolver")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    local env = makeEnvironment({ state = state, position = 0, recovered = true, recoverySave = true })
+    local result = env.service.process(env.player, award(0, 0, 0, 0), freeSettings())
+    expect(result.ok, "recovery-only zero Free award succeeds")
+    expect(result.stateWritten, "recovery-only zero reports prior durable write")
+    equal(env.store.saveCount, 1, "recovery-only zero avoids a second save")
+    equal(env.resolver.resolveCount, 0, "recovery-only Free skips resolver")
+end
+
+-- Synchronization failures are contained before branch-specific dependencies run.
+do
+    local cases = {
+        { name = "thrown", config = { throwSynchronization = true }, detail = "accounting_mode_error:dependency_threw" },
+        { name = "malformed", config = { malformedSynchronization = true }, detail = "accounting_mode_invalid:not_result" },
+        { name = "malformed_shape", config = { malformedSynchronizationShape = true }, detail = "result_invalid" },
+    }
+    for index = 1, #cases do
+        local env = makeEnvironment(cases[index].config)
+        local result = env.service.process(env.player, award(0, 0, 0, 0), settings())
+        equal(result.code, "accounting_mode_failed", "synchronization failure code")
+        equal(result.detail, cases[index].detail, "synchronization failure detail")
+        equal(env.store.loadCount, 1, "synchronization failure follows one load")
+        equal(env.recovery.count, 1, "synchronization failure follows recovery")
+        equal(env.store.saveCount, 0, "synchronization failure performs no save")
+        equal(env.resolver.resolveCount, 0, "synchronization failure performs no resolve")
+        equal(env.observation.getCount, 0, "synchronization failure performs no observation read")
+        equal(env.observation.setCount, 0, "synchronization failure performs no observation write")
+    end
 end
 
 do

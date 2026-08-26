@@ -231,6 +231,29 @@ local function saveState(store, player, state, code)
     return { ok = true }
 end
 
+local function synchronizeAccountingMode(deps, player, state, desiredMode)
+    local synchronized = callResult(
+        deps.AccountingMode.synchronizeLoaded,
+        "accounting_mode",
+        player,
+        state,
+        desiredMode
+    )
+    if synchronized.ok ~= true then
+        return failure("accounting_mode_failed", detailOf(synchronized))
+    end
+    if type(synchronized.state) ~= "table"
+        or type(synchronized.transitioned) ~= "boolean"
+        or (synchronized.fromMode ~= "Tracked" and synchronized.fromMode ~= "Free")
+        or synchronized.toMode ~= desiredMode
+        or synchronized.state.accountingMode ~= desiredMode
+        or (synchronized.transitioned and synchronized.fromMode == desiredMode)
+        or (not synchronized.transitioned and (synchronized.fromMode ~= desiredMode or synchronized.state ~= state)) then
+        return failure("accounting_mode_failed", "result_invalid")
+    end
+    return synchronized
+end
+
 local function activeByPerk(state)
     local active = {}
     for perkId, record in pairs(state.perks) do
@@ -306,12 +329,13 @@ local function performEnsureInScope(
     identity,
     targetLevel,
     targetPosition,
-    scopeHandle
+    scopeHandle,
+    updateObservation
 )
     local ensured = callResult(adapter.ensureTarget, "adapter_ensure", handle, player, targetLevel, targetPosition)
     local finished = finishScope(deps, scopeHandle)
     local post = inspectAdapter(adapter, handle, player, identity)
-    if post.ok then
+    if post.ok and updateObservation then
         local observed = setObservation(deps.ActualObservation, player, perkId, post.inspection.actualPosition)
         if not observed.ok then return observed end
     end
@@ -339,7 +363,8 @@ local function performEnsureWithNewScope(
     handle,
     identity,
     targetLevel,
-    targetPosition
+    targetPosition,
+    updateObservation
 )
     local begun = beginScope(deps, player, perkId)
     if not begun.ok then return begun end
@@ -352,7 +377,8 @@ local function performEnsureWithNewScope(
         identity,
         targetLevel,
         targetPosition,
-        begun.handle
+        begun.handle,
+        updateObservation
     )
 end
 
@@ -382,40 +408,46 @@ local function recoverLoaded(deps, player, state)
         return failure("recovery_quarantined", "adapter_identity_mismatch")
     end
 
-    local record = state.perks[reservation.perkId]
-    if record ~= nil and not sameIdentity(record, identity) then
-        return failure("recovery_quarantined", "perk_identity_mismatch")
-    end
-    if record == nil then
-        local baseline = deps.NaturalLedger.baseline(reservation.prePosition)
-        if type(baseline) ~= "table" or not baseline.ok then
-            return failure("recovery_quarantined", "baseline_" .. detailOf(baseline))
-        end
-        record = perkFromBaseline(identity, baseline.state)
-    end
-
-    local mastered = reservation.targetLevel == reservation.effectiveMaximum
+    local free = state.accountingMode == "Free"
+    local record
+    local mastered = false
     local ledgerResult
-    if mastered then
-        local ledgerInspection = deps.NaturalLedger.inspect(ledgerFromPerk(record))
-        if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
-            return failure("recovery_quarantined", "ledger_" .. detailOf(ledgerInspection))
+    local addedTarget = false
+    if not free then
+        record = state.perks[reservation.perkId]
+        if record ~= nil and not sameIdentity(record, identity) then
+            return failure("recovery_quarantined", "perk_identity_mismatch")
         end
-        if ledgerInspection.red then
-            return failure("recovery_quarantined", "natural_recovery_required")
+        if record == nil then
+            local baseline = deps.NaturalLedger.baseline(reservation.prePosition)
+            if type(baseline) ~= "table" or not baseline.ok then
+                return failure("recovery_quarantined", "baseline_" .. detailOf(baseline))
+            end
+            record = perkFromBaseline(identity, baseline.state)
         end
-        ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), reservation.targetPosition)
-    else
-        ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
-            targetId = reservation.requestId,
-            targetLevel = reservation.targetLevel,
-            targetPosition = reservation.targetPosition,
-        }, reservation.effectiveMaximum)
+
+        mastered = reservation.targetLevel == reservation.effectiveMaximum
+        if mastered then
+            local ledgerInspection = deps.NaturalLedger.inspect(ledgerFromPerk(record))
+            if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
+                return failure("recovery_quarantined", "ledger_" .. detailOf(ledgerInspection))
+            end
+            if ledgerInspection.red then
+                return failure("recovery_quarantined", "natural_recovery_required")
+            end
+            ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), reservation.targetPosition)
+        else
+            ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
+                targetId = reservation.requestId,
+                targetLevel = reservation.targetLevel,
+                targetPosition = reservation.targetPosition,
+            }, reservation.effectiveMaximum)
+        end
+        if type(ledgerResult) ~= "table" or not ledgerResult.ok then
+            return failure("recovery_quarantined", "target_" .. detailOf(ledgerResult))
+        end
+        addedTarget = not mastered and ledgerResult.added or false
     end
-    if type(ledgerResult) ~= "table" or not ledgerResult.ok then
-        return failure("recovery_quarantined", "target_" .. detailOf(ledgerResult))
-    end
-    local addedTarget = not mastered and ledgerResult.added or false
 
     local inspected = inspectAdapter(resolved.adapter, resolved.handle, player, identity)
     if not inspected.ok then return failure("recovery_quarantined", detailOf(inspected)) end
@@ -435,15 +467,18 @@ local function recoverLoaded(deps, player, state)
         resolved.handle,
         identity,
         reservation.targetLevel,
-        reservation.targetPosition
+        reservation.targetPosition,
+        not free
     )
     if not ensured.ok then return failure("recovery_quarantined", detailOf(ensured)) end
 
     local committed, stateError = cloneValue(state)
     if not committed then return failure("recovery_quarantined", "state_" .. stateError) end
-    local committedRecord, recordError = applyLedger(record, ledgerResult.state)
-    if not committedRecord then return failure("recovery_quarantined", "record_" .. recordError) end
-    committed.perks[reservation.perkId] = committedRecord
+    if not free then
+        local committedRecord, recordError = applyLedger(record, ledgerResult.state)
+        if not committedRecord then return failure("recovery_quarantined", "record_" .. recordError) end
+        committed.perks[reservation.perkId] = committedRecord
+    end
     committed.survivor.spent = reservation.preSpent + apCost
     committed.revision = reservation.preRevision + 1
     committed.inFlightAdvancement = nil
@@ -500,6 +535,7 @@ function ApTransaction.create(dependencies)
         { dependencies.MutationScope, { "begin", "finish" }, "MutationScope" },
         { store, { "load", "save" }, "PlayerStateStore" },
         { dependencies.ActualObservation, { "get", "set", "clearPlayer" }, "ActualObservation" },
+        { dependencies.AccountingMode, { "synchronizeLoaded" }, "AccountingMode" },
     }
     for index = 1, #required do
         if not hasMethods(required[index][1], required[index][2]) then
@@ -520,6 +556,7 @@ function ApTransaction.create(dependencies)
         MutationScope = dependencies.MutationScope,
         store = store,
         ActualObservation = dependencies.ActualObservation,
+        AccountingMode = dependencies.AccountingMode,
         resolver = dependencies.resolver,
         loadOptions = dependencies.resolver.loadOptions,
     }
@@ -539,14 +576,29 @@ function ApTransaction.create(dependencies)
     end
 
     function service.spend(player, request, allotmentConfig)
+        if type(allotmentConfig) ~= "table"
+            or (allotmentConfig.mode ~= "Global"
+                and allotmentConfig.mode ~= "PerSkill"
+                and allotmentConfig.mode ~= "Free") then
+            return failure("allotment_invalid", "mode_invalid")
+        end
         local loaded = loadState(deps.store, player, deps.loadOptions)
         if not loaded.ok then return loaded end
         local recovered = service.recoverLoadedState(player, loaded.state)
         if not recovered.ok then return recovered end
         local state = recovered.state
 
+        local desiredMode = allotmentConfig.mode == "Free" and "Free" or "Tracked"
+        local synchronized = synchronizeAccountingMode(deps, player, state, desiredMode)
+        if not synchronized.ok then return synchronized end
+        state = synchronized.state
+
         local requestValid = validateRequest(request)
         if not requestValid.ok then return requestValid end
+        if (synchronized.transitioned == true or state.accountingMode == "Free")
+            and request.expectedRevision ~= state.revision then
+            return failure("stale_revision", "expected_revision_mismatch")
+        end
         local resolved = resolveAdapter(deps.resolver, request.perkId)
         if not resolved.ok then return resolved end
         local described = describeAdapter(resolved.adapter, resolved.handle)
@@ -555,6 +607,78 @@ function ApTransaction.create(dependencies)
         local inspected = inspectAdapter(resolved.adapter, resolved.handle, player, identity)
         if not inspected.ok then return inspected end
         local actual = inspected.inspection
+
+        if state.accountingMode == "Free" then
+            local available = deps.SurvivorEconomy.availableAp(state.survivor)
+            if type(available) ~= "table" or not available.ok then
+                return failure("invalid_state", "survivor_" .. detailOf(available))
+            end
+            if available.availableAp < 1 then return failure("no_ap", "no_available_ap") end
+            if not actual.levelAligned then return failure("misaligned_progression", actual.alignment or "unaligned") end
+            if actual.storedLevel >= identity.effectiveMaximum then return failure("at_maximum", "effective_maximum") end
+            local apCost = advancementCost(actual.nextTargetLevel, identity.effectiveMaximum)
+            if available.availableAp < apCost then return failure("no_ap", "insufficient_ap_for_advancement") end
+            local reservationState, stateError = cloneValue(state)
+            if not reservationState then return failure("invalid_state", stateError) end
+            reservationState.inFlightAdvancement = {
+                requestId = request.requestId,
+                perkId = request.perkId,
+                preRevision = state.revision,
+                preSpent = state.survivor.spent,
+                preLevel = actual.storedLevel,
+                prePosition = actual.actualPosition,
+                targetLevel = actual.nextTargetLevel,
+                targetPosition = actual.nextTargetPosition,
+                adapterId = identity.adapterId,
+                adapterVersion = identity.adapterVersion,
+                curveFingerprint = identity.curveFingerprint,
+                effectiveMaximum = identity.effectiveMaximum,
+            }
+            local begun = beginScope(deps, player, request.perkId)
+            if not begun.ok then return begun end
+            local reserved = saveState(deps.store, player, reservationState, "reservation_save_failed")
+            if not reserved.ok then
+                local finished = finishScope(deps, begun.handle)
+                if not finished.ok then return finished end
+                return reserved
+            end
+            local ensured = performEnsureInScope(
+                deps,
+                player,
+                request.perkId,
+                resolved.adapter,
+                resolved.handle,
+                identity,
+                actual.nextTargetLevel,
+                actual.nextTargetPosition,
+                begun.handle,
+                false
+            )
+            if not ensured.ok then return ensured end
+
+            local committed, commitError = cloneValue(reservationState)
+            if not committed then return failure("commit_save_failed", commitError) end
+            committed.survivor.spent = state.survivor.spent + apCost
+            committed.revision = state.revision + 1
+            committed.inFlightAdvancement = nil
+            local saved = saveState(deps.store, player, committed, "commit_save_failed")
+            if not saved.ok then return saved end
+            return {
+                ok = true,
+                requestId = request.requestId,
+                perkId = request.perkId,
+                revision = committed.revision,
+                spent = committed.survivor.spent,
+                availableAp = committed.survivor.level - committed.survivor.spent,
+                apCost = apCost,
+                mastered = false,
+                addedTarget = false,
+                clearedTargetIds = {},
+                xpWriteInvoked = ensured.xpWriteInvoked,
+                levelWriteInvoked = ensured.levelWriteInvoked,
+                recovered = recovered.recovered,
+            }
+        end
 
         local record = state.perks[request.perkId]
         if record ~= nil and not sameIdentity(record, identity) then
@@ -657,7 +781,8 @@ function ApTransaction.create(dependencies)
             identity,
             actual.nextTargetLevel,
             actual.nextTargetPosition,
-            begun.handle
+            begun.handle,
+            true
         )
         if not ensured.ok then return ensured end
 
