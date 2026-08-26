@@ -65,6 +65,22 @@ function Build42SandboxMultiplier.create(dependencies)
 
     local resolver = {}
 
+    local function namedOption(sandboxOptions, optionName, code)
+        local optionOK, option = callMethod(sandboxOptions, "getOptionByName", optionName)
+        if not optionOK or option == nil then
+            return nil, failure(code, "SandboxOptions.getOptionByName must resolve the requested option")
+        end
+        local configOK, configOption = callMethod(option, "asConfigOption")
+        if not configOK or configOption == nil then
+            return nil, failure(code, "option must expose a config option")
+        end
+        local nameOK, resolvedName = callMethod(configOption, "getName")
+        if not nameOK or resolvedName ~= optionName then
+            return nil, failure(code, "resolved option name must match the requested option")
+        end
+        return { option = option, config = configOption }, nil
+    end
+
     function resolver.resolve(_, perkId)
         if not isSafePerkId(perkId) then
             return failure("invalid-perk-id", "perkId must be a safe nonempty ID")
@@ -75,17 +91,10 @@ function Build42SandboxMultiplier.create(dependencies)
             return failure("capability.sandbox-options", "SandboxOptions is required")
         end
 
-        local configOK, multipliersConfig = readField(sandboxOptions, "multipliersConfig")
-        if not configOK or multipliersConfig == nil then
-            return failure("capability.multipliers-config", "SandboxOptions.multipliersConfig is required")
-        end
+        local toggle, toggleFailure = namedOption(sandboxOptions, "MultiplierConfig.GlobalToggle", "capability.global-toggle")
+        if toggle == nil then return toggleFailure end
 
-        local toggleOK, globalToggle = readField(multipliersConfig, "xpMultiplierGlobalToggle")
-        if not toggleOK or globalToggle == nil then
-            return failure("capability.global-toggle", "xpMultiplierGlobalToggle is required")
-        end
-
-        local valueOK, globalMode = callMethod(globalToggle, "getValue")
+        local valueOK, globalMode = callMethod(toggle.option, "getValue")
         if not valueOK or type(globalMode) ~= "boolean" then
             return failure("capability.global-toggle", "xpMultiplierGlobalToggle.getValue must return boolean")
         end
@@ -96,13 +105,11 @@ function Build42SandboxMultiplier.create(dependencies)
         end
 
         if globalMode then
-            local multiplierOK, globalMultiplier = readField(multipliersConfig, "xpMultiplierGlobal")
-            if not multiplierOK or globalMultiplier == nil then
-                return failure("capability.global-multiplier", "xpMultiplierGlobal is required")
-            end
+            local globalMultiplier, multiplierFailure = namedOption(sandboxOptions, "MultiplierConfig.Global", "capability.global-multiplier")
+            if globalMultiplier == nil then return multiplierFailure end
 
             local value
-            valueOK, value = callMethod(globalMultiplier, "getValue")
+            valueOK, value = callMethod(globalMultiplier.option, "getValue")
             if not valueOK or not isFinitePositive(value) then
                 return failure("invalid-global-multiplier", "xpMultiplierGlobal.getValue must return a finite positive number")
             end
@@ -119,23 +126,11 @@ function Build42SandboxMultiplier.create(dependencies)
         end
 
         local optionName = "MultiplierConfig." .. perkId
-        local optionOK, option = callMethod(sandboxOptions, "getOptionByName", optionName)
-        if not optionOK or option == nil then
-            return failure("capability.perk-option", "SandboxOptions.getOptionByName must resolve the perk option")
-        end
-
-        local configOK, configOption = callMethod(option, "asConfigOption")
-        if not configOK or configOption == nil then
-            return failure("capability.perk-option", "perk option must expose a config option")
-        end
-
-        local nameOK, resolvedName = callMethod(configOption, "getName")
-        if not nameOK or resolvedName ~= optionName then
-            return failure("invalid-perk-option", "resolved option name must match the requested perk option")
-        end
+        local perkOption, perkFailure = namedOption(sandboxOptions, optionName, "capability.perk-option")
+        if perkOption == nil then return perkFailure end
 
         local encoded
-        valueOK, encoded = callMethod(configOption, "getValueAsString")
+        valueOK, encoded = callMethod(perkOption.config, "getValueAsString")
         if not valueOK or type(encoded) ~= "string" then
             return failure("invalid-perk-option", "perk option must provide an encoded value")
         end
