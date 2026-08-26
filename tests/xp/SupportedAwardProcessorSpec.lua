@@ -139,8 +139,9 @@ local function makeEnvironment(config)
         store.lastOptions = options
         log[#log + 1] = "load"
         if config.failLoad then return { ok = false, code = "load_failed", detail = "fixture" } end
-        if config.returnSharedState then return { ok = true, state = store.state } end
-        return { ok = true, state = deepCopy(store.state) }
+        local loadedState = deepCopy(store.state)
+        store.lastLoadedState = loadedState
+        return { ok = true, state = loadedState }
     end
     function store.save(savedPlayer, savedState)
         store.saveCount = store.saveCount + 1
@@ -186,12 +187,17 @@ local function makeEnvironment(config)
     end
 
     local recovery = { count = 0 }
-    function recovery.recover(recoveredPlayer)
+    function recovery.recoverLoadedState(recoveredPlayer, loadedState)
         recovery.count = recovery.count + 1
+        recovery.lastState = loadedState
         log[#log + 1] = "recover"
         if config.throwRecovery then error("private C:\\runtime\\path " .. tostring({})) end
         if config.failRecovery then return { ok = false, code = "quarantined", detail = "fixture" } end
-        return { ok = true, recovered = config.recovered == true }
+        if config.recoverySave then
+            local saved = store.save(recoveredPlayer, loadedState)
+            if not saved.ok then return saved end
+        end
+        return { ok = true, recovered = config.recovered == true, state = loadedState }
     end
 
     local observation = config.observation or makeObservation()
@@ -267,17 +273,20 @@ do
     state.perks.Aiming = perkRecord(0, 0)
     local env = makeEnvironment({ state = state, observed = 0, position = 0 })
     local result = env.service.process(env.player, award(0, 0, 0, 0), settings())
-    expect(result.ok, "recovery-first success")
-    equal(env.log[1], "recover", "recovery occurs first")
-    equal(env.log[2], "load", "reload follows recovery")
-    equal(env.log[3], "resolve", "resolve follows reload")
+    expect(result.ok, "loaded-state recovery success")
+    equal(env.log[1], "load", "store load occurs first")
+    equal(env.log[2], "recover", "loaded-state recovery follows load")
+    equal(env.log[3], "resolve", "resolve follows loaded-state recovery")
     expect(env.store.lastOptions == env.loadOptions, "resolver load options passed exactly")
+    expect(env.recovery.lastState == env.store.lastLoadedState, "recovery receives loaded working state directly")
+    equal(env.store.loadCount, 1, "ordinary award loads once")
+    equal(env.store.saveCount, 0, "unchanged ordinary award does not save")
 
     local failed = makeEnvironment({ failRecovery = true })
     local failureResult = failed.service.process(failed.player, award(0, 0, 0, 0), settings())
     equal(failureResult.code, "recovery_failed", "recovery failure code")
     equal(failureResult.detail, "quarantined:fixture", "returned recovery detail remains stable")
-    equal(failed.store.loadCount, 0, "recovery failure prevents reload")
+    equal(failed.store.loadCount, 1, "recovery failure follows one load")
     equal(failed.resolver.resolveCount, 0, "recovery failure prevents resolve")
 
     local thrown = makeEnvironment({ throwRecovery = true })
@@ -285,7 +294,7 @@ do
     equal(thrownResult.code, "recovery_failed", "thrown recovery failure code")
     equal(thrownResult.detail, "recovery_error:dependency_threw", "thrown recovery detail is deterministic")
     expect(not thrownResult.detail:find("private", 1, true), "thrown recovery detail hides runtime text")
-    equal(thrown.store.loadCount, 0, "thrown recovery prevents reload")
+    equal(thrown.store.loadCount, 1, "thrown recovery follows one load")
 end
 
 do
@@ -303,6 +312,25 @@ do
     expect(saveIndex ~= nil, "state-changing award logs save")
     expect(observationSetIndex ~= nil, "state-changing award logs observation set")
     expect(saveIndex < observationSetIndex, "state save precedes observation update")
+    equal(env.store.loadCount, 1, "accepted ordinary award loads exactly once")
+    equal(env.store.saveCount, 1, "accepted ordinary award saves at most once")
+end
+
+do
+    local state = freshState()
+    state.perks.Aiming = perkRecord(0, 0)
+    local env = makeEnvironment({ state = state, observed = 0, position = 10, level = 1, recovered = true, recoverySave = true })
+    local result = env.service.process(env.player, award(10, 10, 0, 10), settings())
+    expect(result.ok, "award after interrupted recovery succeeds")
+    equal(env.store.loadCount, 1, "interrupted recovery award still loads once")
+    equal(env.store.saveCount, 2, "recovery save remains distinct from award save")
+    local firstSave, secondSave = nil, nil
+    for index = 1, #env.log do
+        if env.log[index] == "save" then
+            if firstSave == nil then firstSave = index else secondSave = index end
+        end
+    end
+    expect(firstSave ~= nil and secondSave ~= nil and firstSave < secondSave, "recovery save precedes award save")
 end
 
 do
@@ -377,6 +405,8 @@ do
     expect(zeroResult.ok, "ordinary zero succeeds")
     equal(zeroResult.stateWritten, false, "ordinary zero avoids state write")
     equal(zeroResult.survivorXp, 0, "ordinary zero grants nothing")
+    equal(zero.store.loadCount, 1, "accepted zero award loads exactly once")
+    equal(zero.store.saveCount, 0, "accepted zero award performs no save")
 
     state = freshState()
     state.perks.Aiming = perkRecord(10, 10)
@@ -575,11 +605,10 @@ do
         position = 10,
         level = 1,
         failSave = true,
-        returnSharedState = true,
     })
     local result = env.service.process(env.player, inputAward, inputSettings)
     equal(result.code, "award_save_failed", "save failure code")
-    expect(deepEqual(state, originalState), "failed save leaves loaded state immutable")
+    expect(deepEqual(state, originalState), "failed save leaves persisted state unchanged")
     expect(deepEqual(inputAward, originalAward), "award input remains immutable")
     expect(deepEqual(inputSettings, originalSettings), "settings input remains immutable")
     equal(env.observation.peek(env.player, "Aiming"), 0, "failed save does not advance observation")

@@ -291,34 +291,6 @@ local function applyCompatibility(state, options)
     return state
 end
 
-local function canonical(state)
-    local function number(value)
-        if value == 0 then return "0" end
-        return string.format("%.17g", value)
-    end
-    local function target(value) return "{" .. value.targetId .. ":" .. value.targetLevel .. ":" .. number(value.targetPosition) .. "}" end
-    local function perk(value)
-        local parts = { value.adapterId, value.adapterVersion, value.curveFingerprint, value.effectiveMaximum,
-            number(value.naturalPosition), number(value.highWaterPosition), number(value.postMaxFullRateUsed) }
-        for index = 1, #value.activeTargets do parts[#parts + 1] = target(value.activeTargets[index]) end
-        return table.concat(parts, "|")
-    end
-    local function map(value)
-        local parts, keys = {}, sortedKeys(value)
-        for index = 1, #keys do parts[index] = keys[index] .. "=" .. perk(value[keys[index]]) end
-        return table.concat(parts, ";")
-    end
-    local function inFlight(value)
-        if value == nil then return "absent" end
-        return table.concat({
-            value.requestId, value.perkId, value.preRevision, value.preSpent,
-            value.preLevel, number(value.prePosition), value.targetLevel, number(value.targetPosition),
-            value.adapterId, value.adapterVersion, value.curveFingerprint, value.effectiveMaximum,
-        }, "|")
-    end
-    return table.concat({ state.schemaVersion, state.revision, state.survivor.level, number(state.survivor.xpIntoLevel), state.survivor.spent, map(state.perks), map(state.orphanedPerks), inFlight(state.inFlightAdvancement) }, "#")
-end
-
 function Codec.decode(raw, options)
     if raw == nil then return { ok = true, state = freshState() } end
     if type(raw) ~= "table" then return failure("invalid_state", "not_table", raw) end
@@ -349,7 +321,7 @@ end
 function Codec.encode(state)
     local checked, err = validateV1(state)
     if not checked then return err end
-    return { ok = true, state = checked, canonical = canonical(checked) }
+    return { ok = true, state = checked }
 end
 
 function Codec.fresh()

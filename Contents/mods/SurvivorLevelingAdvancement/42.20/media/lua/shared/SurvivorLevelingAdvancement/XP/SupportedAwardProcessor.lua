@@ -234,8 +234,7 @@ local function loadState(store, player, options)
     if not loaded.ok or type(loaded.state) ~= "table" then
         return failure("store_load_failed", detailOf(loaded))
     end
-    local state, cloneError = cloneValue(loaded.state)
-    if not state then return failure("store_load_failed", "state_" .. cloneError) end
+    local state = loaded.state
     if type(state.perks) ~= "table" or type(state.survivor) ~= "table" or not isInteger(state.revision) or state.revision < 0 then
         return failure("store_load_failed", "state_shape_invalid")
     end
@@ -420,7 +419,7 @@ function SupportedAwardProcessor.create(dependencies)
         { dependencies.MutationScope, { "isActive" }, "MutationScope" },
         { store, { "load", "save" }, "PlayerStateStore" },
         { dependencies.ActualObservation, { "get", "set" }, "ActualObservation" },
-        { dependencies.recoveryService, { "recover" }, "recoveryService" },
+        { dependencies.recoveryService, { "recoverLoadedState" }, "recoveryService" },
     }
     for index = 1, #required do
         if not hasMethods(required[index][1], required[index][2]) then
@@ -462,12 +461,25 @@ function SupportedAwardProcessor.create(dependencies)
         local settingsValid = validateSettings(settings)
         if not settingsValid.ok then return settingsValid end
 
-        local recovered = callResult(deps.recoveryService.recover, "recovery", player)
-        if not recovered.ok then return failure("recovery_failed", detailOf(recovered)) end
-
         local loaded = loadState(deps.store, player, deps.loadOptions)
         if not loaded.ok then return loaded end
-        local state = loaded.state
+        local recovered = callResult(
+            deps.recoveryService.recoverLoadedState,
+            "recovery",
+            player,
+            loaded.state
+        )
+        if not recovered.ok then
+            return failure("recovery_failed", detailOf(recovered))
+        end
+        local state = recovered.state
+        if type(state) ~= "table"
+            or type(state.perks) ~= "table"
+            or type(state.survivor) ~= "table"
+            or not isInteger(state.revision)
+            or state.revision < 0 then
+            return failure("recovery_failed", "state_shape_invalid")
+        end
         local originalRevision = state.revision
 
         local resolved = resolveAdapter(deps.resolver, award.perkId)

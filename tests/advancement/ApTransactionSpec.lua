@@ -99,14 +99,12 @@ local function makeStore(initial, events)
         loads = 0,
         saves = 0,
         failSaveAt = {},
-        returnAlias = false,
         receivedOptions = nil,
     }
     function store.load(player, options)
         store.loads = store.loads + 1
         store.receivedOptions = options
         if store.failLoad then return { ok = false, code = "fake_load", detail = "failed" } end
-        if store.returnAlias then return { ok = true, state = store.current } end
         return { ok = true, state = clone(store.current) }
     end
     function store.save(player, state)
@@ -294,6 +292,21 @@ do
     assertEqual(store.saves, 0)
 end
 
+-- Loaded-state recovery trusts the store boundary and never performs another load.
+do
+    local store = makeStore(newState(3, 0))
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 0, 0)
+    local loaded = store.load(player, resolver.loadOptions)
+    local result = service.recoverLoadedState(player, loaded.state)
+    assertTrue(result.ok)
+    assertFalse(result.recovered)
+    assertTrue(result.state == loaded.state, "no-reservation recovery preserves loaded working state")
+    assertEqual(store.loads, 1, "loaded-state recovery performs no load")
+    assertEqual(store.saves, 0, "no-reservation loaded-state recovery performs no save")
+end
+
 -- Fresh bootstrap, reservation/engine/commit order, AP effects, and scope cleanup.
 do
     local events = {}
@@ -336,6 +349,7 @@ do
     assertSame(request, requestBefore, "request immutable")
     assertSame(globalThree, configBefore, "config immutable")
     assertSame(store.receivedOptions, resolver.loadOptions, "resolver options reach load")
+    assertEqual(store.loads, 1, "spend loads once")
 end
 
 -- Final-level mastery derives a two-AP cost, bypasses positive capacity, and collapses the full target chain.
@@ -617,18 +631,6 @@ do
     assertEqual(adapter.ensureCalls, 0)
 end
 
--- Aliased state returned by a fake store remains untouched on rejection.
-do
-    local store = makeStore(newState(3, 0))
-    store.returnAlias = true
-    local before = clone(store.current)
-    local adapter, resolver = makeRuntime()
-    local service = createService(store, adapter, resolver)
-    local player = newPlayer("Axe", 0, 0)
-    assertCode(service.spend(player, { perkId = "Axe", requestId = "alias_stale", expectedRevision = 3 }, globalThree), "stale_revision")
-    assertSame(store.current, before, "load alias immutable")
-end
-
 -- Load, reservation, scope, and commit failures preserve the correct boundary.
 do
     local store = makeStore(newState(3, 0))
@@ -701,6 +703,24 @@ local function reservationState(options)
         effectiveMaximum = 3,
     }
     return state
+end
+
+-- Loaded-state recovery returns the authoritative committed state without reloading.
+do
+    local store = makeStore(reservationState())
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    local loaded = store.load(player, resolver.loadOptions)
+    local result = service.recoverLoadedState(player, loaded.state)
+    assertTrue(result.ok)
+    assertTrue(result.recovered)
+    assertEqual(store.loads, 1, "loaded reservation recovery performs no second load")
+    assertEqual(store.saves, 1, "loaded reservation recovery commits once")
+    assertEqual(result.state.revision, 1)
+    assertEqual(result.state.survivor.spent, 1)
+    assertEqual(result.state.inFlightAdvancement, nil)
+    assertSame(result.state, store.current, "loaded recovery returns authoritative committed state")
 end
 
 -- XP-only interruption leaves a recoverable reservation; recovery completes once and cleans scope.

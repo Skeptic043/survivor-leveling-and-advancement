@@ -8,6 +8,21 @@ local function expect(condition, message)
     if not condition then error(message or "assertion failed") end
 end
 
+local function structurallyEqual(left, right, seen)
+    if type(left) ~= type(right) then return false end
+    if type(left) ~= "table" then return left == right end
+    seen = seen or {}
+    if seen[left] == right then return true end
+    seen[left] = right
+    for key, value in pairs(left) do
+        if not structurallyEqual(value, right[key], seen) then return false end
+    end
+    for key in pairs(right) do
+        if left[key] == nil then return false end
+    end
+    return true
+end
+
 local function validPerk()
     return {
         adapterId = "sla.vanilla", adapterVersion = 1, curveFingerprint = "curve-a",
@@ -49,8 +64,8 @@ present.state.inFlightAdvancement.requestId = "changed"
 expect(presentRaw.inFlightAdvancement.requestId == "request-a", "in-flight result is detached")
 local same = validState()
 same.inFlightAdvancement = inFlight()
-expect(C.encode(presentRaw).canonical == C.encode(same).canonical, "in-flight canonical field order")
-expect(C.encode(validState()).canonical ~= C.encode(same).canonical, "canonical distinguishes in-flight absence")
+expect(structurallyEqual(C.encode(presentRaw).state, C.encode(same).state), "in-flight structure is stable")
+expect(C.encode(validState()).state.inFlightAdvancement == nil and C.encode(same).state.inFlightAdvancement ~= nil, "in-flight presence is preserved")
 
 local unknownInFlight = validState()
 unknownInFlight.inFlightAdvancement = inFlight()
@@ -113,14 +128,27 @@ local missing = store.load(player)
 expect(missing.ok and missing.state.revision == 0 and modData.SurvivorLevelingAdvancement == nil, "missing load is fresh and non-writing")
 local source = validState()
 local saved = store.save(player, source)
-expect(saved.ok and modData.untouched == "value" and modData.SurvivorLevelingAdvancement ~= nil, "save writes only namespace")
+local savedFieldCount = 0
+for _ in pairs(saved) do savedFieldCount = savedFieldCount + 1 end
+expect(saved.ok and savedFieldCount == 1 and modData.untouched == "value" and modData.SurvivorLevelingAdvancement ~= nil, "save writes only namespace and returns concise success")
 source.survivor.level = 9
-saved.state.survivor.level = 8
 local loaded = store.load(player)
 expect(loaded.ok and loaded.state.survivor.level == 2, "store save and load tables are detached")
 loaded.state.survivor.level = 7
 local reloaded = store.load(player)
 expect(reloaded.ok and reloaded.state.survivor.level == 2, "load result is detached")
+local codecCalls = { decode = 0, encode = 0 }
+local countingCodec = {}
+function countingCodec.decode(...)
+    codecCalls.decode = codecCalls.decode + 1
+    return C.decode(...)
+end
+function countingCodec.encode(...)
+    codecCalls.encode = codecCalls.encode + 1
+    return C.encode(...)
+end
+local countedStore = StoreFactory.create(countingCodec).store
+expect(countedStore.save(player, validState()).ok and codecCalls.encode == 1 and codecCalls.decode == 0, "save encodes once without decoding")
 local invalidPlayer = { calls = 0 }
 function invalidPlayer:getModData()
     self.calls = self.calls + 1

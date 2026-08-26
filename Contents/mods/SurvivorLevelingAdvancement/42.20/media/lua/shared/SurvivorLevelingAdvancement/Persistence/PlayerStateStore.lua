@@ -41,10 +41,6 @@ function PlayerStateStore.create(codec)
         end
         if not encoded.ok then return encoded end
         if type(encoded.state) ~= "table" then return failure("codec_encode_failed", "missing_state") end
-        local returned, returnedError = call(codec.decode, encoded.state)
-        if type(returned) ~= "table" or not returned.ok or type(returned.state) ~= "table" then
-            return failure("codec_encode_failed", tostring(returnedError or (returned and returned.code) or "state_not_detached"))
-        end
         if player == nil or type(player.getModData) ~= "function" then
             return failure("missing_player_mod_data", "getModData_required")
         end
@@ -53,7 +49,7 @@ function PlayerStateStore.create(codec)
             return failure("player_mod_data_unavailable", tostring(modDataError or "not_table"))
         end
         modData[NAMESPACE] = encoded.state
-        return { ok = true, state = returned.state, canonical = encoded.canonical }
+        return { ok = true }
     end
 
     return { ok = true, store = store }

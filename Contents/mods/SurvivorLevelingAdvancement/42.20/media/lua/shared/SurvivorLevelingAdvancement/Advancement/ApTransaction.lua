@@ -222,9 +222,7 @@ local function loadState(store, player, options)
     if not loaded.ok or type(loaded.state) ~= "table" then
         return failure("store_load_failed", detailOf(loaded))
     end
-    local state, cloneError = cloneValue(loaded.state)
-    if not state then return failure("store_load_failed", "state_" .. cloneError) end
-    return { ok = true, state = state }
+    return { ok = true, state = loaded.state }
 end
 
 local function saveState(store, player, state, code)
@@ -527,16 +525,23 @@ function ApTransaction.create(dependencies)
     }
     local service = {}
 
+    function service.recoverLoadedState(player, state)
+        if type(state) ~= "table" then
+            return failure("store_load_failed", "state_not_table")
+        end
+        return recoverLoaded(deps, player, state)
+    end
+
     function service.recover(player)
         local loaded = loadState(deps.store, player, deps.loadOptions)
         if not loaded.ok then return loaded end
-        return publicRecovery(recoverLoaded(deps, player, loaded.state))
+        return publicRecovery(service.recoverLoadedState(player, loaded.state))
     end
 
     function service.spend(player, request, allotmentConfig)
         local loaded = loadState(deps.store, player, deps.loadOptions)
         if not loaded.ok then return loaded end
-        local recovered = recoverLoaded(deps, player, loaded.state)
+        local recovered = service.recoverLoadedState(player, loaded.state)
         if not recovered.ok then return recovered end
         local state = recovered.state
 
