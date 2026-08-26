@@ -195,21 +195,57 @@ equal(sent.args.player, nil, "response carries no player object")
 equal(sent.args.playerIndex, nil, "response carries no player index")
 equal(sent.args.username, nil, "response carries no username")
 
+local refreshBefore = #serverCalls.sends
+expect(same(
+    server.handle("SurvivorLevelingAdvancement", "ownerRefresh", serverPlayer, request("wrong-route")),
+    { ok = true, handled = true }
+), "wrong refresh is contained after bounded send")
+equal(serverCalls.ready, 1, "wrong refresh never replays ready")
+equal(serverCalls.snapshot, 0, "wrong refresh never snapshots")
+equal(#serverCalls.sends, refreshBefore + 1, "wrong refresh sends one bounded failure")
+expect(same(serverCalls.sends[#serverCalls.sends].args, {
+    protocolVersion = 1,
+    correlationId = "wrong-route",
+    ok = false,
+    code = "not_bound",
+    detail = "player route",
+}), "wrong refresh failure envelope is exact")
+
+local refreshed = server.handle("SurvivorLevelingAdvancement", "ownerRefresh", serverPlayer, request(correlation64))
+expect(same(refreshed, { ok = true, handled = true }), "bound refresh is handled")
+equal(serverCalls.ready, 1, "bound refresh never replays ready")
+equal(serverCalls.snapshot, 1, "bound refresh snapshots once")
+equal(serverCalls.validate, 2, "bound refresh validates once")
+equal(#serverCalls.sends, 3, "bound refresh sends once")
+equal(serverCalls.sends[3].args.correlationId, correlation64, "refresh preserves active correlation")
+
 local published = server.publish(serverPlayer)
 expect(same(published, { ok = true, published = true }), "publish succeeds")
-equal(serverCalls.snapshot, 1, "snapshot called once")
-equal(serverCalls.validate, 2, "published snapshot validated once")
+equal(serverCalls.snapshot, 2, "snapshot called once after refresh")
+equal(serverCalls.validate, 3, "published snapshot validated once")
 equal(serverCalls.snapshotPlayer, serverPlayer, "publish uses exact bound player")
-equal(#serverCalls.sends, 2, "publish sends once")
-equal(serverCalls.sends[2].args.correlationId, correlation64, "publish reuses bound correlation")
-expect(serverCalls.sends[2].args.snapshot ~= publishedSnapshot, "publish sends detached validated output")
-expect(same(serverCalls.sends[2].args.snapshot, publishedSnapshot), "publish preserves exact public snapshot")
+equal(#serverCalls.sends, 4, "publish sends once")
+equal(serverCalls.sends[4].args.correlationId, correlation64, "publish reuses bound correlation")
+expect(serverCalls.sends[4].args.snapshot ~= publishedSnapshot, "publish sends detached validated output")
+expect(same(serverCalls.sends[4].args.snapshot, publishedSnapshot), "publish preserves exact public snapshot")
 
 expect(same(server.clearPlayer(serverPlayer), { ok = true }), "clear succeeds")
 equal(serverCalls.clear, 1, "session clear called once")
 equal(serverCalls.clearPlayer, serverPlayer, "session clear uses exact player")
+expect(same(
+    server.handle("SurvivorLevelingAdvancement", "ownerRefresh", serverPlayer, request(correlation64)),
+    { ok = true, handled = true }
+), "unbound sender refresh is contained after bounded send")
+equal(#serverCalls.sends, 5, "unbound sender refresh sends one bounded failure")
+expect(same(serverCalls.sends[5].args, {
+    protocolVersion = 1,
+    correlationId = correlation64,
+    ok = false,
+    code = "not_bound",
+    detail = "player route",
+}), "unbound sender refresh envelope does not expose binding")
 failed(server.publish(serverPlayer), "not_bound", "player route")
-equal(serverCalls.snapshot, 1, "unbound publish does not call snapshot")
+equal(serverCalls.snapshot, 2, "unbound publish does not call snapshot")
 
 local function serverHarness(readyResult, snapshotResult, sendFunction, clearResult, validator)
     local calls = { ready = 0, snapshot = 0, clear = 0, validate = 0, sends = {} }
@@ -261,6 +297,21 @@ expect(same(rejectedCalls.sends[1].args, {
     detail = "unavailable:unavailable",
 }), "failure response exact shape")
 failed(rejectedServer.publish(serverPlayer), "not_bound", "player route")
+
+do
+    local sends = 0
+    local refreshThrow = serverHarness(
+        { ok = true, snapshot = snapshot(1) },
+        { ok = true, snapshot = snapshot(2) },
+        function()
+            sends = sends + 1
+            if sends == 2 then error("refresh send failure") end
+        end
+    )
+    expect(refreshThrow.handle("SurvivorLevelingAdvancement", "ownerReady", serverPlayer, request("refresh-send")).ok, "refresh send fixture binds")
+    failed(refreshThrow.handle("SurvivorLevelingAdvancement", "ownerRefresh", serverPlayer, request("refresh-send")), "send_threw", "sendServerCommand")
+    equal(sends, 2, "refresh send failure does not retry")
+end
 
 local malformedServer, malformedCalls = serverHarness({}, { ok = true, snapshot = snapshot(2) })
 failed(malformedServer.handle("SurvivorLevelingAdvancement", "ownerReady", serverPlayer, request("malformed")), "session_ready_invalid", "ownerSession.ready")
@@ -417,6 +468,8 @@ equal(clientSends[1].args.player, nil, "request has no player object")
 equal(clientSends[1].args.username, nil, "request has no username")
 expect(same(client.get(0), { ok = true, present = false }), "ready resets inbox")
 expect(same(client.status(0), { ok = true, present = false, route = "pending" }), "ready creates pending route")
+failed(client.refresh(0, player0), "not_bound", "player route")
+equal(#clientSends, 1, "pending ready route does not refresh")
 
 local ready1 = client.ready(1, player1)
 equal(ready1.ok, true, "slot one ready succeeds")
@@ -433,7 +486,7 @@ local slot1Handled = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot
     ok = true,
     snapshot = slot1Snapshot,
 })
-expect(same(slot1Handled, { ok = true, handled = true, accepted = true }), "slot one snapshot accepted")
+expect(same(slot1Handled, { ok = true, handled = true, accepted = true, localSlot = 1 }), "slot one snapshot accepted")
 equal(client.get(1).snapshot.survivor.level, 5, "slot one receives its response")
 equal(client.get(0).present, false, "slot zero remains pending")
 equal(client.status(1).route, "active", "accepted route becomes active")
@@ -469,9 +522,36 @@ local staleResult = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot"
     ok = true,
     snapshot = snapshot(2, 99, 8),
 })
-expect(same(staleResult, { ok = true, handled = true, accepted = false, code = "stale_snapshot" }), "stale snapshot remains unaccepted")
+expect(same(staleResult, { ok = true, handled = true, accepted = false, code = "stale_snapshot", localSlot = 0 }), "stale snapshot remains unaccepted")
 equal(client.get(0).snapshot.revision, 4, "stale response does not mutate inbox")
 equal(client.status(0).route, "active", "stale active response preserves binding")
+
+local refreshSendCount = #clientSends
+expect(same(client.refresh(0, player0), { ok = true }), "active route refresh sends")
+equal(#clientSends, refreshSendCount + 1, "refresh sends once")
+equal(clientSends[#clientSends].player, player0, "refresh uses retained caller player")
+equal(clientSends[#clientSends].command, "ownerRefresh", "refresh exact command")
+expect(exact(clientSends[#clientSends].args, { protocolVersion = true, correlationId = true }), "refresh exact envelope")
+equal(clientSends[#clientSends].args.correlationId, ready0.correlationId, "refresh retains correlation")
+failed(client.refresh(0, player0), "refresh_pending", "localSlot")
+equal(#clientSends, refreshSendCount + 1, "refresh never retries while pending")
+local refreshCompletion = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+    protocolVersion = 1,
+    correlationId = ready0.correlationId,
+    ok = true,
+    snapshot = snapshot(3, 5, 6),
+})
+expect(same(refreshCompletion, { ok = true, handled = true, accepted = true, localSlot = 0 }), "active response completes refresh")
+expect(client.refresh(0, player0).ok, "completed refresh permits one new request")
+local staleRefresh = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+    protocolVersion = 1,
+    correlationId = ready0.correlationId,
+    ok = true,
+    snapshot = snapshot(3, 5, 6),
+})
+expect(same(staleRefresh, { ok = true, handled = true, accepted = false, code = "stale_snapshot", localSlot = 0 }), "stale active response completes refresh")
+expect(client.refresh(0, player0).ok, "stale completion permits one new request")
+equal(client.get(0).snapshot.sequence, 3, "refresh never resets the inbox")
 
 local unknownCorrelation = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
     protocolVersion = 1,
@@ -480,7 +560,7 @@ local unknownCorrelation = client.handle("SurvivorLevelingAdvancement", "ownerSn
     snapshot = snapshot(3),
 })
 failed(unknownCorrelation, "unknown_correlation", "correlationId")
-equal(client.get(0).snapshot.sequence, 2, "unknown correlation does not mutate")
+equal(client.get(0).snapshot.sequence, 3, "unknown correlation does not mutate")
 
 local serverFailureResult = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
     protocolVersion = 1,
@@ -494,13 +574,15 @@ expect(same(serverFailureResult, {
     handled = true,
     accepted = false,
     code = "store_load_failed",
+    localSlot = 0,
 }), "bounded server failure is handled without inbox acceptance")
 local failureStatus = client.status(0)
 equal(failureStatus.route, "active", "server failure preserves active route")
 expect(same(failureStatus.failure, { code = "store_load_failed", detail = "unavailable:unavailable" }), "server failure retained only as bounded status")
 equal(failureStatus.snapshot, nil, "status does not expose snapshot")
 equal(failureStatus.perks, nil, "status does not expose perks")
-equal(client.get(0).snapshot.sequence, 2, "server failure does not enter inbox")
+equal(client.get(0).snapshot.sequence, 3, "server failure does not enter inbox")
+expect(client.refresh(0, player0).ok, "bounded server response clears legitimate refresh pending")
 
 local replacementReady = client.ready(0, player0)
 equal(replacementReady.ok, true, "ready replay succeeds")
@@ -695,5 +777,78 @@ failed(malformedResetClient.ready(0, {}), "inbox_reset_invalid", "ClientOwnerSta
 equal(malformedResetClient.status(0).route, "active", "malformed reset preserves active route")
 equal(malformedResetClient.get(0).snapshot.sequence, 5, "malformed reset preserves public view")
 equal(malformedResetCalls.sends, 1, "ready aborts before send when reset is malformed")
+
+do
+    local sent, reentrant = {}, nil
+    reentrant = Build42OwnerTransport.createClient({
+        ClientOwnerState = ClientOwnerState,
+        sendClientCommand = function(player, module, command, args)
+            sent[#sent + 1] = { player = player, module = module, command = command, args = args }
+            if command == "ownerRefresh" then
+                reentrant.handle(module, "ownerSnapshot", {
+                    protocolVersion = 1,
+                    correlationId = args.correlationId,
+                    ok = true,
+                    snapshot = snapshot(2, 2, 4),
+                })
+            end
+        end,
+    }).client
+    local player = {}
+    local ready = reentrant.ready(0, player)
+    expect(reentrant.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1,
+        correlationId = ready.correlationId,
+        ok = true,
+        snapshot = snapshot(1, 1, 3),
+    }).accepted, "reentrant fixture establishes active route")
+    expect(reentrant.refresh(0, player).ok, "reentrant refresh succeeds")
+    equal(reentrant.get(0).snapshot.sequence, 2, "synchronous refresh response is accepted")
+    expect(reentrant.refresh(0, player).ok, "synchronous completion clears pending before send returns")
+
+    local failRefresh, failedSends = false, 0
+    local failing = Build42OwnerTransport.createClient({
+        ClientOwnerState = ClientOwnerState,
+        sendClientCommand = function(_, _, command)
+            failedSends = failedSends + 1
+            if command == "ownerRefresh" and failRefresh then error("send failure") end
+        end,
+    }).client
+    ready = failing.ready(0, player)
+    expect(failing.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1,
+        correlationId = ready.correlationId,
+        ok = true,
+        snapshot = snapshot(1, 1, 3),
+    }).accepted, "send-failure fixture establishes active route")
+    failRefresh = true
+    failed(failing.refresh(0, player), "send_threw", "sendClientCommand")
+    equal(failing.status(0).route, "active", "refresh send failure preserves active route")
+    failRefresh = false
+    expect(failing.refresh(0, player).ok, "refresh send failure clears pending flag")
+    equal(failedSends, 3, "refresh send failure does not retry")
+
+    local isolatedSends = {}
+    local isolated = Build42OwnerTransport.createClient({
+        ClientOwnerState = ClientOwnerState,
+        sendClientCommand = function(playerValue, module, command, args)
+            isolatedSends[#isolatedSends + 1] = { player = playerValue, module = module, command = command, args = args }
+        end,
+    }).client
+    local slot0, slot1 = isolated.ready(0, {}), isolated.ready(1, {})
+    expect(isolated.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1, correlationId = slot0.correlationId, ok = true, snapshot = snapshot(1, 1, 3),
+    }).accepted, "slot zero active before refresh")
+    expect(isolated.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1, correlationId = slot1.correlationId, ok = true, snapshot = snapshot(1, 1, 3),
+    }).accepted, "slot one active before refresh")
+    expect(isolated.refresh(0, {}).ok, "slot zero refresh pending")
+    expect(isolated.refresh(1, {}).ok, "slot one refresh remains independent")
+    expect(isolated.resetSlot(0).ok, "slot zero reset clears pending refresh")
+    failed(isolated.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1, correlationId = slot0.correlationId, ok = true, snapshot = snapshot(2, 2, 4),
+    }), "unknown_correlation", "correlationId")
+    equal(isolated.status(1).route, "active", "slot reset leaves other refresh route intact")
+end
 
 return assertions

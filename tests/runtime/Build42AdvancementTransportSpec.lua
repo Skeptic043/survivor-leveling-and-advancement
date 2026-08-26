@@ -592,7 +592,7 @@ do
         rejectionResponse(requested.requestId, "Axe", "stale_revision", snapshot(4))
     )
     truthy(handled.ok, "stale malformed inbox remains terminal")
-    hasOnly(handled, { ok = true, handled = true, result = true }, "stale snapshot-rejected handle shape")
+    hasOnly(handled, { ok = true, handled = true, localSlot = true, result = true }, "stale snapshot-rejected handle shape")
     hasOnly(handled.result, {
         ok = true, applied = true, requestId = true, perkId = true,
         code = true, detail = true, committed = true,
@@ -721,7 +721,8 @@ for cost = 1, 2 do
     )
     truthy(handled.ok, "applied client handled " .. cost)
     truthy(handled.handled, "applied client terminal " .. cost)
-    hasOnly(handled, { ok = true, handled = true, result = true }, "applied handle shape " .. cost)
+    hasOnly(handled, { ok = true, handled = true, localSlot = true, result = true }, "applied handle shape " .. cost)
+    equal(handled.localSlot, 0, "applied terminal returns validated local slot " .. cost)
     hasOnly(handled.result, {
         ok = true, applied = true, requestId = true, perkId = true,
         apCost = true, mastered = true, snapshotAccepted = true,
@@ -799,7 +800,7 @@ do
     local ordinary = client.request(0, {}, "Axe")
     local handled = client.handle("SurvivorLevelingAdvancement", "advancementResult", rejectionResponse(ordinary.requestId, "Axe", "no_ap"))
     truthy(handled.ok, "ordinary rejection handled")
-    hasOnly(handled, { ok = true, handled = true, result = true }, "ordinary rejection handle shape")
+    hasOnly(handled, { ok = true, handled = true, localSlot = true, result = true }, "ordinary rejection handle shape")
     hasOnly(handled.result, {
         ok = true, applied = true, requestId = true, perkId = true,
         code = true, detail = true,
@@ -893,7 +894,7 @@ for _, committed in ipairs({ false, true }) do
     local handled = client.handle("SurvivorLevelingAdvancement", "advancementResult", boundaryResponse(requested.requestId, "Axe", committed))
     truthy(handled.ok, "boundary client handled")
     truthy(handled.handled, "boundary client terminal")
-    hasOnly(handled, { ok = true, handled = true, result = true }, "boundary handle shape")
+    hasOnly(handled, { ok = true, handled = true, localSlot = true, result = true }, "boundary handle shape")
     hasOnly(handled.result, {
         ok = true, requestId = true, perkId = true,
         code = true, detail = true, committed = true,
@@ -929,7 +930,7 @@ do
         local requested = client.request(0, {}, "Axe")
         local handled = client.handle("SurvivorLevelingAdvancement", "advancementResult", appliedResponse(requested.requestId, "Axe", 2))
         truthy(handled.ok, "invalid inbox result remains handled " .. index)
-        hasOnly(handled, { ok = true, handled = true, result = true }, "applied snapshot-rejected handle shape " .. index)
+        hasOnly(handled, { ok = true, handled = true, localSlot = true, result = true }, "applied snapshot-rejected handle shape " .. index)
         hasOnly(handled.result, {
             ok = true, applied = true, requestId = true, perkId = true,
             code = true, detail = true, committed = true, apCost = true, mastered = true,

@@ -154,21 +154,24 @@ local function detachStatus(value)
 end
 
 local function ownerHandled(value)
-    if exactTable(value, { ok = true, handled = true, accepted = true }) then
+    if exactTable(value, { ok = true, handled = true, accepted = true, localSlot = true }) then
         return rawget(value, "ok") == true and rawget(value, "handled") == true
-            and rawget(value, "accepted") == true
+            and rawget(value, "accepted") == true and validSlot(rawget(value, "localSlot")), rawget(value, "localSlot"), true
     end
-    if exactTable(value, { ok = true, handled = true, accepted = true, code = true }) then
+    if exactTable(value, { ok = true, handled = true, accepted = true, code = true, localSlot = true }) then
         return rawget(value, "ok") == true and rawget(value, "handled") == true
             and rawget(value, "accepted") == false and safeId(rawget(value, "code"), 64)
+            and validSlot(rawget(value, "localSlot")), rawget(value, "localSlot"), false
     end
     return false
 end
 
 local function advancementHandled(value)
-    return exactTable(value, { ok = true, handled = true, result = true })
+    if not exactTable(value, { ok = true, handled = true, localSlot = true, result = true }) then return false end
+    return rawget(value, "ok") == true and rawget(value, "handled") == true
+        and validSlot(rawget(value, "localSlot"))
         and rawget(value, "ok") == true and rawget(value, "handled") == true
-        and detachSummary(rawget(value, "result")) ~= nil
+        and detachSummary(rawget(value, "result")) ~= nil, rawget(value, "localSlot")
 end
 
 local function applied(result, requestId, perkId)
@@ -230,7 +233,7 @@ function Build42Lifecycle.create(dependencies)
     local ownerClient, advancementClient
     if mode ~= "server" then
         local called, created = pcall(createOwnerClient, { ClientOwnerState = clientState, sendClientCommand = sendCommand })
-        ownerClient = called and service(created, "client", { "ready", "handle", "reset", "resetSlot", "acceptLocal", "get", "status" }) or nil
+        ownerClient = called and service(created, "client", { "ready", "refresh", "handle", "reset", "resetSlot", "acceptLocal", "get", "status" }) or nil
         if ownerClient == nil then return bounded(created, "owner_client_invalid", "Build42OwnerTransport.createClient") end
         if mode == "client" then
             called, created = pcall(createAdvClient, { ownerClient = ownerClient.value, sendClientCommand = sendCommand })
@@ -247,13 +250,18 @@ function Build42Lifecycle.create(dependencies)
 
     local installed, installAttempted, startupAttempted, started = false, false, false, false
     local retainedFailure, ownerServerHandle, advancementServerHandle
-    local ownerSessionReady, advancementRequest
+    local ownerSessionReady, ownerSessionSnapshot, advancementRequest
     local pendingPlayers, readyPlayers, singlePlayerResults = {}, {}, {}
     local owner, readySingle = {}, nil
+    local clientStateListener = nil
 
     local function retain(result, code, detail)
         retainedFailure = bounded(result, code, detail)
         return retainedFailure
+    end
+
+    local function notifyClientState(localSlot, kind)
+        if clientStateListener ~= nil then pcall(clientStateListener, localSlot, kind) end
     end
 
     local function startupFailure(result, code, detail)
@@ -318,6 +326,7 @@ function Build42Lifecycle.create(dependencies)
             ownerServerHandle, advancementServerHandle = ownerEndpoint.handle, advEndpoint.handle
         end
         ownerSessionReady = rawget(ownerSession, "ready")
+        ownerSessionSnapshot = rawget(ownerSession, "snapshot")
         advancementRequest = rawget(advancementSession, "request")
         started, retainedFailure = true, nil
         if mode == "single_player" then
@@ -342,6 +351,7 @@ function Build42Lifecycle.create(dependencies)
             return accepted == nil and retainedFailure or retain(accepted, "owner_accept_invalid", "ownerClient.acceptLocal")
         end
         readyPlayers[localSlot] = player
+        notifyClientState(localSlot, "owner_snapshot")
         return { ok = true }
     end
 
@@ -449,6 +459,7 @@ function Build42Lifecycle.create(dependencies)
             summary.requestId, summary.perkId = requestId, perkId
         end
         singlePlayerResults[localSlot] = summary
+        notifyClientState(localSlot, "advancement_terminal")
         return detachSummary(summary)
     end
 
@@ -457,7 +468,7 @@ function Build42Lifecycle.create(dependencies)
     callbacks.OnGameStart = function() if ownEvents() then startup() end end
     callbacks.OnClientCommand = function(module, command, player, args)
         if not ownEvents() or not started or module ~= MODULE then return end
-        if command == "ownerReady" then
+        if command == "ownerReady" or command == "ownerRefresh" then
             serverDispatch(ownerServerHandle, "owner_server_handle_invalid", "ownerServer.handle", module, command, player, args)
         elseif command == "advancementRequest" then
             serverDispatch(advancementServerHandle, "advancement_server_handle_invalid", "advancementServer.handle", module, command, player, args)
@@ -473,13 +484,21 @@ function Build42Lifecycle.create(dependencies)
         if not ownEvents() or module ~= MODULE then return end
         if command == "ownerSnapshot" then
             local called, result = pcall(ownerClient.handle, module, command, args)
-            if not called or not ownerHandled(result) then
+            local handled, localSlot, accepted = false, nil, nil
+            if called then handled, localSlot, accepted = ownerHandled(result) end
+            if not handled then
                 retain(result, "owner_client_handle_invalid", "ownerClient.handle")
+            elseif accepted then
+                notifyClientState(localSlot, "owner_snapshot")
             end
         elseif command == "advancementResult" then
             local called, result = pcall(advancementClient.handle, module, command, args)
-            if not called or not advancementHandled(result) then
+            local handled, localSlot = false, nil
+            if called then handled, localSlot = advancementHandled(result) end
+            if not handled then
                 retain(result, "advancement_client_handle_invalid", "advancementClient.handle")
+            else
+                notifyClientState(localSlot, "advancement_terminal")
             end
         end
     end
@@ -519,6 +538,40 @@ function Build42Lifecycle.create(dependencies)
     end
 
     function owner.clientState(localSlot) return clientView(localSlot) end
+
+    function owner.setClientStateListener(listener)
+        if listener ~= nil and not callable(listener) then return failure("invalid_listener", "listener") end
+        clientStateListener = listener
+        return { ok = true }
+    end
+
+    function owner.refreshOwner(localSlot)
+        if mode == "server" then return failure("owner_refresh_unavailable", "server mode") end
+        if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        local player = readyPlayers[localSlot]
+        if player == nil then return failure("player_not_ready", "localSlot") end
+
+        if mode == "client" then
+            local called, result = pcall(ownerClient.refresh, localSlot, player)
+            if called and exactTable(result, { ok = true }) and rawget(result, "ok") == true then return { ok = true } end
+            if called and exactTable(result, { ok = true, code = true, detail = true })
+                and rawget(result, "ok") == false and safeId(rawget(result, "code"), 64)
+                and safeText(rawget(result, "detail"), 160, false) then
+                return failure(rawget(result, "code"), rawget(result, "detail"))
+            end
+            return retain(result, "owner_refresh_invalid", "ownerClient.refresh")
+        end
+
+        local snapshotResult = trusted(ownerSessionSnapshot, "session_snapshot_invalid", "ownerSession.snapshot", player)
+        if snapshotResult == nil or type(rawget(snapshotResult, "snapshot")) ~= "table" then
+            return snapshotResult == nil and retainedFailure or retain(snapshotResult, "session_snapshot_invalid", "ownerSession.snapshot")
+        end
+        local accepted = trusted(ownerClient.acceptLocal, "owner_accept_invalid", "ownerClient.acceptLocal", localSlot, rawget(snapshotResult, "snapshot"))
+        if accepted == nil then return retainedFailure end
+        if acceptance(accepted) == nil then return retain(accepted, "owner_accept_invalid", "ownerClient.acceptLocal") end
+        if acceptance(accepted) then notifyClientState(localSlot, "owner_snapshot") end
+        return { ok = true }
+    end
 
     function owner.requestAdvancement(localSlot, perkId)
         if mode == "server" then return failure("advancement_unavailable", "server mode") end

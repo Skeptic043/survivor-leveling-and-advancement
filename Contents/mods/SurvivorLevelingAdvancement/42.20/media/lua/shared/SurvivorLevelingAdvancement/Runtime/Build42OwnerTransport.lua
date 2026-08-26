@@ -2,6 +2,7 @@ local Build42OwnerTransport = {}
 
 local MODULE = "SurvivorLevelingAdvancement"
 local READY_COMMAND = "ownerReady"
+local REFRESH_COMMAND = "ownerRefresh"
 local SNAPSHOT_COMMAND = "ownerSnapshot"
 local PROTOCOL_VERSION = 1
 local MAX_CORRELATION_LENGTH = 64
@@ -155,8 +156,8 @@ local function sendServer(send, player, envelope)
     return { ok = true }
 end
 
-local function sendClient(send, player, envelope)
-    local called = pcall(send, player, MODULE, READY_COMMAND, envelope)
+local function sendClient(send, player, command, envelope)
+    local called = pcall(send, player, MODULE, command, envelope)
     if not called then return failure("send_threw", "sendClientCommand") end
     return { ok = true }
 end
@@ -205,13 +206,24 @@ function Build42OwnerTransport.createServer(dependencies)
 
     function server.handle(module, command, player, args)
         if module ~= MODULE then return { ok = true, handled = false } end
-        if command ~= READY_COMMAND then
+        if command ~= READY_COMMAND and command ~= REFRESH_COMMAND then
             return failure("unknown_command", "owner command")
         end
         if player == nil then return failure("invalid_player", "player") end
 
         local correlationId, requestFailure = validateRequest(args)
         if correlationId == nil then return requestFailure end
+
+        if command == REFRESH_COMMAND then
+            if bindings[player] ~= correlationId then
+                local sentFailure = sendServer(send, player, serverFailure(correlationId, failure("not_bound", "player route")))
+                if not sentFailure.ok then return sentFailure end
+                return { ok = true, handled = true }
+            end
+            local published = server.publish(player)
+            if not published.ok then return published end
+            return { ok = true, handled = true }
+        end
 
         local snapshot, readyFailure = sessionSnapshot(ownerSession.ready, "ready", player)
         if snapshot == nil then
@@ -340,7 +352,7 @@ function Build42OwnerTransport.createClient(dependencies)
         if entry == nil and create then
             local inbox, createFailure = createInbox()
             if inbox == nil then return nil, createFailure end
-            entry = { inbox = inbox, pending = nil, active = nil, failure = nil }
+            entry = { inbox = inbox, pending = nil, active = nil, refreshPending = false, failure = nil }
             slots[localSlot] = entry
         end
         return entry
@@ -372,7 +384,7 @@ function Build42OwnerTransport.createClient(dependencies)
         entry.pending = correlationId
         routes[correlationId] = { slot = localSlot, phase = "pending" }
 
-        local sent = sendClient(send, player, {
+        local sent = sendClient(send, player, READY_COMMAND, {
             protocolVersion = PROTOCOL_VERSION,
             correlationId = correlationId,
         })
@@ -383,6 +395,26 @@ function Build42OwnerTransport.createClient(dependencies)
             return sent
         end
         return { ok = true, correlationId = correlationId }
+    end
+
+    function client.refresh(localSlot, player)
+        if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        if player == nil then return failure("invalid_player", "player") end
+        local entry = entryFor(localSlot, false)
+        if entry == nil or entry.active == nil then return failure("not_bound", "player route") end
+        if entry.refreshPending then return failure("refresh_pending", "localSlot") end
+
+        entry.refreshPending = true
+        local sent = sendClient(send, player, REFRESH_COMMAND, {
+            protocolVersion = PROTOCOL_VERSION,
+            correlationId = entry.active,
+        })
+        if not sent.ok then
+            entry.refreshPending = false
+            entry.failure = { code = sent.code, detail = sent.detail }
+            return sent
+        end
+        return { ok = true }
     end
 
     function client.handle(module, command, args)
@@ -409,12 +441,14 @@ function Build42OwnerTransport.createClient(dependencies)
                 routes[response.correlationId] = nil
                 entry.pending = nil
             end
+            if route.phase == "active" then entry.refreshPending = false end
             entry.failure = { code = response.code, detail = response.detail }
             return {
                 ok = true,
                 handled = true,
                 accepted = false,
                 code = response.code,
+                localSlot = route.slot,
             }
         end
 
@@ -425,7 +459,8 @@ function Build42OwnerTransport.createClient(dependencies)
         end
         if not accepted.accepted then
             local code = safeId(accepted.code, MAX_CODE_LENGTH) and accepted.code or "not_accepted"
-            return { ok = true, handled = true, accepted = false, code = code }
+            if route.phase == "active" then entry.refreshPending = false end
+            return { ok = true, handled = true, accepted = false, code = code, localSlot = route.slot }
         end
 
         if entry.active ~= nil and entry.active ~= response.correlationId then
@@ -434,8 +469,9 @@ function Build42OwnerTransport.createClient(dependencies)
         entry.pending = nil
         entry.active = response.correlationId
         route.phase = "active"
+        entry.refreshPending = false
         entry.failure = nil
-        return { ok = true, handled = true, accepted = true }
+        return { ok = true, handled = true, accepted = true, localSlot = route.slot }
     end
 
     function client.acceptLocal(localSlot, snapshot)
@@ -458,6 +494,7 @@ function Build42OwnerTransport.createClient(dependencies)
         local resetResult, resetFailure = inboxCall(entry.inbox, "reset")
         if resetResult == nil then return resetFailure end
         removeRoutes(entry)
+        entry.refreshPending = false
         entry.failure = nil
         return { ok = true }
     end

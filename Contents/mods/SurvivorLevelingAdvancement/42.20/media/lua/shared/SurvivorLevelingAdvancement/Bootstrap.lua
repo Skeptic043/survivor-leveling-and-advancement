@@ -16,6 +16,8 @@ local function validSentinel(value)
         install = true,
         status = true,
         clientState = true,
+        refreshOwner = true,
+        setClientStateListener = true,
         requestAdvancement = true,
         advancementStatus = true,
     }
@@ -23,6 +25,8 @@ local function validSentinel(value)
     return type(rawget(owner, "install")) == "function"
         and type(rawget(owner, "status")) == "function"
         and type(rawget(owner, "clientState")) == "function"
+        and type(rawget(owner, "refreshOwner")) == "function"
+        and type(rawget(owner, "setClientStateListener")) == "function"
         and type(rawget(owner, "requestAdvancement")) == "function"
         and type(rawget(owner, "advancementStatus")) == "function"
 end

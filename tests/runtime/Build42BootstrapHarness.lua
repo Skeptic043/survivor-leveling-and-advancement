@@ -14,6 +14,8 @@ if evidence == nil then
         install = function() evidence.installs = evidence.installs + 1; return { ok = true } end,
         status = function() return { ok = true } end,
         clientState = function() return { ok = true, present = false } end,
+        refreshOwner = function() return { ok = false } end,
+        setClientStateListener = function() return { ok = true } end,
         requestAdvancement = function() return { ok = false } end,
         advancementStatus = function() return { ok = true, pending = false } end,
     }
@@ -57,7 +59,9 @@ elseif evidence.phase == 1 then
     evidence.created.globals.addXp = replacementAddXp
     check(addXp == replacementAddXp, "lifecycle globals owns real addXp cell")
     addXp = originalAddXp
-    check(evidence.owner.modules == nil and type(rawget(_G, key).owner.status) == "function", "no dependencies exposed")
+    check(evidence.owner.modules == nil and type(rawget(_G, key).owner.status) == "function"
+        and type(rawget(_G, key).owner.refreshOwner) == "function"
+        and type(rawget(_G, key).owner.setClientStateListener) == "function", "no dependencies exposed")
     local required = {
         "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
         "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog", "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter", "SurvivorLevelingAdvancement/Adapters/Build42NormalizationSnapshot", "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider", "SurvivorLevelingAdvancement/Adapters/Build42SandboxMultiplier", "SurvivorLevelingAdvancement/Adapters/Build42XpPositionArithmetic",
@@ -70,6 +74,7 @@ elseif evidence.phase == 2 then
     check(rawget(_G, "C10TBootstrapCollision").code == "lifecycle_sentinel_collision", "malformed collision")
     rawset(_G, key, { signature = signature, owner = {
         install = function() error("install boom") end, status = function() end, clientState = function() end,
+        refreshOwner = function() end, setClientStateListener = function() end,
         requestAdvancement = function() end, advancementStatus = function() end,
     } })
     evidence.phase = 3
@@ -77,6 +82,7 @@ elseif evidence.phase == 3 then
     check(rawget(_G, "C10TBootstrapThrow").code == "lifecycle_install_threw", "thrown install")
     rawset(_G, key, { signature = signature, owner = {
         install = function() return "bad" end, status = function() end, clientState = function() end,
+        refreshOwner = function() end, setClientStateListener = function() end,
         requestAdvancement = function() end, advancementStatus = function() end,
     } })
     evidence.phase = 4
@@ -90,6 +96,7 @@ elseif evidence.phase == 5 then
     check(rawget(_G, key) == nil, "malformed owner sentinel absent")
     rawset(_G, key, { signature = signature, owner = {
         install = function() return { ok = true } end, status = function() end, clientState = function() end,
+        refreshOwner = function() end, setClientStateListener = function() end,
         requestAdvancement = function() end, advancementStatus = function() end, dependencies = {},
     } })
     evidence.phase = 6

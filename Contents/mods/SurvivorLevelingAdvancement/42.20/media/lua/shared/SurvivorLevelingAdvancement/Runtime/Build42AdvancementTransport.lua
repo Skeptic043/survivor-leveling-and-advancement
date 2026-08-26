@@ -594,7 +594,7 @@ function Build42AdvancementTransport.createClient(dependencies)
         end
 
         lastBySlot[localSlot] = summary
-        return { ok = true, handled = true, result = copySummary(summary) }
+        return { ok = true, handled = true, localSlot = localSlot, result = copySummary(summary) }
     end
 
     function client.status(localSlot)

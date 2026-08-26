@@ -28,7 +28,7 @@ local function fixture(server, client, configure)
     local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
     local session = {
         ready = function(player) calls[#calls + 1] = { "ready", player }; return { ok = true, snapshot = { marker = player, ready = true, revision = 0 } } end,
-        snapshot = function() return { ok = true, snapshot = {} } end,
+        snapshot = function(player) calls[#calls + 1] = { "snapshot", player }; return { ok = true, snapshot = { marker = player } } end,
         isReady = function() return true end,
         clearPlayer = function() return { ok = true } end,
     }
@@ -50,7 +50,8 @@ local function fixture(server, client, configure)
     local runtime = { catalog = {}, services = { xpSource = source, ownerSession = session, advancementSession = advancementSession } }
     local localClient = {
         ready = function(slot, player) calls[#calls + 1] = { "client_ready", slot, player }; return { ok = true } end,
-        handle = function(module, command, args) calls[#calls + 1] = { "client_handle", module, command, args }; return { ok = true, handled = true, accepted = true } end,
+        refresh = function(slot, player) calls[#calls + 1] = { "client_refresh", slot, player }; return { ok = true } end,
+        handle = function(module, command, args) calls[#calls + 1] = { "client_handle", module, command, args }; return { ok = true, handled = true, accepted = true, localSlot = 0 } end,
         reset = function() calls[#calls + 1] = { "client_reset" }; return { ok = true } end,
         resetSlot = function(slot) calls[#calls + 1] = { "client_reset_slot", slot }; return { ok = true } end,
         acceptLocal = function(slot, snapshot) calls[#calls + 1] = { "client_accept", slot, snapshot }; return { ok = true, accepted = true } end,
@@ -68,7 +69,7 @@ local function fixture(server, client, configure)
         request = function(slot, player, perkId) calls[#calls + 1] = { "adv_request", slot, player, perkId }; return { ok = true, requestId = "mp:1" } end,
         handle = function(module, command, args)
             calls[#calls + 1] = { "adv_handle", module, command, args }
-            return { ok = true, handled = true, result = {
+            return { ok = true, handled = true, localSlot = 0, result = {
                 ok = true, applied = false, requestId = "mp:1", perkId = "Strength",
                 code = "insufficient_ap", detail = "ap",
             } }
@@ -115,8 +116,9 @@ do
     yes(created.ok, "server creates")
     exactKeys(created.owner, {
         install = true, status = true, clientState = true,
+        refreshOwner = true, setClientStateListener = true,
         requestAdvancement = true, advancementStatus = true,
-    }, 5, "exact owner API")
+    }, 7, "exact owner API")
     eq(f.clientCreates(), 0, "server creates no client transport")
     eq(f.factoryCalls(), 0, "server construction is inert")
     eq(f.events.OnServerStarted.adds(), 0, "server construction registers no event")
@@ -133,6 +135,8 @@ do
     eq(f.calls[5][2].snapshotValidator.validate, f.validator, "server receives construction-captured validator")
     f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", {}, { correlationId = "x" })
     eq(f.calls[#f.calls][1], "server_handle", "server command delegated")
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerRefresh", {}, { correlationId = "x" })
+    eq(f.calls[#f.calls][3], "ownerRefresh", "server refresh exact-dispatched")
     yes(created.owner.status().started, "server started")
     no(created.owner.clientState(0).ok, "server has no client state")
 end
@@ -488,8 +492,8 @@ do
     local ownerShapes = {
         function() return { ok = true } end,
         function() return { ok = true, handled = false, accepted = true } end,
-        function() return { ok = true, handled = true, accepted = true, private = true } end,
-        function() return setmetatable({ ok = true, handled = true, accepted = true }, {}) end,
+        function() return { ok = true, handled = true, accepted = true, localSlot = 0, private = true } end,
+        function() return setmetatable({ ok = true, handled = true, accepted = true, localSlot = 0 }, {}) end,
     }
     for index = 1, #ownerShapes do
         local created, f = fixture(false, true, function(values) values.localClient.handle = ownerShapes[index] end)
@@ -499,7 +503,7 @@ do
     end
     local created, f = fixture(false, true, function(values)
         values.localClient.handle = function()
-            return { ok = true, handled = true, accepted = false, code = "stale_snapshot" }
+            return { ok = true, handled = true, accepted = false, code = "stale_snapshot", localSlot = 0 }
         end
     end)
     created.owner.install(); f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", {})
@@ -514,8 +518,8 @@ do
     local advancementShapes = {
         function() return { ok = true } end,
         function() return { ok = true, handled = false, result = validResult } end,
-        function() return { ok = true, handled = true, result = validResult, private = true } end,
-        function() return setmetatable({ ok = true, handled = true, result = validResult }, {}) end,
+        function() return { ok = true, handled = true, localSlot = 0, result = validResult, private = true } end,
+        function() return setmetatable({ ok = true, handled = true, localSlot = 0, result = validResult }, {}) end,
     }
     for index = 1, #advancementShapes do
         local created, f = fixture(false, true, function(values) values.advancementClient.handle = advancementShapes[index] end)
@@ -767,6 +771,98 @@ do
     local result = created.owner.requestAdvancement(0, "Strength")
     yes(result.ok, "SP uses startup-captured advancement request")
     eq(f.calls[#f.calls - 1][1], "session_request", "captured SP session request executed")
+end
+
+do
+    local created, f = fixture(false, true)
+    local notices = {}
+    yes(created.owner.setClientStateListener(function(slot, kind)
+        notices[#notices + 1] = { slot, kind }
+    end).ok, "client listener installs")
+    yes(created.owner.install().ok, "client refresh hooks install")
+    local player = {}
+    f.events.OnCreatePlayer.fire(2, player)
+    local before = #f.calls
+    for index = 1, 200 do
+        created.owner.clientState(2)
+        created.owner.advancementStatus(2)
+        f.events.OnServerCommand.fire("Other", "ignored", {})
+    end
+    eq(#f.calls, before, "views and unrelated callbacks do not refresh")
+    yes(created.owner.refreshOwner(2).ok, "multiplayer refresh delegates")
+    eq(f.calls[#f.calls][1], "client_refresh", "multiplayer refresh uses owner client")
+    eq(f.calls[#f.calls][2], 2, "multiplayer refresh preserves slot")
+    eq(f.calls[#f.calls][3], player, "multiplayer refresh preserves player identity")
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", {})
+    eq(#notices, 1, "accepted owner response emits one notice")
+    eq(notices[#notices][1], 0, "accepted owner response supplies transport slot")
+    eq(notices[#notices][2], "owner_snapshot", "accepted owner response notifies once")
+    yes(created.owner.requestAdvancement(2, "Strength").ok, "requested AP route coexists with refresh")
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "advancementResult", {})
+    eq(#notices, 2, "terminal advancement response emits one notice")
+    eq(notices[#notices][2], "advancement_terminal", "terminal advancement response notifies once")
+    local replacementNotices = 0
+    yes(created.owner.setClientStateListener(function()
+        replacementNotices = replacementNotices + 1
+    end).ok, "client listener replaces prior sink")
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", {})
+    eq(#notices, 2, "replaced listener does not retain prior sink")
+    eq(replacementNotices, 1, "replacement listener receives owner notice")
+    yes(created.owner.setClientStateListener(nil).ok, "client listener clears")
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "advancementResult", {})
+    eq(replacementNotices, 1, "cleared listener receives no terminal notice")
+    no(created.owner.setClientStateListener({}).ok, "nonfunction listener is rejected")
+end
+
+do
+    local created, f = fixture(false, false)
+    local notices = 0
+    yes(created.owner.setClientStateListener(function()
+        notices = notices + 1
+        error("listener boom")
+    end).ok, "throwing listener installs")
+    yes(created.owner.install().ok, "SP refresh hooks install")
+    local player = {}
+    f.events.OnGameStart.fire()
+    f.events.OnCreatePlayer.fire(1, player)
+    eq(notices, 1, "SP ready notifies accepted owner snapshot")
+    local before = #f.calls
+    yes(created.owner.refreshOwner(1).ok, "SP refresh succeeds")
+    eq(f.calls[before + 1][1], "snapshot", "SP refresh calls session snapshot once")
+    eq(f.calls[before + 1][2], player, "SP refresh keeps exact ready player")
+    eq(f.calls[before + 2][1], "client_accept", "SP refresh uses existing local inbox")
+    eq(notices, 2, "listener throw is contained without retry")
+    eq(created.owner.status().failure, nil, "listener throw does not retain lifecycle failure")
+    no(created.owner.refreshOwner(4).ok, "invalid refresh slot is bounded")
+end
+
+do
+    local created, f = fixture(false, false, function(values)
+        values.localClient.get = function()
+            return { ok = true, present = true, snapshot = { ready = true, revision = 7 } }
+        end
+    end)
+    local terminalNotices = {}
+    created.owner.setClientStateListener(function(slot, kind)
+        terminalNotices[#terminalNotices + 1] = { slot, kind }
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    local result = created.owner.requestAdvancement(0, "Strength")
+    yes(result.ok and result.applied, "SP terminal request succeeds")
+    eq(terminalNotices[#terminalNotices][1], 0, "SP terminal listener keeps slot")
+    eq(terminalNotices[#terminalNotices][2], "advancement_terminal", "SP terminal request notifies after storage")
+end
+
+do
+    local created, f = fixture(false, true, function(values)
+        values.localClient.refresh = function()
+            return { ok = false, code = "not_bound", detail = "player route" }
+        end
+    end)
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    local unbound = created.owner.refreshOwner(0)
+    eq(unbound.code, "not_bound", "valid unbound refresh is returned")
+    eq(created.owner.status().failure, nil, "valid unbound refresh does not poison lifecycle")
 end
 
 local bootstrapEvidence = rawget(_G, "__C10T_BOOTSTRAP_EVIDENCE")
