@@ -51,6 +51,7 @@ local function makeDependencies(overrides)
         clearPlayer = function() return { ok = true } end,
     }
     local advancementSession = { request = function() return { ok = true } end }
+    local adminSession = { inspect = function() return { ok = true } end, request = function() return { ok = true } end }
     local processorCalls = {}
     local processor = {
         process = function(player, award, settings)
@@ -189,6 +190,13 @@ local function makeDependencies(overrides)
                 return { ok = true, session = advancementSession }
             end,
         },
+        AdminSession = {
+            create = function(argument)
+                calls[#calls + 1] = "admin"
+                arguments.admin = argument
+                return { ok = true, session = adminSession }
+            end,
+        },
         catalog = {
             allPerks = function() return {} end,
             resolver = {
@@ -224,6 +232,7 @@ local function makeDependencies(overrides)
             ownerSnapshot = ownerSnapshot,
             ownerSession = ownerSession,
             advancementSession = advancementSession,
+            adminSession = adminSession,
             apService = apService,
             accountingMode = accountingMode,
             processor = processor,
@@ -242,6 +251,7 @@ local function makeDependencies(overrides)
         ownerSnapshot = ownerSnapshot,
         ownerSession = ownerSession,
         advancementSession = advancementSession,
+        adminSession = adminSession,
         apService = apService,
         accountingMode = accountingMode,
         processor = processor,
@@ -258,7 +268,7 @@ do
     local result = ServiceComposition.create(dependencies)
 
     assertTrue(result.ok, "composition succeeds")
-    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory order")
+    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory order")
     assertSame(fixture.arguments.store, dependencies.StateCodec, "codec identity")
     assertSame(fixture.arguments.settings.provider, dependencies.worldSettingsProvider, "provider identity")
     assertFalse(fixture.arguments.settings.normalizationByPerk == dependencies.normalizationByPerk, "normalization detached")
@@ -293,6 +303,16 @@ do
     assertSame(fixture.arguments.advancement.apTransaction, fixture.apService, "advancement AP identity")
     assertSame(fixture.arguments.advancement.allotmentSettings, fixture.worldSettings.allotmentSettings, "advancement settings identity")
     assertSame(fixture.arguments.advancement.ownerSession, fixture.ownerSession, "advancement owner identity")
+    assertSame(fixture.arguments.admin.store, fixture.store, "admin store identity")
+    assertSame(fixture.arguments.admin.catalog, dependencies.catalog, "admin catalog identity")
+    assertSame(fixture.arguments.admin.ownerSession, fixture.ownerSession, "admin owner identity")
+    assertSame(fixture.arguments.admin.SurvivorEconomy, dependencies.SurvivorEconomy, "admin economy identity")
+    local adminDependencyCount = 0
+    for key in pairs(fixture.arguments.admin) do
+        adminDependencyCount = adminDependencyCount + 1
+        assertTrue(key == "store" or key == "catalog" or key == "ownerSession" or key == "SurvivorEconomy", "admin dependency allowlist")
+    end
+    assertEqual(adminDependencyCount, 4, "admin receives four dependencies only")
     assertSame(result.services.store, fixture.store, "result store")
     assertSame(result.services.worldSettings, fixture.worldSettings, "result settings")
     assertSame(result.services.accountingMode, fixture.accountingMode, "result accounting mode")
@@ -302,6 +322,7 @@ do
     assertSame(result.services.xpSource, fixture.source, "result source")
     assertSame(result.services.ownerSession, fixture.ownerSession, "result owner session")
     assertSame(result.services.advancementSession, fixture.advancementSession, "result advancement session")
+    assertSame(result.services.adminSession, fixture.adminSession, "result admin session")
 
     local expectedKeys = {
         store = true,
@@ -314,13 +335,14 @@ do
         xpSource = true,
         ownerSession = true,
         advancementSession = true,
+        adminSession = true,
     }
     local serviceCount = 0
     for key in pairs(result.services) do
         serviceCount = serviceCount + 1
         assertTrue(expectedKeys[key] == true, "unexpected result service " .. tostring(key))
     end
-    assertEqual(serviceCount, 10, "ten services only")
+    assertEqual(serviceCount, 11, "eleven services only")
     assertEqual(result.services.dependencies, nil, "dependencies not exposed")
     assertEqual(result.services.modules, nil, "modules not exposed")
     assertEqual(result.services.OwnerSnapshot, nil, "snapshot factory not exposed")
@@ -423,6 +445,7 @@ assertPreflightFailure(function(dependencies) dependencies.AccountingMode.create
 assertPreflightFailure(function(dependencies) dependencies.OwnerSnapshot.create = nil end, "OwnerSnapshot.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSession.create = nil end, "OwnerSession.create is required")
 assertPreflightFailure(function(dependencies) dependencies.AdvancementSession.create = nil end, "AdvancementSession.create is required")
+assertPreflightFailure(function(dependencies) dependencies.AdminSession.create = nil end, "AdminSession.create is required")
 assertPreflightFailure(function(dependencies) dependencies.SurvivorEconomy.nextLevelCost = nil end, "SurvivorEconomy capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.catalog.allPerks = nil end, "catalog capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.catalog.resolver.resolve = nil end, "catalog capabilities are required")
@@ -443,6 +466,7 @@ local function assertFactoryStops(factoryName, replacement, expectedCalls, expec
         EventDerivedXpSource = "source",
         OwnerSession = "session",
         AdvancementSession = "advancement",
+        AdminSession = "admin",
     }
     local dependencies, fixture = makeDependencies(function(values, returned)
         values[factoryName].create = function(argument)
@@ -473,6 +497,11 @@ assertFactoryStops("OwnerSession", function() error("session boom") end, { "stor
 assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
 assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
 assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
+assertFactoryStops("AdminSession", function() return { ok = true, session = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end }, private = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end, private = {} } } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = false, code = "admin_unavailable", detail = "owner rejected" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "admin_unavailable")
+assertFactoryStops("AdminSession", function() error("admin boom") end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory_threw")
 
 do
     local dependencies, fixture = makeDependencies(function(values, returned)

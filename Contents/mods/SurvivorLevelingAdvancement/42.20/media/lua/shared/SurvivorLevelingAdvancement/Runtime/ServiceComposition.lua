@@ -137,6 +137,11 @@ local function validateDependencies(dependencies)
         return failure("invalid_dependencies", "AdvancementSession.create is required")
     end
 
+    local admin = rawget(dependencies, "AdminSession")
+    if type(admin) ~= "table" or getmetatable(admin) ~= nil or type(rawget(admin, "create")) ~= "function" then
+        return failure("invalid_dependencies", "AdminSession.create is required")
+    end
+
     if not hasFunctions(dependencies.MutationScope, { "begin", "isActive", "finish" }) then
         return failure("invalid_dependencies", "MutationScope capabilities are required")
     end
@@ -187,6 +192,30 @@ local function callAdvancementSession(factory, argument)
     local session = rawget(result, "session")
     if not exactPlain(session, { request = true }) or type(rawget(session, "request")) ~= "function" then
         return nil, failure("invalid_factory_result", "AdvancementSession.create returned a malformed service")
+    end
+    return session, nil
+end
+
+local function callAdminSession(factory, argument)
+    local create = rawget(factory, "create")
+    local called, result = pcall(create, argument)
+    if not called then return nil, failure("factory_threw", "AdminSession.create threw") end
+    if type(result) ~= "table" or getmetatable(result) ~= nil then
+        return nil, failure("invalid_factory_result", "AdminSession.create returned a malformed result")
+    end
+    if rawget(result, "ok") == false then
+        if exactPlain(result, { ok = true, code = true, detail = true }) and boundedCode(rawget(result, "code")) and boundedDetail(rawget(result, "detail")) then
+            return nil, failure(rawget(result, "code"), rawget(result, "detail"))
+        end
+        return nil, failure("invalid_factory_result", "AdminSession.create returned a malformed failure")
+    end
+    if not exactPlain(result, { ok = true, session = true }) or rawget(result, "ok") ~= true then
+        return nil, failure("invalid_factory_result", "AdminSession.create returned a malformed result")
+    end
+    local session = rawget(result, "session")
+    if not exactPlain(session, { inspect = true, request = true })
+        or type(rawget(session, "inspect")) ~= "function" or type(rawget(session, "request")) ~= "function" then
+        return nil, failure("invalid_factory_result", "AdminSession.create returned a malformed service")
     end
     return session, nil
 end
@@ -443,6 +472,19 @@ function ServiceComposition.create(dependencies)
         return advancementSessionFailure
     end
 
+    local adminSession, adminSessionFailure = callAdminSession(
+        rawget(dependencies, "AdminSession"),
+        {
+            store = store,
+            catalog = dependencies.catalog,
+            ownerSession = ownerSession,
+            SurvivorEconomy = dependencies.SurvivorEconomy,
+        }
+    )
+    if adminSession == nil then
+        return adminSessionFailure
+    end
+
     return {
         ok = true,
         services = {
@@ -456,6 +498,7 @@ function ServiceComposition.create(dependencies)
             xpSource = xpSource,
             ownerSession = ownerSession,
             advancementSession = advancementSession,
+            adminSession = adminSession,
         },
     }
 end
