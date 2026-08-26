@@ -70,7 +70,7 @@ local function validateDependencies(dependencies)
     local requiredCapabilities = {
         { "StateCodec", { "decode", "encode" } },
         { "NaturalLedger", { "baseline", "inspect", "reconcileExternal", "appendTarget", "master", "applySupported" } },
-        { "SurvivorEconomy", { "availableAp", "computeAward", "applyXp" } },
+        { "SurvivorEconomy", { "availableAp", "nextLevelCost", "computeAward", "applyXp" } },
         { "Allotment", { "evaluate" } },
         { "PostMax", { "apply" } },
         { "sandboxMultiplier", { "resolve" } },
@@ -91,6 +91,7 @@ local function validateDependencies(dependencies)
 
     local factories = {
         "PlayerStateStore",
+        "OwnerSnapshot",
         "ApTransaction",
         "SupportedAwardProcessor",
         "WorldSettings",
@@ -115,6 +116,7 @@ local function validateDependencies(dependencies)
 
     local catalog = dependencies.catalog
     if type(catalog) ~= "table"
+        or not isCallable(catalog.allPerks)
         or not hasFunctions(catalog.resolver, { "resolve" })
         or type(catalog.resolver.loadOptions) ~= "table"
         or not hasFunctions(catalog.perkIdentity, { "resolve" })
@@ -224,6 +226,20 @@ function ServiceComposition.create(dependencies)
         return worldSettingsFailure
     end
 
+    local ownerSnapshot, ownerSnapshotFailure = callSingleFactory(
+        "OwnerSnapshot",
+        dependencies.OwnerSnapshot,
+        {
+            catalog = dependencies.catalog,
+            SurvivorEconomy = dependencies.SurvivorEconomy,
+        },
+        "projector",
+        { "project" }
+    )
+    if ownerSnapshot == nil then
+        return ownerSnapshotFailure
+    end
+
     local apTransaction, apFailure = callSingleFactory(
         "ApTransaction",
         dependencies.ApTransaction,
@@ -237,7 +253,7 @@ function ServiceComposition.create(dependencies)
             resolver = dependencies.catalog.resolver,
         },
         "service",
-        { "spend", "recover" }
+        { "spend", "recover", "recoverLoadedState" }
     )
     if apTransaction == nil then
         return apFailure
@@ -326,6 +342,7 @@ function ServiceComposition.create(dependencies)
         services = {
             store = store,
             worldSettings = worldSettings,
+            ownerSnapshot = ownerSnapshot,
             apTransaction = apTransaction,
             awardProcessor = awardProcessor,
             awardHandler = awardHandler,
