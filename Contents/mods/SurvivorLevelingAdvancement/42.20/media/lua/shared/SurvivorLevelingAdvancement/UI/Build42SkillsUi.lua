@@ -2,7 +2,6 @@ local Build42SkillsUi = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
 local REFRESH_MILLIS = 1000
-local BUTTON_GAP = 4
 local STATUS_GAP = 12
 local OUTER_PADDING = 14
 local BLUE_R, BLUE_G, BLUE_B = 0.25, 0.60, 1.00
@@ -310,6 +309,9 @@ local function validModelView(value)
         if rawget(row, "reasonCode") ~= nil and REASON_KEYS[rawget(row, "reasonCode")] == nil then return false end
         if rawget(row, "enabled") and rawget(row, "reasonCode") ~= nil then return false end
         if not rawget(row, "enabled") and rawget(row, "reasonCode") == nil then return false end
+        if rawget(row, "enabled") and (rawget(row, "currentLevel") >= rawget(row, "effectiveMaximum")
+            or rawget(row, "nextTargetLevel") == nil
+            or not positiveInteger(rawget(row, "apCost"))) then return false end
     end
     return true
 end
@@ -500,7 +502,7 @@ function Build42SkillsUi.create(dependencies)
             row = nil,
             overlayValid = false,
         }
-        local buttonCalled, button = pcall(buttonNew, buttonClass, baseWidth + BUTTON_GAP, 0, height, height, "+", bar, function(target)
+        local buttonCalled, button = pcall(buttonNew, buttonClass, baseWidth, 0, height, height, "+", bar, function(target)
             if type(target) == "table" and callable(target.activate) then target:activate() end
         end)
         if not buttonCalled or type(button) ~= "table"
@@ -758,7 +760,7 @@ function Build42SkillsUi.create(dependencies)
         local left = firstButton and readNumber(firstButton, "getRight") or nil
         local y = firstButton and readNumber(firstButton, "getY") or nil
         if left == nil then left = OUTER_PADDING end
-        return left + BUTTON_GAP, width, y or OUTER_PADDING
+        return left, width, y or OUTER_PADDING
     end
 
     local function applyGeometry(view, state)
@@ -778,8 +780,8 @@ function Build42SkillsUi.create(dependencies)
                 local x = readNumber(bar, "getX")
                 local buttonWidth = readNumber(barState.button, "getWidth")
                 if x == nil or buttonWidth == nil or buttonWidth <= 0 then return false end
-                local expanded = barState.baseWidth + BUTTON_GAP + buttonWidth
-                if not writeNumber(barState.button, "setX", barState.baseWidth + BUTTON_GAP)
+                local expanded = barState.baseWidth + buttonWidth
+                if not writeNumber(barState.button, "setX", barState.baseWidth)
                     or not writeNumber(barState.button, "setY", 0)
                     or not writeNumber(bar, "setWidth", expanded) then return false end
                 barState.appliedWidth = expanded

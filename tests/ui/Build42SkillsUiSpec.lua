@@ -102,6 +102,12 @@ local function makeEnvironment(options)
         reason = options.reason,
         malformedSettings = false,
         modelFailure = false,
+        incompleteEnabled = false,
+        enabledAtMaximum = false,
+        enabledMissingCost = false,
+        enabledCurrentTarget = false,
+        enabledAboveMaximum = false,
+        enabledZeroCost = false,
         asynchronous = options.asynchronous ~= false,
         drawOrder = {},
         buildArguments = {},
@@ -260,6 +266,39 @@ local function makeEnvironment(options)
                     row.effectiveMaximum = row.effectiveMaximum + evidence.modelMaximumOffset
                     row.enabled = false
                     row.reasonCode = "maximum_mismatch"
+                end
+                if evidence.incompleteEnabled then
+                    row.nextTargetLevel = nil
+                    row.apCost = nil
+                    row.enabled = true
+                    row.reasonCode = nil
+                end
+                if evidence.enabledAtMaximum then
+                    row.currentLevel = row.effectiveMaximum
+                    row.nextTargetLevel = nil
+                    row.apCost = nil
+                    row.enabled = true
+                    row.reasonCode = nil
+                end
+                if evidence.enabledMissingCost then
+                    row.apCost = nil
+                    row.enabled = true
+                    row.reasonCode = nil
+                end
+                if evidence.enabledCurrentTarget then
+                    row.nextTargetLevel = row.currentLevel
+                    row.enabled = true
+                    row.reasonCode = nil
+                end
+                if evidence.enabledAboveMaximum then
+                    row.nextTargetLevel = row.effectiveMaximum + 1
+                    row.enabled = true
+                    row.reasonCode = nil
+                end
+                if evidence.enabledZeroCost then
+                    row.apCost = 0
+                    row.enabled = true
+                    row.reasonCode = nil
                 end
                 rows[source.perkId] = row
             end
@@ -492,6 +531,8 @@ expect(firstInput.rows[1].perkId == "Axe" and firstInput.rows[1].currentLevel ==
 local axeButton = axe.children[1]
 expect(axeButton.enabled, "eligible button enabled")
 equal(axeButton.title, "+", "native button copy")
+equal(axeButton.x, 200, "button begins exactly at the vanilla bar edge")
+equal(axe.width, 200 + axeButton.width, "bar expands by exactly the observed button width")
 expect(string.find(axeButton.tooltip, "Advance to level 2 for 1 AP.", 1, true) ~= nil,
     "button tooltip explains cost")
 equal(string.find(axeButton.tooltip, ";", 1, true), nil, "button tooltip has no semicolon")
@@ -695,6 +736,28 @@ invalidOverlayView:prerender()
 equal(invalidOverlayBar.children[1].enabled, false, "out-of-curve positions disable SLA control")
 invalidOverlayBar:renderPerkRect()
 equal(#invalidOverlayBar.draws, 0, "out-of-curve positions suppress overlays")
+
+local enabledRowCases = {
+    { field = "incompleteEnabled", label = "enabled row missing target and cost" },
+    { field = "enabledMissingCost", label = "enabled row missing AP cost" },
+    { field = "enabledCurrentTarget", label = "enabled row target not above current" },
+    { field = "enabledAboveMaximum", label = "enabled row target above maximum" },
+    { field = "enabledZeroCost", label = "enabled row with nonpositive AP cost" },
+    { field = "enabledAtMaximum", label = "enabled row at effective maximum" },
+}
+for index = 1, #enabledRowCases do
+    local rowCase = enabledRowCases[index]
+    local rowEnvironment = makeEnvironment()
+    rowEnvironment[rowCase.field] = true
+    expect(rowEnvironment.integration.install().ok, rowCase.label .. " integration installs")
+    local rowBar = makeBar(rowEnvironment, "Axe")
+    local rowView = makeView(rowEnvironment, 0, { rowBar })
+    rowView:prerender()
+    equal(rowEnvironment.modelBuilds, 1, rowCase.label .. " reaches model boundary")
+    expect(not rowBar.children[1].enabled, rowCase.label .. " fails closed")
+    rowBar.children[1]:click()
+    equal(rowEnvironment.requests[1], 0, rowCase.label .. " cannot request advancement")
+end
 
 local modes = { "PerSkill", "Free" }
 for index = 1, #modes do
