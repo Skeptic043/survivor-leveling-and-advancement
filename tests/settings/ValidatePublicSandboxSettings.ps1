@@ -63,9 +63,9 @@ Assert ($text -notmatch '(?m)^\s*page\s*=\s*SLA_PerSkill\s*,\s*$') 'no second sa
 
 $info = @{}
 foreach ($line in Get-Content $infoPath) { if ($line -match '^([^=]+)=(.*)$') { $info[$Matches[1]] = $Matches[2] } }
-Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,id,name,versionMax,versionMin') 'metadata has no extra fields'
+Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,id,name') 'metadata has no extra fields'
 Assert ($info.name -eq 'Survivor Leveling & Advancement' -and $info.id -eq 'SurvivorLevelingAdvancement') 'metadata name and id'
-Assert ($info.versionMin -eq '42.20.3' -and $info.versionMax -eq '42.20.3') 'metadata version bounds'
+Assert (-not $info.ContainsKey('versionMin') -and -not $info.ContainsKey('versionMax')) 'metadata does not enforce patch bounds'
 Assert ($info.description -eq 'Earn Survivor Levels through skill XP and spend Advancement Points to raise trainable skills.') 'metadata behavior description'
 
 $jsonText = Get-Content -Raw $jsonPath

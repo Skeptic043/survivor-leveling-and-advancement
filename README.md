@@ -1,12 +1,12 @@
 # Survivor Leveling & Advancement
 
-A planned Project Zomboid mod that turns ordinary skill activity into an independently paced Survivor Level and Advancement Point system. Advancement Points can immediately raise trainable skills while natural progression remains visible and meaningful.
+A Project Zomboid mod in active development that turns ordinary skill activity into an independently paced Survivor Level and Advancement Point system. Advancement Points can immediately raise trainable skills while natural progression remains visible and meaningful.
 
 ## Status
 
-Pre-implementation design and technical preparation. There is no installable release yet.
+Active development. The core XP, Survivor Level, Advancement Point, persistence, multiplayer-authority, sandbox-settings, and Skills-screen integration are implemented. Live UI validation and release preparation remain before the first public build.
 
-The initial target is Project Zomboid 42.20.3. The internal mod ID will be `SurvivorLevelingAdvancement`. Compatibility will be stated only for versions and integrations that have been tested.
+Development and current testing target Project Zomboid 42.20.4. The internal mod ID is `SurvivorLevelingAdvancement`. The mod does not enforce exact patch-version bounds, and compatibility will be claimed only for versions and integrations that have been tested.
 
 ## Design goals
 
