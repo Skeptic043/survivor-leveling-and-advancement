@@ -7,7 +7,7 @@ local function globals()
 end
 
 local function makeModules(log, g)
-    local catalog = { refresh = function() log[#log + 1] = "refresh"; return { ok = true } end }
+    local catalog = { refresh = function() log[#log + 1] = "refresh"; return { ok = true, acceptedCount = 1, skippedCount = 0 } end }
     local services = {}
     local ownerSnapshot = { create = function() end }
     local ownerSession = { create = function() end }
@@ -76,4 +76,29 @@ m.Build42PerkCatalog.create = function() return { ok = true, catalog = catalog }
 bad = Build42RuntimeFactory.create({ modules = {}, globals = g }); eq(bad.ok, false, "malformed failure"); eq(type(bad.detail), "string", "detail")
 m.Build42NormalizationSnapshot.build = function() error("boom") end
 bad = Build42RuntimeFactory.create({ modules = m, globals = g }); eq(bad.ok, false, "thrown failure"); eq(bad.code, "factory_threw", "thrown code")
+
+local function assertRefreshCountsRejected(refreshResult, message)
+    local localGlobals = globals()
+    local localLog = {}
+    local localModules, localCatalog = makeModules(localLog, localGlobals)
+    local normalizationCalls = 0
+    localCatalog.refresh = function()
+        localLog[#localLog + 1] = "refresh"
+        return refreshResult
+    end
+    localModules.Build42NormalizationSnapshot.build = function()
+        normalizationCalls = normalizationCalls + 1
+        return { ok = true, normalizationByPerk = {} }
+    end
+    local rejected = Build42RuntimeFactory.create({ modules = localModules, globals = localGlobals })
+    eq(rejected.ok, false, message .. " rejected")
+    eq(rejected.code, "catalog_refresh_failed", message .. " code")
+    eq(normalizationCalls, 0, message .. " stops before normalization")
+end
+
+assertRefreshCountsRejected({ ok = true, acceptedCount = 0, skippedCount = 0 }, "zero count")
+assertRefreshCountsRejected({ ok = true, skippedCount = 0 }, "missing accepted count")
+assertRefreshCountsRejected({ ok = true, acceptedCount = 1, skippedCount = 0.5 }, "fractional skipped count")
+assertRefreshCountsRejected({ ok = true, acceptedCount = math.huge, skippedCount = 0 }, "nonfinite accepted count")
+assertRefreshCountsRejected({ ok = true, acceptedCount = 1, skippedCount = -1 }, "inconsistent count")
 return assertions

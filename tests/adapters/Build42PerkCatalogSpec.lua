@@ -32,15 +32,20 @@ local function registry(values)
     return value
 end
 
-local adapter = { built = 0 }
-function adapter:build(value)
-    self.built = self.built + 1
+local adapter = { built = 0, builtHandles = {} }
+function adapter.build(value)
+    adapter.lastBuild = value
+    adapter.built = adapter.built + 1
     if value.rejectBuild then return { ok = false, code = "unsupported", detail = "unsupported" } end
-    return { ok = true, handle = { source = value, serial = self.built } }
+    local handle = { source = value, serial = adapter.built }
+    adapter.builtHandles[value] = handle
+    return { ok = true, handle = handle }
 end
-function adapter:describe(handle)
+function adapter.describe(handle)
+    adapter.lastDescribe = handle
     local source = handle.source
     if source.badDescription then return { ok = true, adapterId = "bad" } end
+    adapter.lastSuccessfulDescribe = handle
     return {
         ok = true, adapterId = "sla.vanilla", adapterVersion = 1,
         curveFingerprint = "curve." .. source.id, effectiveMaximum = 3,
@@ -48,7 +53,8 @@ function adapter:describe(handle)
         perLevelRequirements = { [1] = 10, [2] = 20, [3] = 30 },
     }
 end
-function adapter:inspect(handle, player)
+function adapter.inspect(handle, player)
+    adapter.lastInspectHandle, adapter.lastInspectPlayer = handle, player
     if player == "bad" then return { ok = true, actualPosition = math.huge } end
     if player == "throw" then error("inspect failure") end
     return { ok = true, actualPosition = player.position }
@@ -86,6 +92,8 @@ local fitnessResolved = catalog.resolver.resolve("Fitness")
 assertTrue(fitnessResolved.ok, "resolver should find exact ID")
 assertFailure(catalog.resolver.resolve("Unknown"), "unknown-perk")
 assertEqual(fitnessResolved.handle.source, fitness, "resolver returns the adapter handle")
+assertEqual(adapter.lastBuild, malformed, "build receives exact perk without adapter receiver")
+assertEqual(adapter.lastSuccessfulDescribe, adapter.builtHandles[modded], "describe receives exact successful build handle without adapter receiver")
 assertEqual(catalog.perkFor("Fitness").perk, fitness, "perkFor returns the published object")
 assertTrue(catalog.perkFor("Fitness").perk ~= fitnessResolved.handle, "perkFor must not return the adapter handle")
 local all = catalog.allPerks()
@@ -94,7 +102,10 @@ assertEqual(all.perks[1], fitness, "allPerks returns exact published objects")
 assertTrue(all.perks[1] ~= fitnessResolved.handle, "allPerks must not return adapter handles")
 all.perks[1] = nil
 assertEqual(#catalog.allPerks().perks, 2, "allPerks must detach its array")
-assertEqual(catalog.positionReader.read({ position = 17 }, "Fitness").position, 17, "position reader returns exact coordinate")
+local readerPlayer = { position = 17 }
+assertEqual(catalog.positionReader.read(readerPlayer, "Fitness").position, 17, "position reader returns exact coordinate")
+assertEqual(adapter.lastInspectHandle, fitnessResolved.handle, "inspect receives exact handle without adapter receiver")
+assertEqual(adapter.lastInspectPlayer, readerPlayer, "inspect receives exact player without adapter receiver")
 assertFailure(catalog.positionReader.read("bad", "Fitness"), "invalid-position")
 assertFailure(catalog.positionReader.read("throw", "Fitness"), "capability-error")
 assertFailure(catalog.positionReader.read({ position = 0 }, "Unknown"), "unknown-perk")
@@ -159,17 +170,17 @@ assertEqual(malformedRefresh.acceptedCount, 1, "valid entry should survive malfo
 assertEqual(malformedRefresh.skippedCount, 2, "throwing ID and parent should skip independently")
 
 local throwingAdapter = {}
-function throwingAdapter:build(value) error("build failure") end
-function throwingAdapter:describe(handle) error("describe failure") end
-function throwingAdapter:inspect(handle, player) return { ok = true, actualPosition = 0 } end
+function throwingAdapter.build(value) error("build failure") end
+function throwingAdapter.describe(handle) error("describe failure") end
+function throwingAdapter.inspect(handle, player) return { ok = true, actualPosition = 0 } end
 local throwingBuildCatalog = Catalog.create({ perkRegistry = registry({ fitness }), nonePerk = none, progressionAdapter = throwingAdapter }).catalog
 local throwingBuildRefresh = throwingBuildCatalog.refresh()
 assertTrue(throwingBuildRefresh.ok, "throwing build should be skipped")
 assertEqual(throwingBuildRefresh.skippedCount, 1, "throwing build should count once")
 local describeThrowAdapter = {}
-function describeThrowAdapter:build(value) return { ok = true, handle = value } end
-function describeThrowAdapter:describe(handle) error("describe failure") end
-function describeThrowAdapter:inspect(handle, player) return { ok = true, actualPosition = 0 } end
+function describeThrowAdapter.build(value) return { ok = true, handle = value } end
+function describeThrowAdapter.describe(handle) error("describe failure") end
+function describeThrowAdapter.inspect(handle, player) return { ok = true, actualPosition = 0 } end
 local throwingDescribeCatalog = Catalog.create({ perkRegistry = registry({ fitness }), nonePerk = none, progressionAdapter = describeThrowAdapter }).catalog
 local throwingDescribeRefresh = throwingDescribeCatalog.refresh()
 assertTrue(throwingDescribeRefresh.ok, "throwing describe should be skipped")

@@ -75,6 +75,14 @@ function Factory.create(dependencies)
         return fail("catalog_refresh_failed", "malformed catalog refresh failure")
     end
     if refreshed.ok ~= true then return fail("catalog_refresh_failed", "catalog.refresh did not succeed") end
+    if type(refreshed.acceptedCount) ~= "number" or refreshed.acceptedCount ~= refreshed.acceptedCount
+        or refreshed.acceptedCount == math.huge or refreshed.acceptedCount == -math.huge
+        or refreshed.acceptedCount ~= math.floor(refreshed.acceptedCount) or refreshed.acceptedCount < 1
+        or type(refreshed.skippedCount) ~= "number" or refreshed.skippedCount ~= refreshed.skippedCount
+        or refreshed.skippedCount == math.huge or refreshed.skippedCount == -math.huge
+        or refreshed.skippedCount ~= math.floor(refreshed.skippedCount) or refreshed.skippedCount < 0 then
+        return fail("catalog_refresh_failed", "catalog.refresh counts are invalid or empty")
+    end
     local snapshot; snapshot, err = call("Build42NormalizationSnapshot.build", m.Build42NormalizationSnapshot.build, { catalog = catalog, SurvivorEconomy = m.SurvivorEconomy }); if err then return err end
     local normalization; normalization, err = resultField(snapshot, "normalizationByPerk", "normalization_build_failed"); if err then return err end
     local providerResult; providerResult, err = call("Build42WorldSettingsProvider.create", m.Build42WorldSettingsProvider.create, { readSandboxVars = function() return g.SandboxVars end }); if err then return err end

@@ -51,6 +51,17 @@ local function call(target, fn, label, ...)
     return value, nil
 end
 
+local function luaCall(fn, label, ...)
+    local arguments = { ... }
+    local ok, value = pcall(function()
+        return fn(unpack(arguments))
+    end)
+    if not ok then
+        return nil, failure("capability-error", label .. " failed")
+    end
+    return value, nil
+end
+
 local function validDescription(description)
     if type(description) ~= "table" or description.ok ~= true
         or not isSafeId(description.adapterId)
@@ -155,11 +166,11 @@ function Catalog.create(dependencies)
                 elseif temporary.byId[perkId] ~= nil or temporary.byObject[perk] ~= nil then
                     return failure("ambiguous-perk", "duplicate published perk ID or object identity")
                 else
-                    local built = call(dependencies.progressionAdapter, build, "progressionAdapter.build", perk)
+                    local built = luaCall(build, "progressionAdapter.build", perk)
                     if type(built) ~= "table" or built.ok ~= true or built.handle == nil then
                         temporary.skippedCount = temporary.skippedCount + 1
                     else
-                        local description = call(dependencies.progressionAdapter, describe, "progressionAdapter.describe", built.handle)
+                        local description = luaCall(describe, "progressionAdapter.describe", built.handle)
                         if not validDescription(description) then
                             temporary.skippedCount = temporary.skippedCount + 1
                         else
@@ -210,7 +221,7 @@ function Catalog.create(dependencies)
         if not resolved.ok then
             return resolved
         end
-        local inspected, inspectionFailure = call(resolved.adapter, inspect, "progressionAdapter.inspect", resolved.handle, player)
+        local inspected, inspectionFailure = luaCall(inspect, "progressionAdapter.inspect", resolved.handle, player)
         if inspected == nil then
             return inspectionFailure
         end
