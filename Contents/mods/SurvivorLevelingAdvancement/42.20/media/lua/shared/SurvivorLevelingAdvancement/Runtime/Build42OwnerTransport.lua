@@ -133,8 +133,8 @@ local function sessionSnapshot(callable, operation, player)
     )
 end
 
-local function validateServerSnapshot(snapshotValidator, snapshot)
-    local called, result = pcall(snapshotValidator.validate, snapshot)
+local function validateServerSnapshot(validateSnapshot, snapshot)
+    local called, result = pcall(validateSnapshot, snapshot)
     if not called then
         return nil, failure("snapshot_validation_threw", "snapshotValidator.validate")
     end
@@ -191,7 +191,8 @@ function Build42OwnerTransport.createServer(dependencies)
         return failure("invalid_dependencies", "ownerSession")
     end
     local snapshotValidator = dependencies.snapshotValidator
-    if type(snapshotValidator) ~= "table" or type(snapshotValidator.validate) ~= "function" then
+    local validateSnapshot = type(snapshotValidator) == "table" and snapshotValidator.validate or nil
+    if type(validateSnapshot) ~= "function" then
         return failure("invalid_dependencies", "snapshotValidator.validate")
     end
     local send = dependencies.sendServerCommand
@@ -219,7 +220,7 @@ function Build42OwnerTransport.createServer(dependencies)
             return readyFailure
         end
 
-        local checkedSnapshot, validationFailure = validateServerSnapshot(snapshotValidator, snapshot)
+        local checkedSnapshot, validationFailure = validateServerSnapshot(validateSnapshot, snapshot)
         if checkedSnapshot == nil then
             local sentFailure = sendServer(send, player, serverFailure(correlationId, validationFailure))
             if not sentFailure.ok then return sentFailure end
@@ -244,7 +245,7 @@ function Build42OwnerTransport.createServer(dependencies)
             return snapshotFailure
         end
 
-        local checkedSnapshot, validationFailure = validateServerSnapshot(snapshotValidator, snapshot)
+        local checkedSnapshot, validationFailure = validateServerSnapshot(validateSnapshot, snapshot)
         if checkedSnapshot == nil then
             local sentFailure = sendServer(send, player, serverFailure(correlationId, validationFailure))
             if not sentFailure.ok then return sentFailure end

@@ -119,14 +119,12 @@ invalidValidation.privateRoot = true
 expectFailure(ClientOwnerState.validate(invalidValidation), "invalid_snapshot", "fields")
 
 local originalValidate = ClientOwnerState.validate
-local validationCalls = 0
-ClientOwnerState.validate = function(value)
-    validationCalls = validationCalls + 1
-    return originalValidate(value)
-end
-local reuseState = ClientOwnerState.create().state
-expectEqual(reuseState.accept(validSnapshot(1)).accepted, true, "accept succeeds through public validator")
-expectEqual(validationCalls, 1, "accept reuses public stateless validator exactly once")
+local immutableState = ClientOwnerState.create().state
+ClientOwnerState.validate = function(value) return { ok = true, snapshot = value } end
+local bypassAttempt = validSnapshot(1)
+bypassAttempt.privateRoot = true
+expectFailure(immutableState.accept(bypassAttempt), "invalid_snapshot", "fields")
+expectEqual(immutableState.get().present, false, "overwriting exported validate cannot bypass inbox acceptance")
 ClientOwnerState.validate = originalValidate
 
 local created = ClientOwnerState.create()

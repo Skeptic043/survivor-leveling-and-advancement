@@ -295,6 +295,27 @@ validatorFailureCase("private-root", privateRootSnapshot, ClientOwnerState, "inv
 local privateNestedSnapshot = snapshot(1)
 privateNestedSnapshot.perks.Axe.adapterId = "private.adapter"
 validatorFailureCase("private-nested", privateNestedSnapshot, ClientOwnerState, "invalid_perk", "fields")
+
+local capturedDependencySnapshot = snapshot(1)
+capturedDependencySnapshot.rawModData = { private = true }
+local capturedDependencyValidator = { validate = ClientOwnerState.validate }
+local capturedDependencyServer, capturedDependencyCalls = serverHarness(
+    { ok = true, snapshot = capturedDependencySnapshot },
+    { ok = true, snapshot = snapshot(2) },
+    nil,
+    nil,
+    capturedDependencyValidator
+)
+capturedDependencyValidator.validate = function(value) return { ok = true, snapshot = value } end
+failed(
+    capturedDependencyServer.handle("SurvivorLevelingAdvancement", "ownerReady", serverPlayer, request("captured-validator")),
+    "invalid_snapshot",
+    "fields"
+)
+equal(#capturedDependencyCalls.sends, 1, "overwritten validator field cannot bypass captured validation")
+equal(capturedDependencyCalls.sends[1].args.ok, false, "captured validation sends only failure")
+failed(capturedDependencyServer.publish(serverPlayer), "not_bound", "player route")
+
 validatorFailureCase("validator-throw", snapshot(1), {
     validate = function() error("private validator detail") end,
 }, "snapshot_validation_threw", "snapshotValidator.validate")
