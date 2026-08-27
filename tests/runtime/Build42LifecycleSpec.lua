@@ -15,11 +15,18 @@ local function exactKeys(value, allowed, expectedCount, message)
 end
 
 local function event()
-    local callbacks, adds = {}, 0
+    local callbacks, adds, removes = {}, 0, 0
     return {
         Add = function(callback) adds = adds + 1; callbacks[#callbacks + 1] = callback end,
+        Remove = function(callback)
+            removes = removes + 1
+            for index = 1, #callbacks do
+                if callbacks[index] == callback then table.remove(callbacks, index); break end
+            end
+        end,
         fire = function(...) for index = 1, #callbacks do callbacks[index](...) end end,
         adds = function() return adds end,
+        removes = function() return removes end,
     }
 end
 
@@ -27,7 +34,7 @@ local function fixture(server, client, configure)
     local calls = {}
     local debugCalls = 0
     local specificPlayers, specificPlayerCalls = {}, {}
-    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnMiniScoreboardUpdate = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
+    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnMiniScoreboardUpdate = event(), OnTick = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
     local session = {
         ready = function(player) calls[#calls + 1] = { "ready", player }; return { ok = true, snapshot = { marker = player, ready = true, revision = 0 } } end,
         snapshot = function(player) calls[#calls + 1] = { "snapshot", player }; return { ok = true, snapshot = { marker = player } } end,
@@ -193,6 +200,7 @@ end
 local function acknowledge(f, localSlot, player)
     f.specificPlayers[localSlot] = player
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
 end
 
 do
@@ -320,6 +328,7 @@ do
     yes(created.owner.install().ok, "callback client installs")
     f.specificPlayers[0] = {}
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(created.owner.status().failure.code, "owner_ready_invalid", "client ready throw retained")
     f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", {})
     eq(created.owner.status().failure.code, "owner_client_handle_invalid", "client handle malformed retained")
@@ -404,12 +413,14 @@ do
     yes(created.owner.install().ok, "client installs")
     eq(f.events.OnCreatePlayer.adds(), 0, "client owns no create-player callback")
     eq(f.events.OnMiniScoreboardUpdate.adds(), 1, "client owns one post-ack callback")
+    eq(f.events.OnTick.adds(), 0, "client tick callback waits for an acknowledgment")
     eq(f.events.OnServerCommand.adds(), 1, "client owns one server-command callback")
     eq(f.events.OnDisconnect.adds(), 1, "client owns one disconnect callback")
     eq(f.events.OnServerStarted.adds(), 0, "client does not own server startup")
     eq(f.events.OnGameStart.adds(), 0, "client does not own single-player startup")
     f.specificPlayers[2] = {}
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(f.calls[#f.calls][1], "client_ready", "post-acceptance event readies local player")
     f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", { ok = true })
     eq(f.calls[#f.calls][1], "client_handle", "client response delegated")
@@ -428,6 +439,144 @@ do
     end)
     no(created.ok, "client construction requires exact post-ack event")
     eq(created.code, "invalid_dependencies", "missing post-ack event fails closed")
+
+    created = fixture(false, true, function(values)
+        values.events.OnTick.Remove = nil
+    end)
+    no(created.ok, "client construction requires removable exact tick event")
+    eq(created.code, "invalid_dependencies", "missing tick removal fails closed")
+end
+
+do
+    local first, replacement, returned, split = {}, {}, {}, {}
+    local ready, f = {}, nil
+    local created
+    created, f = fixture(false, true, function(values)
+        values.localClient.ready = function(slot, player)
+            eq(f.events.OnTick.removes(), #ready + 1, "tick removes itself before readiness")
+            ready[#ready + 1] = { slot, player }
+            return { ok = true }
+        end
+    end)
+    yes(created.owner.install().ok, "deferred readiness installs")
+    yes(created.owner.install().ok, "deferred readiness reload remains idempotent")
+    eq(f.events.OnTick.adds(), 0, "install does not register a persistent tick")
+    f.specificPlayers[0] = first
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(#ready, 0, "acknowledgment performs no immediate readiness send")
+    eq(f.events.OnTick.adds(), 1, "first deferred slot registers one tick")
+    f.specificPlayers[0] = replacement
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(f.events.OnTick.adds(), 1, "repeated acknowledgment coalesces the active batch")
+    f.events.OnTick.fire()
+    eq(#ready, 1, "one deferred tick sends once")
+    eq(ready[1][2], replacement, "coalesced batch keeps latest identity")
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(f.events.OnTick.adds(), 1, "unchanged identity schedules no tick")
+    f.specificPlayers[1] = split
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(f.events.OnTick.adds(), 2, "later split-screen identity schedules a new tick")
+    f.events.OnTick.fire()
+    eq(#ready, 2, "later split-screen identity readies once")
+    f.specificPlayers[0] = returned
+    f.events.OnMiniScoreboardUpdate.fire(); f.events.OnTick.fire()
+    f.specificPlayers[0] = replacement
+    f.events.OnMiniScoreboardUpdate.fire(); f.events.OnTick.fire()
+    eq(#ready, 4, "A-B-A changes each receive later one-shot batches")
+end
+
+do
+    local player, ownerResets = {}, 0
+    local created, f = fixture(false, true, function(values)
+        values.localClient.resetSlot = function() ownerResets = ownerResets + 1; return { ok = true } end
+    end)
+    created.owner.install(); acknowledge(f, 0, player)
+    ownerResets = 0
+    f.specificPlayers[0] = nil
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(ownerResets, 0, "nil transition remains deferred until tick")
+    f.events.OnTick.fire()
+    eq(ownerResets, 1, "nil transition clears on deferred tick")
+end
+
+do
+    local readyCalls = 0
+    local created, f = fixture(false, true, function(values)
+        values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
+    end)
+    created.owner.install()
+    f.specificPlayers[0] = {}
+    f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnDisconnect.fire()
+    eq(f.events.OnTick.removes(), 1, "disconnect removes a queued tick once")
+    f.events.OnTick.fire()
+    eq(readyCalls, 0, "disconnect discards queued readiness")
+end
+
+do
+    local playerA, playerB = {}, {}
+    local readyCalls, ownerResets, advancementResets, adminResets, removeCalls = 0, 0, 0, 0, 0
+    local failRemove = false
+    local created, f = fixture(false, true, function(values)
+        values.events.OnTick.Remove = function()
+            removeCalls = removeCalls + 1
+            if failRemove then error("tick remove") end
+        end
+        values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
+        values.localClient.reset = function() ownerResets = ownerResets + 1; return { ok = true } end
+        values.advancementClient.reset = function() advancementResets = advancementResets + 1; return { ok = true } end
+        values.adminClient.reset = function() adminResets = adminResets + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.specificPlayers[1] = playerA; f.events.OnMiniScoreboardUpdate.fire(); f.events.OnTick.fire()
+    yes(created.owner.requestAdvancement(1, "Strength").ok, "prior player route is usable before disconnect")
+    removeCalls = 0
+    f.specificPlayers[1] = playerB; f.events.OnMiniScoreboardUpdate.fire(); failRemove = true
+    f.events.OnDisconnect.fire()
+    eq(removeCalls, 1, "disconnect attempts a queued tick removal once")
+    eq(ownerResets, 1, "failed queued removal still resets owner client")
+    eq(advancementResets, 1, "failed queued removal still resets advancement client")
+    eq(adminResets, 1, "failed queued removal still resets admin client")
+    eq(created.owner.status().failure.code, "event_remove_threw", "queued removal failure is retained")
+    f.events.OnTick.fire()
+    eq(readyCalls, 1, "failed queued removal cannot send a later readiness")
+    eq(created.owner.requestAdvancement(1, "Strength").code, "player_not_ready",
+        "failed queued removal clears the prior usable request route")
+end
+
+do
+    local player, readyCalls = {}, 0
+    local created, f = fixture(false, true, function(values)
+        values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.specificPlayers[0] = player; f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnDisconnect.fire()
+    eq(f.events.OnTick.removes(), 1, "successful queued disconnect removes the first tick")
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(f.events.OnTick.adds(), 2, "reconnect registers a fresh one-shot tick")
+    eq(readyCalls, 0, "reconnect remains deferred until its tick")
+    f.events.OnTick.fire()
+    eq(readyCalls, 1, "reconnect one-shot tick sends readiness once")
+end
+
+do
+    local readyCalls = 0
+    local created, f = fixture(false, true, function(values)
+        values.events.OnTick.Add = function() error("tick add") end
+        values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.specificPlayers[0] = {}; f.events.OnMiniScoreboardUpdate.fire(); f.events.OnTick.fire()
+    eq(readyCalls, 0, "thrown tick add cannot send readiness")
+    eq(created.owner.status().failure.code, "event_register_threw", "thrown tick add is retained")
+    f.specificPlayers[0] = {}; f.events.OnMiniScoreboardUpdate.fire(); f.events.OnTick.fire()
+    eq(readyCalls, 0, "thrown tick add never creates recurring sends")
+
+    created, f = fixture(false, true, function(values)
+        values.events.OnTick.Remove = function() error("tick remove") end
+        values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.specificPlayers[0] = {}; f.events.OnMiniScoreboardUpdate.fire(); f.events.OnTick.fire(); f.events.OnTick.fire()
+    eq(readyCalls, 0, "thrown tick remove never creates recurring sends")
+    eq(created.owner.status().failure.code, "event_remove_threw", "thrown tick remove is retained")
 end
 
 do
@@ -449,15 +598,18 @@ do
     f.events.OnCreatePlayer.fire(0, player)
     eq(readyCalls, 0, "unowned create-player event does not send readiness")
     f.events.OnMiniScoreboardUpdate.fire({ remote = true })
+    f.events.OnTick.fire()
     eq(readyCalls, 0, "remote-only acknowledgment finds no local player")
     eq(advancementResets, 0, "initial nil observations do not reset advancement slots")
     eq(adminResets, 0, "initial nil observations do not reset admin slots")
     f.specificPlayers[0] = player
     f.events.OnMiniScoreboardUpdate.fire({ remote = true })
+    f.events.OnTick.fire()
     eq(readyCalls, 1, "post-acceptance player sends readiness once")
     eq(advancementResets, 1, "exact pair resets advancement once")
     eq(adminResets, 1, "exact pair resets admin once")
     f.events.OnMiniScoreboardUpdate.fire({ remote = true })
+    f.events.OnTick.fire()
     eq(readyCalls, 1, "repeated remote updates do not resend readiness")
     eq(#f.specificPlayerCalls, 12, "each acknowledgment inspects only four local slots")
     for scan = 0, 2 do
@@ -480,10 +632,12 @@ do
     end)
     yes(created.owner.install().ok, "split-screen acknowledgment fixture installs")
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(#ready, 1, "first local slot acknowledges independently")
     eq(ready[1][1], 0, "first acknowledgment keeps slot zero")
     f.specificPlayers[1] = slotOne
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(#ready, 2, "later split-screen slot remains eligible")
     eq(ready[2][1], 1, "second acknowledgment keeps slot one")
     eq(ready[2][2], slotOne, "second acknowledgment keeps exact split-screen player")
@@ -501,12 +655,16 @@ do
     created.owner.install()
     f.specificPlayers[2] = first
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     first.marker = "same exact player"
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     f.specificPlayers[2] = replacement
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     f.specificPlayers[2] = first
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(#ready, 3, "A-B-A rebinds on every consecutive identity change")
     eq(ready[1][2], first, "first identity uses original player")
     eq(ready[2][2], replacement, "changed exact player remains eligible")
@@ -515,6 +673,7 @@ do
     eq(f.calls[#f.calls][3], first, "request identity follows the final A observation")
     f.events.OnDisconnect.fire()
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(#ready, 4, "disconnect clears the retained observation for reconnect")
 end
 
@@ -530,12 +689,14 @@ do
     ownerResets, advancementResets, adminResets = 0, 0, 0
     f.specificPlayers[0] = nil
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(ownerResets, 1, "non-nil-to-nil clears owner transport slot once")
     eq(advancementResets, 1, "non-nil-to-nil clears advancement transport slot once")
     eq(adminResets, 1, "non-nil-to-nil clears admin transport slot once")
     eq(created.owner.requestAdvancement(0, "Strength").code, "player_not_ready",
         "non-nil-to-nil clears retained request identity")
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(ownerResets, 1, "repeated nil does not clear owner slot again")
     eq(advancementResets, 1, "repeated nil does not clear advancement slot again")
     eq(adminResets, 1, "repeated nil does not clear admin slot again")
@@ -555,6 +716,7 @@ do
     eq(#ready, 0, "installation does not adopt assigned local players")
     eq(#f.specificPlayerCalls, 0, "installation performs no local-slot scan")
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(#ready, 2, "post-acceptance event readies assigned local players")
     eq(#f.specificPlayerCalls, 4, "post-acceptance scan remains bounded to four slots")
 end
@@ -572,6 +734,7 @@ do
     yes(created.owner.install().ok, "throwing resolver fixture installs")
     eq(#calls, 0, "installation does not invoke resolver")
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(#calls, 4, "throwing resolver remains bounded to four slots")
     yes(created.owner.status().failure ~= nil, "throwing readiness resolver retains a failure")
     eq(created.owner.status().failure.code, "player_resolver_threw", "throwing readiness resolver is retained")
@@ -590,7 +753,7 @@ do
             return { ok = true }
         end
     end)
-    created.owner.install(); f.events.OnMiniScoreboardUpdate.fire()
+    created.owner.install(); f.events.OnMiniScoreboardUpdate.fire(); f.events.OnTick.fire()
     eq(readyCalls, 1, "exact player readiness does not require an online ID")
     eq(onlineIdCalls, 0, "readiness never calls getOnlineID")
 end
@@ -607,8 +770,10 @@ do
     yes(created.owner.install().ok, "failed readiness fixture installs")
     eq(readyCalls, 0, "installation does not attempt readiness")
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(readyCalls, 1, "failed eligible exact pair is attempted once")
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     f.events.OnCreatePlayer.fire(2, player)
     eq(readyCalls, 1, "failed readiness attempt is not retried by later gates")
     yes(created.owner.status().failure ~= nil, "failed readiness retains a failure")
@@ -835,9 +1000,11 @@ do
     created.owner.install()
     acknowledge(f, 0, player)
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(readyCalls, 1, "duplicate exact acknowledged pair is readied once")
     f.events.OnDisconnect.fire()
     f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnTick.fire()
     eq(readyCalls, 2, "disconnect reset permits reconnect of the same player object")
 end
 

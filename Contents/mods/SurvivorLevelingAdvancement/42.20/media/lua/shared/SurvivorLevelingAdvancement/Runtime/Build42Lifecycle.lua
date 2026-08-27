@@ -65,13 +65,14 @@ end
 
 local function validSlot(value) return safeInteger(value) and value <= 3 end
 
-local function eventSet(events, names)
+local function eventSet(events, names, removable)
     if type(events) ~= "table" then return nil end
     local captured = {}
     for index = 1, #names do
         local name = names[index]
         local event = rawget(events, name)
-        if type(event) ~= "table" or not callable(rawget(event, "Add")) then return nil end
+        if type(event) ~= "table" or not callable(rawget(event, "Add"))
+            or (removable ~= nil and removable[name] and not callable(rawget(event, "Remove"))) then return nil end
         captured[name] = event
     end
     return captured
@@ -563,9 +564,10 @@ function Build42Lifecycle.create(dependencies)
     end
 
     local eventNames = mode == "server" and { "OnServerStarted", "OnClientCommand" }
-        or mode == "client" and { "OnMiniScoreboardUpdate", "OnServerCommand", "OnDisconnect" }
+        or mode == "client" and { "OnMiniScoreboardUpdate", "OnTick", "OnServerCommand", "OnDisconnect" }
         or { "OnGameStart", "OnCreatePlayer" }
-    local events = eventSet(rawget(globals, "Events"), eventNames)
+    local events = eventSet(rawget(globals, "Events"), eventNames,
+        mode == "client" and { OnTick = true } or nil)
     if events == nil then return failure("invalid_dependencies", "required lifecycle events are required") end
 
     local installed, installAttempted, startupAttempted, started = false, false, false, false
@@ -573,9 +575,12 @@ function Build42Lifecycle.create(dependencies)
     local ownerSessionReady, ownerSessionSnapshot, advancementRequest
     local adminSessionInspect, adminSessionRequest
     local pendingPlayers, readyPlayers, observedPlayers, observedSlots = {}, {}, {}, {}
+    local deferredPlayers, deferredSlots = {}, {}
+    local tickRegistered, tickAddAttempted = false, false
     local singlePlayerResults, singlePlayerAdminResults = {}, {}
     local owner, readySingle = {}, nil
     local clientStateListener = nil
+    local callbacks = {}
 
     local function retain(result, code, detail)
         retainedFailure = bounded(result, code, detail)
@@ -760,6 +765,19 @@ function Build42Lifecycle.create(dependencies)
         return { ok = true }
     end
 
+    local function scheduleDeferredSlot(localSlot, player)
+        deferredSlots[localSlot], deferredPlayers[localSlot] = true, player
+        if tickRegistered or tickAddAttempted then return end
+        tickAddAttempted = true
+        local called = pcall(events.OnTick.Add, callbacks.OnTick)
+        if not called then
+            for slot = 0, 3 do deferredSlots[slot], deferredPlayers[slot] = nil, nil end
+            retain(nil, "event_register_threw", "OnTick")
+            return
+        end
+        tickRegistered = true
+    end
+
     local function inspectLocalPlayers()
         local firstFailure = nil
         for slot = 0, 3 do
@@ -769,11 +787,7 @@ function Build42Lifecycle.create(dependencies)
             elseif not observedSlots[slot] or observedPlayers[slot] ~= player then
                 local wasObserved = observedSlots[slot] == true
                 observedSlots[slot], observedPlayers[slot] = true, player
-                local changed = player ~= nil and readyMultiplayer(slot, player)
-                    or wasObserved and clearMultiplayerSlot(slot) or { ok = true }
-                if type(changed) ~= "table" or rawget(changed, "ok") ~= true then
-                    firstFailure = firstFailure or bounded(changed, "player_adoption_failed", "getSpecificPlayer")
-                end
+                if player ~= nil or wasObserved then scheduleDeferredSlot(slot, player) end
             end
         end
         if firstFailure ~= nil then retainedFailure = firstFailure end
@@ -954,7 +968,6 @@ function Build42Lifecycle.create(dependencies)
         return storeLocalAdminTerminal(localSlot, terminal)
     end
 
-    local callbacks = {}
     callbacks.OnServerStarted = function() if installed and ownEvents() then startup() end end
     callbacks.OnGameStart = function() if installed and ownEvents() then startup() end end
     callbacks.OnClientCommand = function(module, command, player, args)
@@ -971,6 +984,32 @@ function Build42Lifecycle.create(dependencies)
         if not installed or not ownEvents() or not validSlot(localSlot) or player == nil then return end
         if started then readySingle(localSlot, player)
         elseif not startupAttempted then pendingPlayers[localSlot] = player end
+    end
+    callbacks.OnTick = function()
+        if not tickRegistered then return end
+        tickRegistered = false
+        local called = pcall(events.OnTick.Remove, callbacks.OnTick)
+        if not called then
+            for slot = 0, 3 do deferredSlots[slot], deferredPlayers[slot] = nil, nil end
+            retain(nil, "event_remove_threw", "OnTick")
+            return
+        end
+        tickAddAttempted = false
+        local batchSlots, batchPlayers = deferredSlots, deferredPlayers
+        deferredSlots, deferredPlayers = {}, {}
+        if not installed or not ownEvents() then return end
+        local firstFailure = nil
+        for slot = 0, 3 do
+            if batchSlots[slot] then
+                local player = batchPlayers[slot]
+                local changed = player ~= nil and readyMultiplayer(slot, player)
+                    or clearMultiplayerSlot(slot)
+                if type(changed) ~= "table" or rawget(changed, "ok") ~= true then
+                    firstFailure = firstFailure or bounded(changed, "player_adoption_failed", "getSpecificPlayer")
+                end
+            end
+        end
+        if firstFailure ~= nil then retainedFailure = firstFailure end
     end
     callbacks.OnMiniScoreboardUpdate = function()
         if not installed or not ownEvents() then return end
@@ -1010,10 +1049,17 @@ function Build42Lifecycle.create(dependencies)
     callbacks.OnDisconnect = function()
         if not installed then return end
         local ownsEvents = ownEvents()
+        local firstFailure = not ownsEvents and retainedFailure or nil
+        if tickRegistered then
+            tickRegistered = false
+            local removed = pcall(events.OnTick.Remove, callbacks.OnTick)
+            if removed then tickAddAttempted = false
+            else firstFailure = firstFailure or failure("event_remove_threw", "OnTick") end
+        end
+        for slot = 0, 3 do deferredSlots[slot], deferredPlayers[slot] = nil, nil end
         for slot = 0, 3 do
             readyPlayers[slot], observedPlayers[slot], observedSlots[slot] = nil, nil, nil
         end
-        local firstFailure = not ownsEvents and retainedFailure or nil
         local called, result = pcall(ownerClient.reset)
         if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
             firstFailure = firstFailure or bounded(result, "owner_reset_invalid", "ownerClient.reset")
@@ -1037,7 +1083,9 @@ function Build42Lifecycle.create(dependencies)
         installAttempted = true
         for index = 1, #eventNames do
             local name = eventNames[index]
-            if not pcall(rawget(events[name], "Add"), callbacks[name]) then return retain(nil, "event_register_threw", name) end
+            if name ~= "OnTick" and not pcall(rawget(events[name], "Add"), callbacks[name]) then
+                return retain(nil, "event_register_threw", name)
+            end
         end
         installed = true
         return { ok = true }
