@@ -687,10 +687,10 @@ do
     local leveling = makeEnvironment({ state = state, observed = 0, position = 1 })
     local levelingResult = leveling.service.process(leveling.player, award(5000, 1, 0, 1), settings())
     expect(levelingResult.ok, "multi-level Survivor award succeeds")
-    equal(levelingResult.levelsGained, 3, "multiple Survivor levels gained")
-    equal(levelingResult.apGained, 3, "multiple AP gained")
-    equal(leveling.store.state.survivor.level, 3, "Survivor level persisted")
-    equal(leveling.store.state.survivor.xpIntoLevel, 500, "Survivor remainder persisted")
+    equal(levelingResult.levelsGained, 2, "multiple Survivor levels gained")
+    equal(levelingResult.apGained, 2, "multiple AP gained")
+    equal(leveling.store.state.survivor.level, 2, "Survivor level persisted")
+    equal(leveling.store.state.survivor.xpIntoLevel, 1900, "Survivor remainder persisted")
     equal(leveling.store.state.revision, 0, "ordinary awards do not increment revision")
 end
 

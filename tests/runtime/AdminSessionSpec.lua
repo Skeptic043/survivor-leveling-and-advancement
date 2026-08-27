@@ -281,7 +281,7 @@ do
     expectEqual(result.summary.revision, 7, "inspection revision")
     expectEqual(result.summary.level, 2, "inspection level")
     expectEqual(result.summary.xpIntoLevel, 100, "inspection XP")
-    expectEqual(result.summary.xpForNextLevel, 1800, "inspection level cost")
+    expectEqual(result.summary.xpForNextLevel, 2600, "inspection level cost")
     expectEqual(result.summary.spent, 1, "inspection spent")
     expectEqual(result.summary.availableAp, 1, "inspection available AP")
     sequenceEquals(values.calls, { "ready", "load", "cost", "available" }, "inspection ordering")
@@ -366,8 +366,8 @@ local function assertXpAward(amount, expectedLevel, expectedXp, expectedGained)
 end
 
 assertXpAward(50, 2, 150, 0)
-assertXpAward(1700, 3, 0, 1)
-assertXpAward(3801, 4, 1, 2)
+assertXpAward(1700, 2, 1800, 0)
+assertXpAward(3801, 3, 1301, 1)
 
 do
     local session, values = fixture(function(_, configured)
@@ -683,7 +683,7 @@ local impossibleStates = {
     { label = "unsafe level", mutate = function(state) state.survivor.level = 9007199254740992 end, calls = { "ready", "load" } },
     { label = "spent above level", mutate = function(state) state.survivor.spent = 3 end, calls = { "ready", "load" } },
     { label = "nonfinite XP", mutate = function(state) state.survivor.xpIntoLevel = 0 / 0 end, calls = { "ready", "load" } },
-    { label = "XP at cost", mutate = function(state) state.survivor.xpIntoLevel = 1800 end, calls = { "ready", "load", "cost" } },
+    { label = "XP at cost", mutate = function(state) state.survivor.xpIntoLevel = 2600 end, calls = { "ready", "load", "cost" } },
 }
 
 for index = 1, #impossibleStates do

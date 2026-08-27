@@ -189,7 +189,7 @@ local function validateV2(raw)
     if not survivorFields then return nil, failure("invalid_survivor", "unknown_field:" .. tostring(survivorKey)) end
     local survivor = raw.survivor
     if not isNonNegativeInteger(survivor.level) or not (isFiniteNumber(survivor.xpIntoLevel) and survivor.xpIntoLevel >= 0) then return nil, failure("invalid_survivor", "level_or_xp") end
-    if survivor.xpIntoLevel >= 1200 + 300 * survivor.level then return nil, failure("invalid_survivor", "xp_into_level_at_or_above_cost") end
+    if survivor.xpIntoLevel >= 1200 + 700 * survivor.level then return nil, failure("invalid_survivor", "xp_into_level_at_or_above_cost") end
     if not isNonNegativeInteger(survivor.spent) or survivor.spent > survivor.level then return nil, failure("invalid_survivor", "ap") end
     local perks, perkError = validateMap(raw.perks, "perks")
     if not perks then return nil, perkError end

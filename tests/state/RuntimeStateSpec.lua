@@ -109,7 +109,7 @@ completedReservation.revision = 4
 completedReservation.survivor.spent = 2
 expect(C.decode(completedReservation).ok, "in-flight accepts completed reservation counters")
 local survivorAtCost = validState()
-survivorAtCost.survivor.xpIntoLevel = 1800
+survivorAtCost.survivor.xpIntoLevel = 2600
 invalid(survivorAtCost, "invalid_survivor", "survivor XP at level cost fails")
 local targetAtHighWater = validState()
 targetAtHighWater.perks.Axe.activeTargets[1].targetPosition = 5

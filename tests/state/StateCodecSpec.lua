@@ -91,6 +91,8 @@ local failedOrphanRaw = orphanedState(); local failedOrphan = C.decode(failedOrp
 local invalidOrphanRaw = orphanedState(); local invalidOrphan = C.decode(invalidOrphanRaw, { loadedPerks = mismatch, perkMigrator = function() return {} end }); expect(not invalidOrphan.ok and invalidOrphan.code == "perk_migration_failed" and invalidOrphanRaw.orphanedPerks.Axe.adapterId == "adapter", "invalid migration preserves input")
 
 local ap = validState(); ap.survivor.spent = 3; bad(ap, "invalid_survivor")
+local exactSurvivorThreshold = validState(); exactSurvivorThreshold.survivor.level = 1; exactSurvivorThreshold.survivor.xpIntoLevel = 1900; bad(exactSurvivorThreshold, "invalid_survivor")
+local oldValidPartialSurvivor = validState(); oldValidPartialSurvivor.survivor.level = 1; oldValidPartialSurvivor.survivor.xpIntoLevel = 1499; expect(C.decode(oldValidPartialSurvivor).ok, "old-valid partial survivor state remains accepted")
 local duplicateTarget = validState(); duplicateTarget.perks.Axe.activeTargets[2] = { targetId = "target-1", targetLevel = 7, targetPosition = 6.5 }; bad(duplicateTarget, "invalid_perk")
 local levelOrder = validState(); levelOrder.perks.Axe.activeTargets[2] = { targetId = "target-2", targetLevel = 6, targetPosition = 6.5 }; bad(levelOrder, "invalid_perk")
 local positionOrder = validState(); positionOrder.perks.Axe.activeTargets[2] = { targetId = "target-2", targetLevel = 7, targetPosition = 5.5 }; bad(positionOrder, "invalid_perk")

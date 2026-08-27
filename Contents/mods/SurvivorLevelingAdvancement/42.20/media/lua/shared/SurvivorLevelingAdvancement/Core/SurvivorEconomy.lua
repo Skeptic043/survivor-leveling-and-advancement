@@ -30,7 +30,7 @@ local function validateState(state)
     if state.spent > state.level then
         return failure("impossible_spent_level", "spent cannot exceed level")
     end
-    local cost = 1200 + 300 * state.level
+    local cost = 1200 + 700 * state.level
     if state.xpIntoLevel >= cost then
         return failure("invalid_state", "xpIntoLevel must be below the next level cost")
     end
@@ -41,7 +41,7 @@ function SurvivorEconomy.nextLevelCost(level)
     if not nonnegativeInteger(level) then
         return failure("invalid_level", "level must be a nonnegative integer")
     end
-    local cost = 1200 + 300 * level
+    local cost = 1200 + 700 * level
     if not finite(cost) then
         return failure("invalid_level", "level cost is not finite")
     end
@@ -70,23 +70,33 @@ function SurvivorEconomy.applyXp(state, gain)
     if not finite(total) then
         return failure("invalid_gain", "gain exceeds representable Survivor state")
     end
-    local linear = 1050 + 300 * state.level
-    local discriminant = linear * linear + 600 * total
+    local linear = 850 + 700 * state.level
+    local discriminant = linear * linear + 1400 * total
     if not finite(linear) or not finite(discriminant) then
         return failure("invalid_gain", "gain exceeds representable Survivor state")
     end
-    local levelsGained = math.floor((math.sqrt(discriminant) - linear) / 300)
+    local levelsGained = math.floor((math.sqrt(discriminant) - linear) / 700)
     if levelsGained < 0 then levelsGained = 0 end
-    local spentForLevels = 150 * levelsGained * levelsGained + linear * levelsGained
-    while levelsGained > 0 and spentForLevels > total do
+    local spentForLevels = 350 * levelsGained * levelsGained + linear * levelsGained
+    local maxRootCorrections = 2
+    local corrections = 0
+    while levelsGained > 0 and spentForLevels > total and corrections < maxRootCorrections do
         levelsGained = levelsGained - 1
-        spentForLevels = 150 * levelsGained * levelsGained + linear * levelsGained
+        spentForLevels = 350 * levelsGained * levelsGained + linear * levelsGained
+        corrections = corrections + 1
     end
-    local nextCost = 1200 + 300 * (state.level + levelsGained)
-    while total - spentForLevels >= nextCost do
+    if spentForLevels > total then
+        return failure("invalid_gain", "gain exceeds representable Survivor state")
+    end
+    local nextCost = 1200 + 700 * (state.level + levelsGained)
+    while total - spentForLevels >= nextCost and corrections < maxRootCorrections do
         levelsGained = levelsGained + 1
-        spentForLevels = 150 * levelsGained * levelsGained + linear * levelsGained
-        nextCost = 1200 + 300 * (state.level + levelsGained)
+        spentForLevels = 350 * levelsGained * levelsGained + linear * levelsGained
+        nextCost = 1200 + 700 * (state.level + levelsGained)
+        corrections = corrections + 1
+    end
+    if total - spentForLevels >= nextCost then
+        return failure("invalid_gain", "gain exceeds representable Survivor state")
     end
     nextState.level = state.level + levelsGained
     nextState.xpIntoLevel = total - spentForLevels

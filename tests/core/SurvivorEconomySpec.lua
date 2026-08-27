@@ -15,7 +15,7 @@ end
 expect(E.ORDINARY_NORMALIZATION == 1, "ordinary normalization constant")
 expect(E.FITNESS_STRENGTH_DEFAULT_NORMALIZATION == 21850 / 325000, "passive normalization constant")
 expect(E.nextLevelCost(0).ok and E.nextLevelCost(0).cost == 1200, "level zero cost")
-expect(E.nextLevelCost(4).cost == 2400, "level cost curve")
+expect(E.nextLevelCost(4).cost == 4000, "level cost curve")
 bad(E.nextLevelCost(-1), "invalid_level")
 bad(E.nextLevelCost(0 / 0), "invalid_level")
 
@@ -31,7 +31,23 @@ expect(one.levelsGained == nil and one.apGained == nil, "level effects have one 
 local partial = E.applyXp({ level = 1, xpIntoLevel = 1400, spent = 0 }, 99)
 expect(partial.ok and partial.state.level == 1 and partial.state.xpIntoLevel == 1499, "partial XP")
 local multi = E.applyXp({ level = 0, xpIntoLevel = 0, spent = 0 }, 3900)
-expect(multi.ok and multi.state.level == 2 and multi.state.xpIntoLevel == 1200 and multi.effects.levelsGained == 2 and multi.effects.apGained == 2, "multiple level crossings")
+expect(multi.ok and multi.state.level == 2 and multi.state.xpIntoLevel == 800 and multi.effects.levelsGained == 2 and multi.effects.apGained == 2, "multiple level crossings")
+local exactBoundary = E.applyXp(state, 3100)
+expect(exactBoundary.ok and exactBoundary.state.level == 2 and exactBoundary.state.xpIntoLevel == 0, "exact multiple-level boundary")
+local belowBoundary = E.applyXp(state, 3099)
+expect(belowBoundary.ok and belowBoundary.state.level == 1 and belowBoundary.state.xpIntoLevel == 1899, "just below multiple-level boundary")
+local nonzeroStart = E.applyXp({ level = 2, xpIntoLevel = 0, spent = 0 }, 5900)
+expect(nonzeroStart.ok and nonzeroStart.state.level == 4 and nonzeroStart.state.xpIntoLevel == 0 and nonzeroStart.effects.levelsGained == 2, "nonzero starting level closed form")
+local fractional = E.applyXp({ level = 1, xpIntoLevel = 1899.75, spent = 0 }, 0.5)
+expect(fractional.ok and fractional.state.level == 2 and fractional.state.xpIntoLevel == 0.25, "fractional boundary crossing")
+local oldValidPartial = E.applyXp({ level = 1, xpIntoLevel = 1499, spent = 0 }, 0)
+expect(oldValidPartial.ok and oldValidPartial.state.level == 1 and oldValidPartial.state.xpIntoLevel == 1499, "old-valid partial state remains valid")
+local largeLevels = 100000
+local largeAward = 350 * largeLevels * largeLevels + 850 * largeLevels
+local large = E.applyXp(state, largeAward)
+expect(large.ok and large.state.level == largeLevels and large.state.xpIntoLevel == 0 and large.effects.levelsGained == largeLevels, "large finite award uses bounded closed-form correction")
+local largeBelow = E.applyXp(state, largeAward - 1)
+expect(largeBelow.ok and largeBelow.state.level == largeLevels - 1 and largeBelow.state.xpIntoLevel == 70000500 - 1, "large finite award just below closed-form boundary")
 local spent = { level = 4, xpIntoLevel = 0, spent = 3 }
 expect(E.availableAp(spent).availableAp == 1, "AP derives from level minus spent")
 local beforeLevel = spent.level
@@ -40,6 +56,7 @@ immutable.state.level = 99
 expect(spent.level == beforeLevel and spent.xpIntoLevel == 0 and spent.spent == 3, "apply XP retains input")
 bad(E.availableAp({ level = 1, xpIntoLevel = 0, spent = 2 }), "impossible_spent_level")
 bad(E.applyXp({ level = 0, xpIntoLevel = 1200, spent = 0 }, 1), "invalid_state")
+bad(E.applyXp({ level = 1, xpIntoLevel = 1900, spent = 0 }, 1), "invalid_state")
 bad(E.applyXp(state, -1), "invalid_gain")
 bad(E.applyXp(state, math.huge), "invalid_gain")
 
