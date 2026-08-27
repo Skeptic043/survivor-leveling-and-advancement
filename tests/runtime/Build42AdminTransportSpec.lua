@@ -754,4 +754,301 @@ do
     equal(eventNames(harness.events), "boundary,inspect,send", "captured callables remain active")
 end
 
+local function adminLogicalInspect(onlineId, username)
+    return { operation = "inspect", target = target(onlineId, username) }
+end
+
+local function adminLogicalXp(onlineId, username, revision, amount)
+    return {
+        operation = "awardSurvivorXp",
+        target = target(onlineId, username),
+        expectedRevision = revision or 7,
+        amount = amount or 125.5,
+    }
+end
+
+local function adminLogicalLevels(onlineId, username, revision, count)
+    return {
+        operation = "awardSurvivorLevels",
+        target = target(onlineId, username),
+        expectedRevision = revision or 7,
+        count = count or 2,
+    }
+end
+
+local function makeClientHarness(options)
+    options = options or {}
+    local events = {}
+    local actor0 = { localPlayer = 0 }
+    local actor1 = { localPlayer = 1 }
+    local sender = function(actor, module, command, envelope)
+        events[#events + 1] = {
+            actor = actor,
+            module = module,
+            command = command,
+            envelope = envelope,
+        }
+        if options.sendThrow then error("send failure") end
+    end
+    local created = Build42AdminTransport.createClient({ sendClientCommand = sender })
+    check(created.ok == true, "client harness construction")
+    return {
+        client = created.client,
+        events = events,
+        actor0 = actor0,
+        actor1 = actor1,
+    }
+end
+
+local function pendingRoute(client, localSlot)
+    local status = client.status(localSlot)
+    check(status.pending == true, "pending route exists")
+    return status
+end
+
+local function adminResponse(route, outcome, overrides)
+    local response = {
+        protocolVersion = 1,
+        requestId = route.requestId,
+        operation = route.operation,
+        target = { onlineId = route.target.onlineId, username = route.target.username },
+    }
+    if outcome == "inspected" then
+        response.ok = true
+        response.outcome = "inspected"
+        response.summary = summary()
+    elseif outcome == "applied" then
+        response.ok = true
+        response.outcome = "applied"
+        response.levelsGained = route.operation == "awardSurvivorLevels" and 2 or 1
+        response.apGained = response.levelsGained
+        response.summary = summary({ revision = 8, level = 6, availableAp = 4 })
+    elseif outcome == "rejected" then
+        response.ok = true
+        response.outcome = "rejected"
+        response.code = "stale_revision"
+        response.detail = "expected revision is stale"
+        response.summary = summary({ revision = 8 })
+    else
+        response.ok = false
+        response.code = "request_denied"
+        response.detail = "unavailable"
+        response.committed = false
+    end
+    if overrides ~= nil then
+        for key, value in pairs(overrides) do response[key] = value end
+    end
+    return response
+end
+
+do
+    exact(Build42AdminTransport.createClient({}), {
+        ok = false,
+        code = "invalid_dependencies",
+        detail = "dependencies",
+    }, "client requires exact dependency")
+    exact(Build42AdminTransport.createClient({ sendClientCommand = {} }), {
+        ok = false,
+        code = "invalid_dependencies",
+        detail = "dependencies",
+    }, "client requires callable sender")
+
+    local calls = 0
+    local captured = function() calls = calls + 1 end
+    local dependencies = { sendClientCommand = captured }
+    local created = Build42AdminTransport.createClient(dependencies)
+    dependencies.sendClientCommand = function() error("replacement sender") end
+    exact(created.client, {
+        request = created.client.request,
+        handle = created.client.handle,
+        status = created.client.status,
+        resetSlot = created.client.resetSlot,
+        reset = created.client.reset,
+    }, "exact client surface")
+    created.client.request(0, {}, adminLogicalInspect())
+    equal(calls, 1, "client construction captures sender")
+end
+
+do
+    local harness = makeClientHarness()
+    local nonAscii = "Jos" .. string.char(195) .. string.char(169)
+    local inspect = harness.client.request(0, harness.actor0, adminLogicalInspect(41, nonAscii))
+    local xp = harness.client.request(1, harness.actor1, adminLogicalXp(42, "XpTarget"))
+    local levels = harness.client.request(2, harness.actor0, adminLogicalLevels(43, "LevelTarget"))
+    check(inspect.ok and xp.ok and levels.ok, "all logical requests send")
+    equal(#harness.events, 3, "three exact sends")
+    check(harness.events[1].actor == harness.actor0, "inspect uses supplied actor")
+    check(harness.events[2].actor == harness.actor1, "XP uses supplied actor")
+    check(harness.events[3].actor == harness.actor0, "levels uses supplied actor")
+    for index = 1, 3 do
+        equal(harness.events[index].module, "SurvivorLevelingAdvancement", "request module " .. index)
+        equal(harness.events[index].command, "adminRequest", "request command " .. index)
+        equal(harness.events[index].envelope.protocolVersion, 1, "request protocol " .. index)
+    end
+    exact(harness.events[1].envelope, {
+        protocolVersion = 1, requestId = inspect.requestId, operation = "inspect",
+        target = harness.events[1].envelope.target,
+    }, "exact inspect envelope")
+    equal(harness.events[1].envelope.target.username, nonAscii, "non-ASCII target preserved")
+    exact(harness.events[2].envelope, {
+        protocolVersion = 1, requestId = xp.requestId, operation = "awardSurvivorXp",
+        target = harness.events[2].envelope.target, expectedRevision = 7, amount = 125.5,
+    }, "exact XP envelope")
+    exact(harness.events[3].envelope, {
+        protocolVersion = 1, requestId = levels.requestId, operation = "awardSurvivorLevels",
+        target = harness.events[3].envelope.target, expectedRevision = 7, count = 2,
+    }, "exact levels envelope")
+    local pending = harness.client.status(0)
+    pending.target.username = "MutatedPendingTarget"
+    equal(harness.client.status(0).target.username, nonAscii, "pending target detached")
+end
+
+do
+    local harness = makeClientHarness()
+    local invalid = {
+        function() return harness.client.request(-1, harness.actor0, adminLogicalInspect()) end,
+        function() return harness.client.request(4, harness.actor0, adminLogicalInspect()) end,
+        function() return harness.client.request(0, nil, adminLogicalInspect()) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "inspect", target = target(), extra = true }) end,
+        function() return harness.client.request(0, harness.actor0, adminLogicalXp(41, "T", 7, math.huge)) end,
+        function() return harness.client.request(0, harness.actor0, adminLogicalLevels(41, "T", 7, 1.5)) end,
+    }
+    for index = 1, #invalid do
+        exact(invalid[index](), { ok = false, code = "invalid_request", detail = "request" },
+            "invalid logical request " .. index)
+    end
+    exact(harness.client.status(0), { ok = true, pending = false }, "invalid requests create no route")
+    equal(#harness.events, 0, "invalid requests send nothing")
+    check(harness.client.request(0, harness.actor0, adminLogicalInspect()).ok, "valid request follows invalids")
+    exact(harness.client.request(0, harness.actor0, adminLogicalInspect()), {
+        ok = false, code = "pending_request", detail = "slot",
+    }, "pending collision sends nothing")
+    equal(#harness.events, 1, "collision did not send")
+end
+
+do
+    local harness = makeClientHarness()
+    harness.client.request(0, harness.actor0, adminLogicalInspect())
+    harness.client.request(1, harness.actor1, adminLogicalXp())
+    local route0 = pendingRoute(harness.client, 0)
+    local route1 = pendingRoute(harness.client, 1)
+    local applied = adminResponse(route1, "applied")
+    local accepted = harness.client.handle("SurvivorLevelingAdvancement", "adminResult", applied)
+    equal(accepted.localSlot, 1, "out-of-order response routes by request ID")
+    local remaining = harness.client.status(0)
+    exact(remaining, {
+        ok = true, pending = true, requestId = route0.requestId,
+        operation = "inspect", target = remaining.target,
+    }, "other slot remains pending")
+    check(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", applied).ok == false,
+        "duplicate response rejected")
+    local mismatch = adminResponse({
+        requestId = route0.requestId,
+        operation = "awardSurvivorXp",
+        target = route0.target,
+    }, "applied")
+    exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", mismatch), {
+        ok = false, code = "unknown_response", detail = "route",
+    }, "operation mismatch retains route")
+    mismatch = adminResponse(route0, "inspected")
+    mismatch.target.username = "OtherTarget"
+    exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", mismatch), {
+        ok = false, code = "unknown_response", detail = "route",
+    }, "target mismatch retains route")
+    check(harness.client.status(0).pending, "mismatches leave original slot pending")
+    check(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", adminResponse(route0, "inspected")).ok,
+        "matching inspection resolves slot")
+end
+
+do
+    local outcomes = { "inspected", "applied", "rejected", "failure" }
+    for index = 1, #outcomes do
+        local outcome = outcomes[index]
+        local harness = makeClientHarness()
+        local request = outcome == "inspected" and adminLogicalInspect()
+            or adminLogicalXp()
+        harness.client.request(0, harness.actor0, request)
+        local route = pendingRoute(harness.client, 0)
+        local response = adminResponse(route, outcome)
+        local handled = harness.client.handle("SurvivorLevelingAdvancement", "adminResult", response)
+        check(handled.ok and handled.handled, "valid outcome handled " .. outcome)
+        local state = harness.client.status(0)
+        check(state.pending == false and state.result ~= nil, "terminal stored " .. outcome)
+        exact(state.result, {
+            ok = response.ok, requestId = route.requestId, operation = route.operation,
+            target = state.result.target,
+            outcome = response.outcome, levelsGained = response.levelsGained,
+            apGained = response.apGained, summary = state.result.summary,
+            code = response.code, detail = response.detail, committed = response.committed,
+        }, "terminal exact " .. outcome)
+        check(state.result.target ~= response.target, "terminal target detached " .. outcome)
+        if response.summary ~= nil then
+            check(state.result.summary ~= response.summary, "terminal summary detached " .. outcome)
+            handled.result.target.username = "MutatedTerminalTarget"
+            handled.result.summary.level = 999
+            equal(harness.client.status(0).result.target.username, route.target.username,
+                "handled terminal target isolated " .. outcome)
+            equal(harness.client.status(0).result.summary.level,
+                outcome == "applied" and 6 or 5, "handled terminal summary isolated " .. outcome)
+            response.summary.level = 999
+            equal(harness.client.status(0).result.summary.level,
+                outcome == "applied" and 6 or 5, "terminal summary isolated " .. outcome)
+        end
+    end
+end
+
+do
+    local harness = makeClientHarness()
+    harness.client.request(0, harness.actor0, adminLogicalXp())
+    harness.client.request(1, harness.actor1, adminLogicalXp())
+    local route0 = pendingRoute(harness.client, 0)
+    local route1 = pendingRoute(harness.client, 1)
+    local hostile = {
+        {},
+        adminResponse(route0, "applied", { extra = true }),
+        adminResponse(route0, "applied", { levelsGained = 2 }),
+        adminResponse(route0, "applied", { summary = summary({ revision = 7 }) }),
+        adminResponse(route0, "rejected", { code = "other" }),
+        adminResponse(route0, "failure", { committed = "false" }),
+    }
+    for index = 1, #hostile do
+        exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", hostile[index]), {
+            ok = false, code = "invalid_response", detail = "response",
+        }, "hostile response rejected " .. index)
+        check(harness.client.status(0).pending and harness.client.status(1).pending,
+            "hostile response retains all routes " .. index)
+    end
+    check(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", adminResponse(route1, "applied")).ok,
+        "hostile slot cannot poison other route")
+    check(harness.client.status(0).pending and not harness.client.status(1).pending,
+        "only matching route clears")
+end
+
+do
+    local failing = makeClientHarness({ sendThrow = true })
+    local result = failing.client.request(2, failing.actor0, adminLogicalLevels())
+    exact(result, { ok = false, code = "send_failed", detail = "sendClientCommand", committed = false },
+        "send failure result")
+    local state = failing.client.status(2)
+    exact(state.result, {
+        ok = false, requestId = state.result.requestId, operation = "awardSurvivorLevels",
+        target = state.result.target, code = "send_failed", detail = "sendClientCommand", committed = false,
+    }, "send failure terminal")
+    check(not state.pending, "send failure clears only route")
+
+    local harness = makeClientHarness()
+    harness.client.request(0, harness.actor0, adminLogicalInspect())
+    harness.client.request(1, harness.actor1, adminLogicalInspect())
+    local resetRoute = pendingRoute(harness.client, 0)
+    harness.client.resetSlot(0)
+    check(not harness.client.status(0).pending and harness.client.status(1).pending,
+        "resetSlot is contained")
+    exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", adminResponse(resetRoute, "inspected")), {
+        ok = false, code = "unknown_response", detail = "route",
+    }, "reset route cannot return")
+    harness.client.reset()
+    for slot = 0, 3 do exact(harness.client.status(slot), { ok = true, pending = false }, "reset slot " .. slot) end
+    exact(harness.client.status(4), { ok = false, code = "invalid_slot", detail = "slot" }, "invalid status slot")
+end
+
 return assertions

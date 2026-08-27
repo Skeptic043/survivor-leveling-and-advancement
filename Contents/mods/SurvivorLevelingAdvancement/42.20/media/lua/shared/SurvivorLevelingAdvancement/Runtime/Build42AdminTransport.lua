@@ -10,6 +10,8 @@ local MAX_USERNAME_LENGTH = 64
 local MAX_CODE_LENGTH = 64
 local MAX_DETAIL_LENGTH = 160
 
+local nextRequestNumber = 0
+
 local INSPECT_REQUEST_FIELDS = {
     protocolVersion = true,
     requestId = true,
@@ -75,6 +77,60 @@ local SESSION_FAILURE_FIELDS = {
     detail = true,
     committed = true,
 }
+local INSPECT_LOGICAL_REQUEST_FIELDS = { operation = true, target = true }
+local XP_LOGICAL_REQUEST_FIELDS = {
+    operation = true,
+    target = true,
+    expectedRevision = true,
+    amount = true,
+}
+local LEVEL_LOGICAL_REQUEST_FIELDS = {
+    operation = true,
+    target = true,
+    expectedRevision = true,
+    count = true,
+}
+local INSPECTION_RESPONSE_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+    ok = true,
+    outcome = true,
+    summary = true,
+}
+local APPLIED_RESPONSE_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+    ok = true,
+    outcome = true,
+    levelsGained = true,
+    apGained = true,
+    summary = true,
+}
+local REJECTION_RESPONSE_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+    ok = true,
+    outcome = true,
+    code = true,
+    detail = true,
+    summary = true,
+}
+local FAILURE_RESPONSE_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+    ok = true,
+    code = true,
+    detail = true,
+    committed = true,
+}
 
 local function failure(code, detail, committed)
     local result = { ok = false, code = code, detail = detail }
@@ -103,6 +159,10 @@ end
 
 local function positiveSafeInteger(value)
     return safeInteger(value) and value > 0
+end
+
+local function validSlot(value)
+    return safeInteger(value) and value <= 3
 end
 
 local function finitePositive(value)
@@ -545,6 +605,320 @@ function Build42AdminTransport.createServer(dependencies)
     end
 
     return { ok = true, server = server }
+end
+
+local function validateLogicalRequest(value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+
+    local operation = rawget(value, "operation")
+    local fields
+    if operation == "inspect" then
+        fields = INSPECT_LOGICAL_REQUEST_FIELDS
+    elseif operation == "awardSurvivorXp" then
+        fields = XP_LOGICAL_REQUEST_FIELDS
+    elseif operation == "awardSurvivorLevels" then
+        fields = LEVEL_LOGICAL_REQUEST_FIELDS
+    else
+        return nil
+    end
+    if not exactPlainTable(value, fields) then return nil end
+
+    local target = copyTarget(rawget(value, "target"))
+    if target == nil then return nil end
+    if operation == "awardSurvivorXp" then
+        if not safeInteger(rawget(value, "expectedRevision"))
+            or not finitePositive(rawget(value, "amount")) then
+            return nil
+        end
+    elseif operation == "awardSurvivorLevels" then
+        if not safeInteger(rawget(value, "expectedRevision"))
+            or not positiveSafeInteger(rawget(value, "count")) then
+            return nil
+        end
+    end
+
+    return {
+        operation = operation,
+        target = target,
+        expectedRevision = rawget(value, "expectedRevision"),
+        amount = rawget(value, "amount"),
+        count = rawget(value, "count"),
+    }
+end
+
+local function copyResponseBase(value)
+    if rawget(value, "protocolVersion") ~= PROTOCOL_VERSION
+        or not safeId(rawget(value, "requestId"), MAX_REQUEST_ID_LENGTH) then
+        return nil, nil
+    end
+    local operation = rawget(value, "operation")
+    if operation ~= "inspect" and operation ~= "awardSurvivorXp"
+        and operation ~= "awardSurvivorLevels" then
+        return nil, nil
+    end
+    local target = copyTarget(rawget(value, "target"))
+    if target == nil then return nil, nil end
+    return {
+        requestId = rawget(value, "requestId"),
+        operation = operation,
+        target = target,
+    }, target
+end
+
+local function validateResponseEnvelope(value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+    local base = copyResponseBase(value)
+    if base == nil then return nil end
+
+    if rawget(value, "ok") == true and rawget(value, "outcome") == "inspected"
+        and exactPlainTable(value, INSPECTION_RESPONSE_FIELDS)
+        and base.operation == "inspect" then
+        local summary = copySummary(rawget(value, "summary"))
+        if summary == nil then return nil end
+        base.ok = true
+        base.outcome = "inspected"
+        base.summary = summary
+        return base
+    end
+
+    if rawget(value, "ok") == true and rawget(value, "outcome") == "applied"
+        and exactPlainTable(value, APPLIED_RESPONSE_FIELDS)
+        and (base.operation == "awardSurvivorXp" or base.operation == "awardSurvivorLevels") then
+        local levelsGained = rawget(value, "levelsGained")
+        local apGained = rawget(value, "apGained")
+        local summary = copySummary(rawget(value, "summary"))
+        if summary == nil or not validGains(levelsGained, apGained, summary) then
+            return nil
+        end
+        base.ok = true
+        base.outcome = "applied"
+        base.levelsGained = levelsGained
+        base.apGained = apGained
+        base.summary = summary
+        return base
+    end
+
+    if rawget(value, "ok") == true and rawget(value, "outcome") == "rejected"
+        and exactPlainTable(value, REJECTION_RESPONSE_FIELDS)
+        and (base.operation == "awardSurvivorXp" or base.operation == "awardSurvivorLevels")
+        and rawget(value, "code") == "stale_revision"
+        and safeDetail(rawget(value, "detail")) then
+        local summary = copySummary(rawget(value, "summary"))
+        if summary == nil then
+            return nil
+        end
+        base.ok = true
+        base.outcome = "rejected"
+        base.code = "stale_revision"
+        base.detail = rawget(value, "detail")
+        base.summary = summary
+        return base
+    end
+
+    if rawget(value, "ok") == false and exactPlainTable(value, FAILURE_RESPONSE_FIELDS)
+        and safeCode(rawget(value, "code"))
+        and safeDetail(rawget(value, "detail"))
+        and type(rawget(value, "committed")) == "boolean" then
+        base.ok = false
+        base.code = rawget(value, "code")
+        base.detail = rawget(value, "detail")
+        base.committed = rawget(value, "committed")
+        return base
+    end
+
+    return nil
+end
+
+local function sameTarget(left, right)
+    return left.onlineId == right.onlineId and left.username == right.username
+end
+
+local function responseMatchesRoute(terminal, route)
+    if terminal.operation ~= route.operation or not sameTarget(terminal.target, route.target) then
+        return false
+    end
+    if terminal.outcome == "applied" then
+        if route.expectedRevision >= MAX_SAFE_INTEGER
+            or terminal.summary.revision ~= route.expectedRevision + 1 then
+            return false
+        end
+        return terminal.operation ~= "awardSurvivorLevels"
+            or (terminal.levelsGained == route.count and terminal.apGained == route.count)
+    end
+    if terminal.outcome == "rejected" then
+        return terminal.summary.revision ~= route.expectedRevision
+    end
+    return true
+end
+
+local function copyTerminal(value)
+    if value == nil then return nil end
+    local result = {
+        ok = value.ok,
+        requestId = value.requestId,
+        operation = value.operation,
+        target = {
+            onlineId = value.target.onlineId,
+            username = value.target.username,
+        },
+    }
+    if value.ok then
+        result.outcome = value.outcome
+        if value.outcome == "applied" then
+            result.levelsGained = value.levelsGained
+            result.apGained = value.apGained
+        elseif value.outcome == "rejected" then
+            result.code = value.code
+            result.detail = value.detail
+        end
+        result.summary = copySummary(value.summary)
+    else
+        result.code = value.code
+        result.detail = value.detail
+        result.committed = value.committed
+    end
+    return result
+end
+
+function Build42AdminTransport.createClient(dependencies)
+    if not exactPlainTable(dependencies, { sendClientCommand = true }) then
+        return failure("invalid_dependencies", "dependencies")
+    end
+
+    local sender = rawget(dependencies, "sendClientCommand")
+    if type(sender) ~= "function" then return failure("invalid_dependencies", "dependencies") end
+
+    local pendingBySlot = {}
+    local terminalBySlot = {}
+    local client = {}
+
+    local function findPending(requestId)
+        for localSlot = 0, 3 do
+            local route = pendingBySlot[localSlot]
+            if route ~= nil and route.requestId == requestId then return localSlot, route end
+        end
+        return nil, nil
+    end
+
+    function client.request(localSlot, actor, request)
+        if not validSlot(localSlot) or actor == nil then
+            return failure("invalid_request", "request")
+        end
+        local logical = validateLogicalRequest(request)
+        if logical == nil then return failure("invalid_request", "request") end
+        if pendingBySlot[localSlot] ~= nil then return failure("pending_request", "slot") end
+        if nextRequestNumber >= MAX_SAFE_INTEGER then
+            return failure("request_id_exhausted", "counter")
+        end
+
+        nextRequestNumber = nextRequestNumber + 1
+        local requestId = "admin:" .. tostring(nextRequestNumber)
+        local envelope = {
+            protocolVersion = PROTOCOL_VERSION,
+            requestId = requestId,
+            operation = logical.operation,
+            target = {
+                onlineId = logical.target.onlineId,
+                username = logical.target.username,
+            },
+        }
+        if logical.operation == "awardSurvivorXp" then
+            envelope.expectedRevision = logical.expectedRevision
+            envelope.amount = logical.amount
+        elseif logical.operation == "awardSurvivorLevels" then
+            envelope.expectedRevision = logical.expectedRevision
+            envelope.count = logical.count
+        end
+        pendingBySlot[localSlot] = {
+            requestId = requestId,
+            operation = logical.operation,
+            target = logical.target,
+            expectedRevision = logical.expectedRevision,
+            count = logical.count,
+        }
+        terminalBySlot[localSlot] = nil
+
+        if not pcall(sender, actor, MODULE, REQUEST_COMMAND, envelope) then
+            pendingBySlot[localSlot] = nil
+            terminalBySlot[localSlot] = {
+                ok = false,
+                requestId = requestId,
+                operation = logical.operation,
+                target = {
+                    onlineId = logical.target.onlineId,
+                    username = logical.target.username,
+                },
+                code = "send_failed",
+                detail = "sendClientCommand",
+                committed = false,
+            }
+            return failure("send_failed", "sendClientCommand", false)
+        end
+        return { ok = true, requestId = requestId }
+    end
+
+    function client.handle(module, command, args)
+        if module ~= MODULE or command ~= RESPONSE_COMMAND then
+            return { ok = true, handled = false }
+        end
+
+        local terminal = validateResponseEnvelope(args)
+        if terminal == nil then return failure("invalid_response", "response") end
+        local localSlot, route = findPending(terminal.requestId)
+        if route == nil or terminal.operation ~= route.operation
+            or not sameTarget(terminal.target, route.target) then
+            return failure("unknown_response", "route")
+        end
+        if not responseMatchesRoute(terminal, route) then
+            return failure("invalid_response", "response")
+        end
+
+        pendingBySlot[localSlot] = nil
+        terminalBySlot[localSlot] = terminal
+        return {
+            ok = true,
+            handled = true,
+            localSlot = localSlot,
+            result = copyTerminal(terminal),
+        }
+    end
+
+    function client.status(localSlot)
+        if not validSlot(localSlot) then return failure("invalid_slot", "slot") end
+        local route = pendingBySlot[localSlot]
+        if route ~= nil then
+            return {
+                ok = true,
+                pending = true,
+                requestId = route.requestId,
+                operation = route.operation,
+                target = {
+                    onlineId = route.target.onlineId,
+                    username = route.target.username,
+                },
+            }
+        end
+        local terminal = copyTerminal(terminalBySlot[localSlot])
+        if terminal == nil then return { ok = true, pending = false } end
+        return { ok = true, pending = false, result = terminal }
+    end
+
+    function client.resetSlot(localSlot)
+        if not validSlot(localSlot) then return failure("invalid_slot", "slot") end
+        pendingBySlot[localSlot] = nil
+        terminalBySlot[localSlot] = nil
+        return { ok = true }
+    end
+
+    function client.reset()
+        for localSlot = 0, 3 do
+            pendingBySlot[localSlot] = nil
+            terminalBySlot[localSlot] = nil
+        end
+        return { ok = true }
+    end
+
+    return { ok = true, client = client }
 end
 
 return Build42AdminTransport
