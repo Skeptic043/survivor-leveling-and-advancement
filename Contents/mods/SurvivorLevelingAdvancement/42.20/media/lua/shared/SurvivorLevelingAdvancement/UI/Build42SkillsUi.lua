@@ -772,7 +772,7 @@ function Build42SkillsUi.create(dependencies)
     local function headerTexts(cache)
         local left = localized("IGUI_SLA_StatusAP", cache.survivor.availableAp)
         local second = localized("IGUI_SLA_StatusSurvivorXp",
-            cache.survivor.xpIntoLevel, cache.survivor.xpForNextLevel)
+            math.floor(cache.survivor.xpIntoLevel), math.floor(cache.survivor.xpForNextLevel))
         if left == nil or second == nil then return nil, nil, nil end
         if cache.allotment.mode ~= "Global" then return left, nil, second end
         local right = localized("IGUI_SLA_StatusActive", cache.allotment.activeCount, cache.allotment.limit)

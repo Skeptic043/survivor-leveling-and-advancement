@@ -122,6 +122,8 @@ local function makeEnvironment(options)
         enabledAboveMaximum = false,
         enabledZeroCost = false,
         asynchronous = options.asynchronous ~= false,
+        xpIntoLevel = options.xpIntoLevel,
+        xpForNextLevel = options.xpForNextLevel,
         drawOrder = {},
         buildArguments = {},
     }
@@ -359,8 +361,8 @@ local function makeEnvironment(options)
                 revision = 2,
                 survivor = {
                     level = 5,
-                    xpIntoLevel = 10,
-                    xpForNextLevel = 100,
+                    xpIntoLevel = evidence.xpIntoLevel or 10,
+                    xpForNextLevel = evidence.xpForNextLevel or 100,
                     spent = 2,
                     availableAp = 3,
                 },
@@ -369,6 +371,7 @@ local function makeEnvironment(options)
                 rows = rows,
             }
             if evidence.privateModelField then result.private = true end
+            evidence.lastModelView = result
             return { ok = true, view = result }
         end,
     }
@@ -821,6 +824,22 @@ local reopened = makeView(reopenedEnvironment, 0, { reopenedBar }, false)
 reopened:prerender()
 equal(reopenedEnvironment.stateReads[1], 1, "reopened existing bars rebuild immediately")
 equal(reopenedEnvironment.refresh[1], 1, "reopened view also advances refresh cadence")
+
+local fractionalEnvironment = makeEnvironment({
+    xpIntoLevel = 105.40056410233345,
+    xpForNextLevel = 1200,
+})
+expect(fractionalEnvironment.integration.install().ok, "fractional XP integration installs")
+local fractionalBar = makeBar(fractionalEnvironment, "Axe")
+local fractionalView = makeView(fractionalEnvironment, 0, { fractionalBar }, false)
+fractionalView:prerender()
+fractionalView:render()
+expect(lastDrawText(fractionalView.statusDraws, "Survivor XP: 105 / 1200") ~= nil,
+    "Survivor XP display floors fractional values")
+equal(fractionalEnvironment.lastModelView.survivor.xpIntoLevel, 105.40056410233345,
+    "Survivor XP cache retains exact current value")
+equal(fractionalEnvironment.lastModelView.survivor.xpForNextLevel, 1200,
+    "Survivor XP cache retains exact required value")
 
 local slotBar = makeBar(environment, "Cooking", { x = 120 })
 local slotView = makeView(environment, 1, { slotBar }, false)
