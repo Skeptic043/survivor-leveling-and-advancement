@@ -6,14 +6,14 @@ if (-not [regex]::IsMatch($lifecycleSource, $cleanupPattern)) {
     throw 'C10-X guard: startupFailure must clear all four pending-player slots before retaining failure'
 }
 
-$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\).*?^\s*elseif started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnMiniScoreboardUpdate = function\(\)\s*\r?\n\s*if not installed or not ownEvents\(\) then return end\s*\r?\n\s*inspectLocalPlayers\(\)\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
+$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\)\s*\r?\n\s*if not installed or not ownEvents\(\) or not validSlot\(localSlot\) or player == nil then return end\s*\r?\n\s*if started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnMiniScoreboardUpdate = function\(\)\s*\r?\n\s*if not installed or not ownEvents\(\) then return end\s*\r?\n\s*inspectLocalPlayers\(\)\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
 if (-not [regex]::IsMatch($lifecycleSource, $createPlayerPattern)) {
     throw 'C10-X guard: OnCreatePlayer and the finite post-ack callback must retain their exact boundaries'
 }
 
-$clientEventsPattern = 'mode == "client" and \{ "OnCreatePlayer", "OnMiniScoreboardUpdate", "OnServerCommand", "OnDisconnect" \}'
+$clientEventsPattern = 'mode == "client" and \{ "OnMiniScoreboardUpdate", "OnServerCommand", "OnDisconnect" \}'
 if (-not [regex]::IsMatch($lifecycleSource, $clientEventsPattern)) {
-    throw 'C15-B guard: multiplayer must own the exact four-event set in order'
+    throw 'C15-D guard: multiplayer must own the exact three-event set in order'
 }
 
 $postAckMentions = [regex]::Matches($lifecycleSource, 'OnMiniScoreboardUpdate')
@@ -22,7 +22,16 @@ if ($postAckMentions.Count -ne 2) {
 }
 
 if ([regex]::IsMatch($lifecycleSource, 'OnTick|EveryTenMinutes|EveryOneMinute|getOnlinePlayers|scoreboard')) {
-    throw 'C15-B guard: readiness must not add polling, online-player enumeration, or scoreboard-row dependencies'
+    throw 'C15-D guard: readiness must not add polling, online-player enumeration, or scoreboard-row dependencies'
+}
+
+if ([regex]::IsMatch($lifecycleSource, 'getOnlineID')) {
+    throw 'C15-D guard: multiplayer readiness must not retain an online-ID dependency'
+}
+
+$localScanCalls = [regex]::Matches($lifecycleSource, 'inspectLocalPlayers\(\)')
+if ($localScanCalls.Count -ne 2) {
+    throw 'C15-D guard: local-player scan must exist only as its definition and post-acceptance call'
 }
 
 $pendingWrites = [regex]::Matches($lifecycleSource, 'pendingPlayers\[[^\]\r\n]+\]\s*=')
