@@ -206,6 +206,14 @@ local function detachAdminTarget(value)
     return { onlineId = rawget(value, "onlineId"), username = rawget(value, "username") }
 end
 
+local function detachAdminUsernameTarget(value)
+    if not exactTable(value, { username = true })
+        or not safeUsername(rawget(value, "username")) then
+        return nil
+    end
+    return { username = rawget(value, "username") }
+end
+
 local function detachAdminTerminal(value)
     if type(value) ~= "table" or getmetatable(value) ~= nil
         or type(rawget(value, "ok")) ~= "boolean"
@@ -216,7 +224,12 @@ local function detachAdminTerminal(value)
     if operation ~= "inspect" and operation ~= "awardSurvivorXp" and operation ~= "awardSurvivorLevels" then
         return nil
     end
-    local target = detachAdminTarget(rawget(value, "target"))
+    local target
+    if operation == "inspect" and rawget(value, "ok") == false then
+        target = detachAdminUsernameTarget(rawget(value, "target"))
+    else
+        target = detachAdminTarget(rawget(value, "target"))
+    end
     if target == nil then return nil end
     local result = {
         ok = rawget(value, "ok"), requestId = rawget(value, "requestId"),
@@ -225,9 +238,15 @@ local function detachAdminTerminal(value)
     if result.ok then
         local outcome = rawget(value, "outcome")
         local fields = { ok = true, requestId = true, operation = true, target = true, outcome = true, summary = true }
-        if outcome == "applied" then fields.levelsGained, fields.apGained = true, true
-        elseif outcome == "rejected" then fields.code, fields.detail = true, true
-        elseif outcome ~= "inspected" then return nil end
+        if operation == "inspect" then
+            if outcome ~= "inspected" then return nil end
+        elseif outcome == "applied" then
+            fields.levelsGained, fields.apGained = true, true
+        elseif outcome == "rejected" then
+            fields.code, fields.detail = true, true
+        else
+            return nil
+        end
         local summary = detachAdminSummary(rawget(value, "summary"))
         if not exactTable(value, fields) or summary == nil then return nil end
         if outcome == "applied" then
@@ -242,6 +261,7 @@ local function detachAdminTerminal(value)
         if not exactTable(value, { ok = true, requestId = true, operation = true, target = true, code = true, detail = true, committed = true })
             or not safeId(rawget(value, "code"), 64) or not safeText(rawget(value, "detail"), 160, false)
             or type(rawget(value, "committed")) ~= "boolean" then return nil end
+        if operation == "inspect" and rawget(value, "committed") ~= false then return nil end
         result.code, result.detail, result.committed = rawget(value, "code"), rawget(value, "detail"), rawget(value, "committed")
     end
     return result
@@ -255,8 +275,13 @@ local function detachAdminStatus(value)
     if exactTable(value, { ok = true, pending = true, requestId = true, operation = true, target = true })
         and rawget(value, "ok") == true and rawget(value, "pending") == true
         and safeId(rawget(value, "requestId"), 64) then
-        local target = detachAdminTarget(rawget(value, "target"))
         local operation = rawget(value, "operation")
+        local target
+        if operation == "inspect" then
+            target = detachAdminUsernameTarget(rawget(value, "target"))
+        else
+            target = detachAdminTarget(rawget(value, "target"))
+        end
         if target ~= nil and (operation == "inspect" or operation == "awardSurvivorXp" or operation == "awardSurvivorLevels") then
             return { ok = true, pending = true, requestId = rawget(value, "requestId"), operation = operation, target = target }
         end
@@ -480,6 +505,7 @@ function Build42Lifecycle.create(dependencies)
     local validateSnapshot = rawget(clientState, "validate")
     local Capability = rawget(globals, "Capability")
     local getPlayerByOnlineID = rawget(globals, "getPlayerByOnlineID")
+    local getPlayerFromUsername = rawget(globals, "getPlayerFromUsername")
     local writeLog = rawget(globals, "writeLog")
     local isServer, isClient = rawget(globals, "isServer"), rawget(globals, "isClient")
     if not callable(isServer) or not callable(isClient) then return failure("invalid_dependencies", "mode globals are required") end
@@ -625,6 +651,7 @@ function Build42Lifecycle.create(dependencies)
             local boundaryCalled, boundaryCreated = pcall(createAdminBoundary, {
                 Capability = Capability,
                 getPlayerByOnlineID = getPlayerByOnlineID,
+                getPlayerFromUsername = getPlayerFromUsername,
             })
             local boundaryEndpoint = boundaryCalled and service(boundaryCreated, "boundary", { "authorizeAndResolve" }) or nil
             if boundaryEndpoint == nil then return startupFailure(boundaryCreated, "admin_boundary_invalid", "Build42AdminBoundary.create") end

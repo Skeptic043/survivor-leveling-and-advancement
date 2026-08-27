@@ -77,7 +77,23 @@ local function isPrintableUsername(value)
     return true
 end
 
-local function isExactSelector(selector)
+local function isExactUsernameSelector(selector)
+    if type(selector) ~= "table" or getmetatable(selector) ~= nil then
+        return false
+    end
+
+    local count = 0
+    for key in pairs(selector) do
+        if key ~= "username" then
+            return false
+        end
+        count = count + 1
+    end
+
+    return count == 1 and isPrintableUsername(selector.username)
+end
+
+local function isExactCanonicalSelector(selector)
     if type(selector) ~= "table" or getmetatable(selector) ~= nil then
         return false
     end
@@ -109,22 +125,30 @@ function Build42AdminBoundary.create(dependencies)
 
     local dependencyCount = 0
     for key in pairs(dependencies) do
-        if key ~= "Capability" and key ~= "getPlayerByOnlineID" then
+        if key ~= "Capability" and key ~= "getPlayerByOnlineID"
+            and key ~= "getPlayerFromUsername" then
             return constructionFailure("dependencies must be an exact plain table")
         end
         dependencyCount = dependencyCount + 1
     end
-    if dependencyCount ~= 2 then
+    if dependencyCount ~= 3 then
         return constructionFailure("dependencies must be an exact plain table")
     end
 
     local capabilityFound, Capability = readMember(dependencies, "Capability")
     local lookupFound, getPlayerByOnlineID = readMember(dependencies, "getPlayerByOnlineID")
+    local usernameLookupFound, getPlayerFromUsername = readMember(
+        dependencies,
+        "getPlayerFromUsername"
+    )
     if not capabilityFound or Capability == nil then
         return constructionFailure("Capability is required")
     end
     if not lookupFound or type(getPlayerByOnlineID) ~= "function" then
         return constructionFailure("getPlayerByOnlineID must be a function")
+    end
+    if not usernameLookupFound or type(getPlayerFromUsername) ~= "function" then
+        return constructionFailure("getPlayerFromUsername must be a function")
     end
 
     local inspectFound, inspectCapability = readMember(Capability, "CanSeePlayersStats")
@@ -160,7 +184,11 @@ function Build42AdminBoundary.create(dependencies)
         if requiredCapability == nil then
             return fail("invalid_request")
         end
-        if not isExactSelector(selector) then
+        local inspection = operation == "inspect"
+        if inspection and not isExactUsernameSelector(selector) then
+            return fail("invalid_request")
+        end
+        if not inspection and not isExactCanonicalSelector(selector) then
             return fail("invalid_request")
         end
 
@@ -178,7 +206,12 @@ function Build42AdminBoundary.create(dependencies)
             return fail("unauthorized")
         end
 
-        local lookupOk, target = pcall(getPlayerByOnlineID, selector.onlineId)
+        local lookupOk, target
+        if inspection then
+            lookupOk, target = pcall(getPlayerFromUsername, selector.username)
+        else
+            lookupOk, target = pcall(getPlayerByOnlineID, selector.onlineId)
+        end
         if not lookupOk or target == nil then
             return fail("target_unavailable")
         end
@@ -188,7 +221,9 @@ function Build42AdminBoundary.create(dependencies)
         if not onlineIdOk or not usernameOk then
             return fail("target_mismatch")
         end
-        if onlineId ~= selector.onlineId or username ~= selector.username then
+        if not isSafeOnlineId(onlineId) or not isPrintableUsername(username)
+            or username ~= selector.username
+            or (not inspection and onlineId ~= selector.onlineId) then
             return fail("target_mismatch")
         end
 

@@ -57,12 +57,16 @@ local function target(onlineId, username)
     return { onlineId = onlineId or 41, username = username or "ClientTarget" }
 end
 
+local function usernameTarget(username)
+    return { username = username or "ClientTarget" }
+end
+
 local function inspectRequest()
     return {
         protocolVersion = 1,
         requestId = "admin:inspect-1",
         operation = "inspect",
-        target = target(),
+        target = usernameTarget(),
     }
 end
 
@@ -288,9 +292,9 @@ do
     local targetMeta = inspectRequest()
     setmetatable(targetMeta.target, {})
     malformed[#malformed + 1] = targetMeta
-    local badOnlineId = inspectRequest()
-    badOnlineId.target.onlineId = -1
-    malformed[#malformed + 1] = badOnlineId
+    local pairShapedInspect = inspectRequest()
+    pairShapedInspect.target.onlineId = 41
+    malformed[#malformed + 1] = pairShapedInspect
     local badUsername = inspectRequest()
     badUsername.target.username = "bad\nname"
     malformed[#malformed + 1] = badUsername
@@ -376,7 +380,7 @@ do
     check(boundaryEvent.actor == harness.actor, "boundary receives authoritative actor")
     equal(boundaryEvent.operation, "inspect", "boundary receives operation")
     check(boundaryEvent.selector ~= clientTarget, "boundary selector detached from request")
-    exact(boundaryEvent.selector, { onlineId = 41, username = "ClientTarget" }, "boundary selector")
+    exact(boundaryEvent.selector, { username = "ClientTarget" }, "boundary selector")
     check(harness.events[2].target == harness.resolvedTarget, "inspection uses resolved target")
 
     local sent = harness.events[3]
@@ -447,6 +451,8 @@ do
         equal(eventNames(harness.events), "boundary,send", "hostile boundary stops " .. index)
         equal(harness.events[2].envelope.code, "request_denied", "hostile boundary bounded " .. index)
         equal(harness.events[2].envelope.detail, "unavailable", "hostile boundary detail bounded " .. index)
+        exact(harness.events[2].envelope.target, { username = "ClientTarget" },
+            "inspect boundary failure target " .. index)
     end
 
     local thrown = makeHarness({ boundaryThrow = true })
@@ -665,7 +671,15 @@ do
         harness.server.handle("SurvivorLevelingAdvancement", "adminRequest", harness.actor, inspectRequest())
         equal(eventNames(harness.events), "boundary,inspect,send", "invalid summary inspection only " .. index)
         equal(harness.events[3].envelope.code, "session_failed", "invalid summary rejected " .. index)
+        exact(harness.events[3].envelope.target, { username = "ClientTarget" },
+            "invalid inspect result echoes username selector " .. index)
     end
+
+    local thrown = makeHarness({ inspectThrow = true })
+    thrown.server.handle("SurvivorLevelingAdvancement", "adminRequest", thrown.actor, inspectRequest())
+    equal(eventNames(thrown.events), "boundary,inspect,send", "thrown inspect calls session once")
+    exact(thrown.events[3].envelope.target, { username = "ClientTarget" },
+        "thrown inspect echoes username selector")
 end
 
 do
@@ -754,8 +768,8 @@ do
     equal(eventNames(harness.events), "boundary,inspect,send", "captured callables remain active")
 end
 
-local function adminLogicalInspect(onlineId, username)
-    return { operation = "inspect", target = target(onlineId, username) }
+local function adminLogicalInspect(username)
+    return { operation = "inspect", target = usernameTarget(username) }
 end
 
 local function adminLogicalXp(onlineId, username, revision, amount)
@@ -807,11 +821,18 @@ local function pendingRoute(client, localSlot)
 end
 
 local function adminResponse(route, outcome, overrides)
+    local responseTarget
+    if route.operation == "inspect" then
+        responseTarget = { username = route.target.username }
+        if outcome == "inspected" then responseTarget.onlineId = 77 end
+    else
+        responseTarget = { onlineId = route.target.onlineId, username = route.target.username }
+    end
     local response = {
         protocolVersion = 1,
         requestId = route.requestId,
         operation = route.operation,
-        target = { onlineId = route.target.onlineId, username = route.target.username },
+        target = responseTarget,
     }
     if outcome == "inspected" then
         response.ok = true
@@ -872,7 +893,7 @@ end
 do
     local harness = makeClientHarness()
     local nonAscii = "Jos" .. string.char(195) .. string.char(169)
-    local inspect = harness.client.request(0, harness.actor0, adminLogicalInspect(41, nonAscii))
+    local inspect = harness.client.request(0, harness.actor0, adminLogicalInspect(nonAscii))
     local xp = harness.client.request(1, harness.actor1, adminLogicalXp(42, "XpTarget"))
     local levels = harness.client.request(2, harness.actor0, adminLogicalLevels(43, "LevelTarget"))
     check(inspect.ok and xp.ok and levels.ok, "all logical requests send")
@@ -889,6 +910,7 @@ do
         protocolVersion = 1, requestId = inspect.requestId, operation = "inspect",
         target = harness.events[1].envelope.target,
     }, "exact inspect envelope")
+    exact(harness.events[1].envelope.target, { username = nonAscii }, "username-only inspect target")
     equal(harness.events[1].envelope.target.username, nonAscii, "non-ASCII target preserved")
     exact(harness.events[2].envelope, {
         protocolVersion = 1, requestId = xp.requestId, operation = "awardSurvivorXp",
@@ -909,7 +931,11 @@ do
         function() return harness.client.request(-1, harness.actor0, adminLogicalInspect()) end,
         function() return harness.client.request(4, harness.actor0, adminLogicalInspect()) end,
         function() return harness.client.request(0, nil, adminLogicalInspect()) end,
-        function() return harness.client.request(0, harness.actor0, { operation = "inspect", target = target(), extra = true }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "inspect", target = target() }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "inspect", target = usernameTarget(), extra = true }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "inspect", target = { username = "bad\nname" } }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "inspect", target = { username = "bad" .. string.char(127) } }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "awardSurvivorXp", target = usernameTarget(), expectedRevision = 7, amount = 1 }) end,
         function() return harness.client.request(0, harness.actor0, adminLogicalXp(41, "T", 7, math.huge)) end,
         function() return harness.client.request(0, harness.actor0, adminLogicalLevels(41, "T", 7, 1.5)) end,
     }
@@ -945,7 +971,7 @@ do
     local mismatch = adminResponse({
         requestId = route0.requestId,
         operation = "awardSurvivorXp",
-        target = route0.target,
+        target = { onlineId = 77, username = route0.target.username },
     }, "applied")
     exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", mismatch), {
         ok = false, code = "unknown_response", detail = "route",
@@ -953,11 +979,75 @@ do
     mismatch = adminResponse(route0, "inspected")
     mismatch.target.username = "OtherTarget"
     exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", mismatch), {
-        ok = false, code = "unknown_response", detail = "route",
+        ok = false, code = "invalid_response", detail = "response",
     }, "target mismatch retains route")
     check(harness.client.status(0).pending, "mismatches leave original slot pending")
     check(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", adminResponse(route0, "inspected")).ok,
         "matching inspection resolves slot")
+    equal(harness.client.status(0).result.target.onlineId, 77,
+        "matching inspection stores canonical online ID")
+end
+
+do
+    local harness = makeClientHarness()
+    harness.client.request(0, harness.actor0, adminLogicalInspect("InspectTarget"))
+    local route = pendingRoute(harness.client, 0)
+    local hostile = {}
+    local mismatch = adminResponse(route, "inspected")
+    mismatch.target.username = "OtherTarget"
+    hostile[#hostile + 1] = mismatch
+    hostile[#hostile + 1] = adminResponse(route, "inspected", {
+        target = { username = route.target.username },
+    })
+    hostile[#hostile + 1] = adminResponse(route, "inspected", {
+        target = { onlineId = -1, username = route.target.username },
+    })
+    hostile[#hostile + 1] = adminResponse(route, "inspected", {
+        target = { onlineId = 9007199254740992, username = route.target.username },
+    })
+    hostile[#hostile + 1] = adminResponse(route, "failure", {
+        target = { onlineId = 77, username = route.target.username },
+    })
+    hostile[#hostile + 1] = adminResponse(route, "failure", {
+        target = { username = route.target.username, extra = true },
+    })
+    hostile[#hostile + 1] = adminResponse(route, "inspected", { extra = true })
+    hostile[#hostile + 1] = adminResponse(route, "failure", {
+        target = { username = "OtherTarget" },
+    })
+    hostile[#hostile + 1] = adminResponse(route, "failure", { committed = true })
+    for index = 1, #hostile do
+        exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", hostile[index]), {
+            ok = false, code = "invalid_response", detail = "response",
+        }, "hostile inspect response " .. index)
+        check(harness.client.status(0).pending,
+            "hostile inspect response retains pending route " .. index)
+        equal(harness.client.status(0).requestId, route.requestId,
+            "hostile inspect response preserves pending identity " .. index)
+    end
+    local failureResponse = adminResponse(route, "failure")
+    check(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", failureResponse).ok,
+        "matching username-only inspect failure handled")
+    local result = harness.client.status(0).result
+    exact(result.target, { username = "InspectTarget" }, "inspect failure terminal target")
+    check(result.ok == false and result.committed == false,
+        "inspect failure terminal remains uncommitted")
+end
+
+do
+    local harness = makeClientHarness()
+    harness.client.request(0, harness.actor0, adminLogicalXp())
+    local route = pendingRoute(harness.client, 0)
+    local response = adminResponse(route, "failure", { committed = true })
+    local handled = harness.client.handle(
+        "SurvivorLevelingAdvancement",
+        "adminResult",
+        response
+    )
+    check(handled.ok and handled.handled, "committed mutation failure remains valid")
+    local state = harness.client.status(0)
+    check(not state.pending and state.result.committed == true,
+        "committed mutation failure replaces its matching route")
 end
 
 do
@@ -1035,6 +1125,14 @@ do
         target = state.result.target, code = "send_failed", detail = "sendClientCommand", committed = false,
     }, "send failure terminal")
     check(not state.pending, "send failure clears only route")
+
+    failing = makeClientHarness({ sendThrow = true })
+    result = failing.client.request(2, failing.actor0, adminLogicalInspect("InspectTarget"))
+    exact(result, { ok = false, code = "send_failed", detail = "sendClientCommand", committed = false },
+        "inspect send failure result")
+    state = failing.client.status(2)
+    exact(state.result.target, { username = "InspectTarget" },
+        "inspect send failure retains username-only target")
 
     local harness = makeClientHarness()
     harness.client.request(0, harness.actor0, adminLogicalInspect())

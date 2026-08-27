@@ -34,6 +34,7 @@ local LEVEL_REQUEST_FIELDS = {
     expectedRevision = true,
     count = true,
 }
+local USERNAME_TARGET_FIELDS = { username = true }
 local TARGET_FIELDS = { onlineId = true, username = true }
 local SUMMARY_FIELDS = {
     accountingMode = true,
@@ -223,6 +224,20 @@ local function copyTarget(value)
     }
 end
 
+local function copyUsernameTarget(value)
+    if not exactPlainTable(value, USERNAME_TARGET_FIELDS)
+        or not safeUsername(rawget(value, "username")) then
+        return nil
+    end
+    return { username = rawget(value, "username") }
+end
+
+local function copyResponseTarget(value)
+    local canonical = copyTarget(value)
+    if canonical ~= nil then return canonical end
+    return copyUsernameTarget(value)
+end
+
 local function copySummary(value)
     if not exactPlainTable(value, SUMMARY_FIELDS) then return nil end
     local accountingMode = rawget(value, "accountingMode")
@@ -274,7 +289,12 @@ local function validateRequestEnvelope(value)
     end
     if not exactPlainTable(value, fields) then return nil end
 
-    local target = copyTarget(rawget(value, "target"))
+    local target
+    if operation == "inspect" then
+        target = copyUsernameTarget(rawget(value, "target"))
+    else
+        target = copyTarget(rawget(value, "target"))
+    end
     if target == nil then return nil end
     if operation == "awardSurvivorXp" then
         if not safeInteger(rawget(value, "expectedRevision"))
@@ -299,14 +319,12 @@ local function validateRequestEnvelope(value)
 end
 
 local function responseBase(request, target)
+    local detachedTarget = copyResponseTarget(target)
     return {
         protocolVersion = PROTOCOL_VERSION,
         requestId = request.requestId,
         operation = request.operation,
-        target = {
-            onlineId = target.onlineId,
-            username = target.username,
-        },
+        target = detachedTarget,
     }
 end
 
@@ -491,10 +509,10 @@ function Build42AdminTransport.createServer(dependencies)
         local request = validateRequestEnvelope(args)
         if request == nil then return failure("invalid_request", "request", false) end
 
-        local selector = {
-            onlineId = request.target.onlineId,
-            username = request.target.username,
-        }
+        local selector = { username = request.target.username }
+        if request.operation ~= "inspect" then
+            selector.onlineId = request.target.onlineId
+        end
         local boundaryCalled, boundaryResult = pcall(
             authorizeAndResolve,
             actor,
@@ -510,13 +528,13 @@ function Build42AdminTransport.createServer(dependencies)
             local sessionCalled, sessionResult = pcall(inspect, target)
             if not sessionCalled then
                 return sendResult(sender, actor, failureEnvelope(
-                    request, targetRef, "session_failed", "unavailable", false
+                    request, request.target, "session_failed", "unavailable", false
                 ), false)
             end
             local summary = validateInspectionResult(sessionResult)
             if summary == nil then
                 return sendResult(sender, actor, failureEnvelope(
-                    request, targetRef, "session_failed", "malformed", false
+                    request, request.target, "session_failed", "malformed", false
                 ), false)
             end
             return sendResult(sender, actor, inspectionEnvelope(request, targetRef, summary), false)
@@ -623,7 +641,12 @@ local function validateLogicalRequest(value)
     end
     if not exactPlainTable(value, fields) then return nil end
 
-    local target = copyTarget(rawget(value, "target"))
+    local target
+    if operation == "inspect" then
+        target = copyUsernameTarget(rawget(value, "target"))
+    else
+        target = copyTarget(rawget(value, "target"))
+    end
     if target == nil then return nil end
     if operation == "awardSurvivorXp" then
         if not safeInteger(rawget(value, "expectedRevision"))
@@ -646,35 +669,34 @@ local function validateLogicalRequest(value)
     }
 end
 
-local function copyResponseBase(value)
+local function copyResponseBase(value, target)
     if rawget(value, "protocolVersion") ~= PROTOCOL_VERSION
         or not safeId(rawget(value, "requestId"), MAX_REQUEST_ID_LENGTH) then
-        return nil, nil
+        return nil
     end
     local operation = rawget(value, "operation")
     if operation ~= "inspect" and operation ~= "awardSurvivorXp"
         and operation ~= "awardSurvivorLevels" then
-        return nil, nil
+        return nil
     end
-    local target = copyTarget(rawget(value, "target"))
-    if target == nil then return nil, nil end
+    if target == nil then return nil end
     return {
         requestId = rawget(value, "requestId"),
         operation = operation,
         target = target,
-    }, target
+    }
 end
 
 local function validateResponseEnvelope(value)
     if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
-    local base = copyResponseBase(value)
-    if base == nil then return nil end
+    local operation = rawget(value, "operation")
 
     if rawget(value, "ok") == true and rawget(value, "outcome") == "inspected"
         and exactPlainTable(value, INSPECTION_RESPONSE_FIELDS)
-        and base.operation == "inspect" then
+        and operation == "inspect" then
+        local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
         local summary = copySummary(rawget(value, "summary"))
-        if summary == nil then return nil end
+        if base == nil or summary == nil then return nil end
         base.ok = true
         base.outcome = "inspected"
         base.summary = summary
@@ -683,11 +705,12 @@ local function validateResponseEnvelope(value)
 
     if rawget(value, "ok") == true and rawget(value, "outcome") == "applied"
         and exactPlainTable(value, APPLIED_RESPONSE_FIELDS)
-        and (base.operation == "awardSurvivorXp" or base.operation == "awardSurvivorLevels") then
+        and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels") then
+        local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
         local levelsGained = rawget(value, "levelsGained")
         local apGained = rawget(value, "apGained")
         local summary = copySummary(rawget(value, "summary"))
-        if summary == nil or not validGains(levelsGained, apGained, summary) then
+        if base == nil or summary == nil or not validGains(levelsGained, apGained, summary) then
             return nil
         end
         base.ok = true
@@ -700,11 +723,12 @@ local function validateResponseEnvelope(value)
 
     if rawget(value, "ok") == true and rawget(value, "outcome") == "rejected"
         and exactPlainTable(value, REJECTION_RESPONSE_FIELDS)
-        and (base.operation == "awardSurvivorXp" or base.operation == "awardSurvivorLevels")
+        and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels")
         and rawget(value, "code") == "stale_revision"
         and safeDetail(rawget(value, "detail")) then
+        local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
         local summary = copySummary(rawget(value, "summary"))
-        if summary == nil then
+        if base == nil or summary == nil then
             return nil
         end
         base.ok = true
@@ -719,10 +743,20 @@ local function validateResponseEnvelope(value)
         and safeCode(rawget(value, "code"))
         and safeDetail(rawget(value, "detail"))
         and type(rawget(value, "committed")) == "boolean" then
+        local committed = rawget(value, "committed")
+        if operation == "inspect" and committed ~= false then return nil end
+        local target
+        if operation == "inspect" then
+            target = copyUsernameTarget(rawget(value, "target"))
+        elseif operation == "awardSurvivorXp" or operation == "awardSurvivorLevels" then
+            target = copyTarget(rawget(value, "target"))
+        end
+        local base = copyResponseBase(value, target)
+        if base == nil then return nil end
         base.ok = false
         base.code = rawget(value, "code")
         base.detail = rawget(value, "detail")
-        base.committed = rawget(value, "committed")
+        base.committed = committed
         return base
     end
 
@@ -734,9 +768,15 @@ local function sameTarget(left, right)
 end
 
 local function responseMatchesRoute(terminal, route)
-    if terminal.operation ~= route.operation or not sameTarget(terminal.target, route.target) then
-        return false
+    if terminal.operation ~= route.operation then return false end
+    if route.operation == "inspect" then
+        if terminal.target.username ~= route.target.username then return false end
+        if terminal.ok then
+            return terminal.outcome == "inspected" and safeInteger(terminal.target.onlineId)
+        end
+        return terminal.target.onlineId == nil and terminal.committed == false
     end
+    if not sameTarget(terminal.target, route.target) then return false end
     if terminal.outcome == "applied" then
         if route.expectedRevision >= MAX_SAFE_INTEGER
             or terminal.summary.revision ~= route.expectedRevision + 1 then
@@ -753,14 +793,13 @@ end
 
 local function copyTerminal(value)
     if value == nil then return nil end
+    local target = { username = value.target.username }
+    if value.target.onlineId ~= nil then target.onlineId = value.target.onlineId end
     local result = {
         ok = value.ok,
         requestId = value.requestId,
         operation = value.operation,
-        target = {
-            onlineId = value.target.onlineId,
-            username = value.target.username,
-        },
+        target = target,
     }
     if value.ok then
         result.outcome = value.outcome
@@ -817,11 +856,11 @@ function Build42AdminTransport.createClient(dependencies)
             protocolVersion = PROTOCOL_VERSION,
             requestId = requestId,
             operation = logical.operation,
-            target = {
-                onlineId = logical.target.onlineId,
-                username = logical.target.username,
-            },
+            target = { username = logical.target.username },
         }
+        if logical.operation ~= "inspect" then
+            envelope.target.onlineId = logical.target.onlineId
+        end
         if logical.operation == "awardSurvivorXp" then
             envelope.expectedRevision = logical.expectedRevision
             envelope.amount = logical.amount
@@ -840,18 +879,19 @@ function Build42AdminTransport.createClient(dependencies)
 
         if not pcall(sender, actor, MODULE, REQUEST_COMMAND, envelope) then
             pendingBySlot[localSlot] = nil
-            terminalBySlot[localSlot] = {
+            local failedTerminal = {
                 ok = false,
                 requestId = requestId,
                 operation = logical.operation,
-                target = {
-                    onlineId = logical.target.onlineId,
-                    username = logical.target.username,
-                },
+                target = { username = logical.target.username },
                 code = "send_failed",
                 detail = "sendClientCommand",
                 committed = false,
             }
+            if logical.operation ~= "inspect" then
+                failedTerminal.target.onlineId = logical.target.onlineId
+            end
+            terminalBySlot[localSlot] = failedTerminal
             return failure("send_failed", "sendClientCommand", false)
         end
         return { ok = true, requestId = requestId }
@@ -865,8 +905,7 @@ function Build42AdminTransport.createClient(dependencies)
         local terminal = validateResponseEnvelope(args)
         if terminal == nil then return failure("invalid_response", "response") end
         local localSlot, route = findPending(terminal.requestId)
-        if route == nil or terminal.operation ~= route.operation
-            or not sameTarget(terminal.target, route.target) then
+        if route == nil or terminal.operation ~= route.operation then
             return failure("unknown_response", "route")
         end
         if not responseMatchesRoute(terminal, route) then
@@ -887,16 +926,19 @@ function Build42AdminTransport.createClient(dependencies)
         if not validSlot(localSlot) then return failure("invalid_slot", "slot") end
         local route = pendingBySlot[localSlot]
         if route ~= nil then
-            return {
+            local result = {
                 ok = true,
                 pending = true,
                 requestId = route.requestId,
                 operation = route.operation,
                 target = {
-                    onlineId = route.target.onlineId,
                     username = route.target.username,
                 },
             }
+            if route.operation ~= "inspect" then
+                result.target.onlineId = route.target.onlineId
+            end
+            return result
         end
         local terminal = copyTerminal(terminalBySlot[localSlot])
         if terminal == nil then return { ok = true, pending = false } end

@@ -167,6 +167,7 @@ local function fixture(server, client, configure)
         sendServerCommand = function() end,
         Capability = { CanSeePlayersStats = "inspect", CanModifyPlayerStatsInThePlayerStatsUI = "mutate" },
         getPlayerByOnlineID = function() end,
+        getPlayerFromUsername = function() end,
         writeLog = function(name, line) calls[#calls + 1] = { "write_log", name, line } end,
     }
     if configure ~= nil then configure({ modules = modules, globals = globals, localClient = localClient, session = session, advancementSession = advancementSession, adminSession = adminSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
@@ -958,7 +959,9 @@ end
 
 do
     local created, f = fixture(true, false)
+    local capturedUsernameLookup = f.globals.getPlayerFromUsername
     yes(created.owner.install().ok, "admin server installs existing events")
+    f.globals.getPlayerFromUsername = function() error("replacement username lookup") end
     f.events.OnServerStarted.fire()
     eq(f.adminBoundaryCreates(), 1, "one admin boundary after startup")
     eq(f.adminServerCreates(), 1, "one admin server after boundary")
@@ -968,6 +971,8 @@ do
     local boundary = f.calls[7][2]
     eq(boundary.Capability, f.globals.Capability, "boundary gets captured capability")
     eq(boundary.getPlayerByOnlineID, f.globals.getPlayerByOnlineID, "boundary gets captured lookup")
+    eq(boundary.getPlayerFromUsername, capturedUsernameLookup,
+        "boundary gets captured username lookup")
     local server = f.calls[8][2]
     eq(server.adminBoundary, f.adminBoundary, "admin server gets exact boundary")
     eq(server.adminSession, f.adminSession, "admin server gets composed admin session")
@@ -1053,11 +1058,13 @@ do
     local players = { {}, {}, {}, {} }
     for slot = 0, 3 do
         f.events.OnCreatePlayer.fire(slot, players[slot + 1])
-        local result = created.owner.requestAdmin(slot, { operation = "inspect", target = { onlineId = slot, username = "Target" } })
+        local request = { operation = "inspect", target = { username = "Target" } }
+        local result = created.owner.requestAdmin(slot, request)
         yes(result.ok, "admin request delegates slot " .. slot)
         eq(f.calls[#f.calls][1], "admin_request", "admin request invoked once " .. slot)
         eq(f.calls[#f.calls][2], slot, "admin request keeps slot " .. slot)
         eq(f.calls[#f.calls][3], players[slot + 1], "admin request keeps actor identity " .. slot)
+        eq(f.calls[#f.calls][4], request, "admin request preserves username-only logical shape " .. slot)
     end
     local before = #f.calls
     f.events.OnServerCommand.fire("Other", "adminResult", {})
@@ -1091,6 +1098,67 @@ do
     no(view.result == statusSource.result, "admin terminal status is detached")
     view.result.target.username = "mutated"
     eq(created.owner.adminStatus(0).result.target.username, "Target", "admin status detachment is stable")
+end
+
+do
+    local username = "T" .. string.char(195) .. string.char(169) .. "st"
+    local statusSource = {
+        ok = true, pending = true, requestId = "admin:inspect", operation = "inspect",
+        target = { username = username },
+    }
+    local created, f = fixture(false, true, function(values)
+        values.adminClient.status = function() return statusSource end
+    end)
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    local pending = created.owner.adminStatus(0)
+    exactKeys(pending, {
+        ok = true, pending = true, requestId = true, operation = true, target = true,
+    }, 5, "username-only inspect pending status")
+    exactKeys(pending.target, { username = true }, 1, "username-only pending target")
+    eq(pending.target.username, username, "pending UTF-8 username preserved")
+    no(pending.target == statusSource.target, "pending inspect target detached")
+
+    statusSource = {
+        ok = true, pending = false, result = {
+            ok = true, requestId = "admin:inspect", operation = "inspect",
+            target = { onlineId = 44, username = username }, outcome = "inspected",
+            summary = { accountingMode = "Tracked", revision = 1, level = 1,
+                xpIntoLevel = 0, xpForNextLevel = 100, spent = 0, availableAp = 1 },
+        },
+    }
+    local inspected = created.owner.adminStatus(0)
+    eq(inspected.result.target.onlineId, 44, "inspect success preserves canonical online ID")
+    eq(inspected.result.target.username, username, "inspect success preserves canonical username")
+
+    statusSource = {
+        ok = true, pending = false, result = {
+            ok = false, requestId = "admin:inspect", operation = "inspect",
+            target = { username = username }, code = "request_denied",
+            detail = "unavailable", committed = false,
+        },
+    }
+    local denied = created.owner.adminStatus(0)
+    exactKeys(denied.result.target, { username = true }, 1, "inspect failure username target")
+    no(denied.result.committed, "inspect failure remains uncommitted")
+
+    statusSource.result.committed = true
+    eq(created.owner.adminStatus(0).code, "admin_status_invalid",
+        "committed inspect failure is rejected")
+    statusSource.result.committed = false
+    statusSource.result.target.onlineId = 44
+    eq(created.owner.adminStatus(0).code, "admin_status_invalid",
+        "pair-shaped inspect failure is rejected")
+
+    statusSource = {
+        ok = true, pending = false, result = {
+            ok = false, requestId = "admin:mutation", operation = "awardSurvivorXp",
+            target = { onlineId = 44, username = username }, code = "publication_failed",
+            detail = "publication", committed = true,
+        },
+    }
+    local committedMutation = created.owner.adminStatus(0)
+    yes(committedMutation.result.committed,
+        "committed mutation failure remains valid")
 end
 
 do

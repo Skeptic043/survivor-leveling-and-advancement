@@ -103,19 +103,31 @@ local Capability = {
 local function makeBoundary(target)
     local fixture = {
         lookupCalls = 0,
+        onlineLookupCalls = 0,
+        usernameLookupCalls = 0,
         lookupIds = {},
+        lookupUsernames = {},
         target = target,
     }
 
     local function lookup(onlineId)
         fixture.lookupCalls = fixture.lookupCalls + 1
-        fixture.lookupIds[fixture.lookupCalls] = onlineId
+        fixture.onlineLookupCalls = fixture.onlineLookupCalls + 1
+        fixture.lookupIds[fixture.onlineLookupCalls] = onlineId
+        return fixture.target
+    end
+
+    local function lookupUsername(username)
+        fixture.lookupCalls = fixture.lookupCalls + 1
+        fixture.usernameLookupCalls = fixture.usernameLookupCalls + 1
+        fixture.lookupUsernames[fixture.usernameLookupCalls] = username
         return fixture.target
     end
 
     local created = Build42AdminBoundary.create({
         Capability = Capability,
         getPlayerByOnlineID = lookup,
+        getPlayerFromUsername = lookupUsername,
     })
     if not created.ok then
         error("valid boundary construction failed")
@@ -161,12 +173,20 @@ local constructorCases = {
         label = "empty dependencies",
     },
     {
-        dependencies = { Capability = Capability },
+        dependencies = { Capability = Capability, getPlayerByOnlineID = function() end },
         detail = "dependencies must be an exact plain table",
-        label = "missing lookup",
+        label = "missing username lookup",
     },
     {
-        dependencies = { getPlayerByOnlineID = function() end },
+        dependencies = { Capability = Capability, getPlayerFromUsername = function() end },
+        detail = "dependencies must be an exact plain table",
+        label = "missing online lookup",
+    },
+    {
+        dependencies = {
+            getPlayerByOnlineID = function() end,
+            getPlayerFromUsername = function() end,
+        },
         detail = "dependencies must be an exact plain table",
         label = "missing Capability",
     },
@@ -174,6 +194,7 @@ local constructorCases = {
         dependencies = {
             Capability = Capability,
             getPlayerByOnlineID = function() end,
+            getPlayerFromUsername = function() end,
             extra = true,
         },
         detail = "dependencies must be an exact plain table",
@@ -183,6 +204,7 @@ local constructorCases = {
         dependencies = {
             Capability = {},
             getPlayerByOnlineID = function() end,
+            getPlayerFromUsername = function() end,
         },
         detail = "Capability.CanSeePlayersStats is required",
         label = "missing inspect capability",
@@ -191,6 +213,7 @@ local constructorCases = {
         dependencies = {
             Capability = { CanSeePlayersStats = SEE },
             getPlayerByOnlineID = function() end,
+            getPlayerFromUsername = function() end,
         },
         detail = "Capability.CanModifyPlayerStatsInThePlayerStatsUI is required",
         label = "missing mutation capability",
@@ -199,9 +222,19 @@ local constructorCases = {
         dependencies = {
             Capability = Capability,
             getPlayerByOnlineID = true,
+            getPlayerFromUsername = function() end,
         },
         detail = "getPlayerByOnlineID must be a function",
         label = "malformed lookup",
+    },
+    {
+        dependencies = {
+            Capability = Capability,
+            getPlayerByOnlineID = function() end,
+            getPlayerFromUsername = true,
+        },
+        detail = "getPlayerFromUsername must be a function",
+        label = "malformed username lookup",
     },
     {
         dependencies = {
@@ -211,6 +244,7 @@ local constructorCases = {
                 end,
             }),
             getPlayerByOnlineID = function() end,
+            getPlayerFromUsername = function() end,
         },
         detail = "Capability.CanSeePlayersStats is required",
         label = "hostile Capability",
@@ -226,6 +260,7 @@ local hostileDependencies = setmetatable(
     {
         Capability = { CanSeePlayersStats = SEE },
         getPlayerByOnlineID = function() end,
+        getPlayerFromUsername = function() end,
     },
     {
         __index = function()
@@ -244,6 +279,7 @@ assertEqual(0, hostileDependencyIndexCalls, "hostile dependency metatable not in
 local exactConstruction = Build42AdminBoundary.create({
     Capability = Capability,
     getPlayerByOnlineID = function() return nil end,
+    getPlayerFromUsername = function() return nil end,
 })
 assertExactKeys(exactConstruction, { ok = true, boundary = true }, "construction success")
 assertTrue(exactConstruction.ok, "construction success ok")
@@ -277,10 +313,13 @@ for index = 1, #operations do
     local actor = makeActor(actorRole)
     local target = makeTarget(42, "Exact User", targetRole)
     local fixture = makeBoundary(target)
+    local selector = operation.mutation
+        and { onlineId = 42, username = "Exact User" }
+        or { username = "Exact User" }
     local result = fixture.boundary.authorizeAndResolve(
         actor,
         operation.name,
-        { onlineId = 42, username = "Exact User" }
+        selector
     )
 
     assertSuccess(result, target, 42, "Exact User", operation.name)
@@ -288,7 +327,15 @@ for index = 1, #operations do
     assertEqual(1, actorRole.capabilityCalls, operation.name .. " capability calls")
     assertEqual(operation.capability, actorRole.lastCapability, operation.name .. " capability")
     assertEqual(1, fixture.lookupCalls, operation.name .. " lookup calls")
-    assertEqual(42, fixture.lookupIds[1], operation.name .. " lookup id")
+    if operation.mutation then
+        assertEqual(1, fixture.onlineLookupCalls, operation.name .. " online lookup calls")
+        assertEqual(0, fixture.usernameLookupCalls, operation.name .. " username lookup calls")
+        assertEqual(42, fixture.lookupIds[1], operation.name .. " lookup id")
+    else
+        assertEqual(0, fixture.onlineLookupCalls, operation.name .. " online lookup calls")
+        assertEqual(1, fixture.usernameLookupCalls, operation.name .. " username lookup calls")
+        assertEqual("Exact User", fixture.lookupUsernames[1], operation.name .. " lookup username")
+    end
     assertEqual(1, target.onlineIdCalls, operation.name .. " online id calls")
     assertEqual(1, target.usernameCalls, operation.name .. " username calls")
     if operation.mutation then
@@ -320,7 +367,7 @@ local modifyOnlyFixture = makeBoundary(makeTarget(8, "Target", makeRole({}, 1)))
 local modifyOnlyResult = modifyOnlyFixture.boundary.authorizeAndResolve(
     modifyOnlyActor,
     "inspect",
-    { onlineId = 8, username = "Target" }
+    { username = "Target" }
 )
 assertFailure(modifyOnlyResult, "unauthorized", "mutation capability cannot inspect")
 assertEqual(SEE, modifyOnlyRole.lastCapability, "inspect denial checks inspect capability")
@@ -348,7 +395,7 @@ for index = 1, #invalidOperations do
     assertEqual(0, fixture.lookupCalls, "invalid operation avoids lookup " .. tostring(index))
 end
 
-local selectorWithMetatable = setmetatable({ onlineId = 8, username = "Target" }, {})
+local selectorWithMetatable = setmetatable({ username = "Target" }, {})
 local nilSelectorActor = makeActor(makeRole({ [SEE] = true }, 10))
 local nilSelectorFixture = makeBoundary(makeTarget(8, "Target", makeRole({}, 1)))
 local nilSelectorResult = nilSelectorFixture.boundary.authorizeAndResolve(nilSelectorActor, "inspect", nil)
@@ -359,19 +406,13 @@ assertEqual(0, nilSelectorFixture.lookupCalls, "nil selector avoids lookup")
 local hostileSelectors = {
     {},
     { onlineId = 8 },
-    { username = "Target" },
+    { onlineId = 8, username = "Target" },
     { onlineId = 8, username = "Target", actor = {} },
-    { onlineId = -1, username = "Target" },
-    { onlineId = 1.5, username = "Target" },
-    { onlineId = 9007199254740992, username = "Target" },
-    { onlineId = 0 / 0, username = "Target" },
-    { onlineId = math.huge, username = "Target" },
-    { onlineId = "8", username = "Target" },
-    { onlineId = 8, username = "" },
-    { onlineId = 8, username = string.rep("x", 65) },
-    { onlineId = 8, username = "bad\nname" },
-    { onlineId = 8, username = "bad" .. string.char(127) .. "name" },
-    { onlineId = 8, username = 9 },
+    { username = "" },
+    { username = string.rep("x", 65) },
+    { username = "bad\nname" },
+    { username = "bad" .. string.char(127) .. "name" },
+    { username = 9 },
     selectorWithMetatable,
 }
 for index = 1, #hostileSelectors do
@@ -381,6 +422,24 @@ for index = 1, #hostileSelectors do
     assertFailure(result, "invalid_request", "hostile selector " .. tostring(index))
     assertEqual(0, actor.roleCalls, "hostile selector avoids actor role " .. tostring(index))
     assertEqual(0, fixture.lookupCalls, "hostile selector avoids lookup " .. tostring(index))
+end
+
+local mutationSelectors = {
+    { username = "Target" },
+    { onlineId = 8 },
+    { onlineId = 8, username = "Target", extra = true },
+}
+for index = 1, #mutationSelectors do
+    local actor = makeActor(makeRole({ [MODIFY] = true }, 10))
+    local fixture = makeBoundary(makeTarget(8, "Target", makeRole({}, 1)))
+    local result = fixture.boundary.authorizeAndResolve(
+        actor,
+        "awardSurvivorXp",
+        mutationSelectors[index]
+    )
+    assertFailure(result, "invalid_request", "mutation selector " .. tostring(index))
+    assertEqual(0, actor.roleCalls, "mutation selector avoids actor role " .. tostring(index))
+    assertEqual(0, fixture.lookupCalls, "mutation selector avoids lookup " .. tostring(index))
 end
 
 local namedAdminRole = makeRole({}, 99)
@@ -393,7 +452,7 @@ local namedAdminFixture = makeBoundary(makeTarget(8, "Target", makeRole({}, 1)))
 local namedAdminResult = namedAdminFixture.boundary.authorizeAndResolve(
     namedAdmin,
     "inspect",
-    { onlineId = 8, username = "Target" }
+    { username = "Target" }
 )
 assertFailure(namedAdminResult, "unauthorized", "named admin without capability")
 assertEqual(1, namedAdminRole.capabilityCalls, "named admin capability checked")
@@ -415,7 +474,7 @@ for index = 1, #malformedActors do
     local result = fixture.boundary.authorizeAndResolve(
         malformedActors[index],
         "inspect",
-        { onlineId = 8, username = "Target" }
+        { username = "Target" }
     )
     assertFailure(result, "unauthorized", "malformed actor " .. tostring(index))
     assertEqual(0, fixture.lookupCalls, "malformed actor denied before lookup " .. tostring(index))
@@ -431,8 +490,18 @@ local targetCases = {
         },
         code = "target_mismatch",
     },
-    { target = makeTarget(9, "Target", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget(-1, "Target", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget(1.5, "Target", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget(9007199254740992, "Target", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget(0 / 0, "Target", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget(math.huge, "Target", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget("8", "Target", makeRole({}, 1)), code = "target_mismatch" },
     { target = makeTarget(8, "Other", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget(8, "bad\nname", makeRole({}, 1)), code = "target_mismatch" },
+    {
+        target = makeTarget(8, "bad" .. string.char(127) .. "name", makeRole({}, 1)),
+        code = "target_mismatch",
+    },
     {
         target = {
             getOnlineID = function() return 8 end,
@@ -447,18 +516,41 @@ for index = 1, #targetCases do
     local result = fixture.boundary.authorizeAndResolve(
         actor,
         "inspect",
-        { onlineId = 8, username = "Target" }
+        { username = "Target" }
     )
     assertFailure(result, targetCases[index].code, "target case " .. tostring(index))
     assertEqual(1, fixture.lookupCalls, "target case resolves once " .. tostring(index))
 end
+
+local canonicalTarget = makeTarget(912, "Target", makeRole({}, 99))
+local canonicalFixture = makeBoundary(canonicalTarget)
+local canonicalResult = canonicalFixture.boundary.authorizeAndResolve(
+    makeActor(makeRole({ [SEE] = true }, 1)),
+    "inspect",
+    { username = "Target" }
+)
+assertSuccess(canonicalResult, canonicalTarget, 912, "Target", "inspect constructs canonical target")
+assertEqual(0, canonicalFixture.onlineLookupCalls, "canonical inspect avoids online lookup")
+assertEqual(1, canonicalFixture.usernameLookupCalls, "canonical inspect uses username lookup once")
+
+local utf8Username = "T" .. string.char(195) .. string.char(169) .. "st"
+local utf8Target = makeTarget(913, utf8Username, makeRole({}, 99))
+local utf8Fixture = makeBoundary(utf8Target)
+local utf8Result = utf8Fixture.boundary.authorizeAndResolve(
+    makeActor(makeRole({ [SEE] = true }, 1)),
+    "inspect",
+    { username = utf8Username }
+)
+assertSuccess(utf8Result, utf8Target, 913, utf8Username, "UTF-8 inspect target")
+assertEqual(utf8Username, utf8Fixture.lookupUsernames[1], "UTF-8 lookup preserved")
 
 local throwingFixture = {
     lookupCalls = 0,
 }
 local throwingConstruction = Build42AdminBoundary.create({
     Capability = Capability,
-    getPlayerByOnlineID = function()
+    getPlayerByOnlineID = function() error("online lookup must not run") end,
+    getPlayerFromUsername = function()
         throwingFixture.lookupCalls = throwingFixture.lookupCalls + 1
         error("lookup failure")
     end,
@@ -468,7 +560,7 @@ local throwingBoundary = throwingConstruction.boundary
 local throwingResult = throwingBoundary.authorizeAndResolve(
     makeActor(makeRole({ [SEE] = true }, 10)),
     "inspect",
-    { onlineId = 8, username = "Target" }
+    { username = "Target" }
 )
 assertFailure(throwingResult, "target_unavailable", "throwing lookup")
 assertEqual(1, throwingFixture.lookupCalls, "throwing lookup called once")
@@ -482,7 +574,7 @@ local disconnectedFixture = makeBoundary(disconnectedTarget)
 local disconnectedResult = disconnectedFixture.boundary.authorizeAndResolve(
     makeActor(makeRole({ [SEE] = true }, 10)),
     "inspect",
-    { onlineId = 8, username = "Target" }
+    { username = "Target" }
 )
 assertFailure(disconnectedResult, "target_mismatch", "disconnected target")
 assertEqual(1, disconnectedFixture.lookupCalls, "disconnected target lookup once")
@@ -492,7 +584,7 @@ local replacementFixture = makeBoundary(replacement)
 local replacementResult = replacementFixture.boundary.authorizeAndResolve(
     makeActor(makeRole({ [SEE] = true }, 10)),
     "inspect",
-    { onlineId = 8, username = "Original" }
+    { username = "Original" }
 )
 assertFailure(replacementResult, "target_mismatch", "replacement target")
 assertEqual(1, replacementFixture.lookupCalls, "replacement target lookup once")
@@ -580,14 +672,14 @@ local inspectionFixture = makeBoundary(inspectedTarget)
 local inspectionResult = inspectionFixture.boundary.authorizeAndResolve(
     makeActor(inspectionRole),
     "inspect",
-    { onlineId = 8, username = "Target" }
+    { username = "Target" }
 )
 assertSuccess(inspectionResult, inspectedTarget, 8, "Target", "inspection ignores hierarchy")
 assertEqual(0, inspectionRole.positionCalls, "inspection actor position unused")
 assertEqual(0, inspectedTarget.roleCalls, "inspection target role unused")
 assertEqual(0, inspectedTargetRole.positionCalls, "inspection target position unused")
 
-local selector = { onlineId = 8, username = "Target" }
+local selector = { username = "Target" }
 local detachedTarget = makeTarget(8, "Target", makeRole({}, 1))
 local detachedFixture = makeBoundary(detachedTarget)
 local detachedResult = detachedFixture.boundary.authorizeAndResolve(
@@ -595,7 +687,6 @@ local detachedResult = detachedFixture.boundary.authorizeAndResolve(
     "inspect",
     selector
 )
-selector.onlineId = 99
 selector.username = "Changed"
 assertEqual(8, detachedResult.targetRef.onlineId, "targetRef onlineId detached")
 assertEqual("Target", detachedResult.targetRef.username, "targetRef username detached")
@@ -611,7 +702,8 @@ local capturedTarget = makeTarget(8, "Target", makeRole({}, 1))
 local replacementLookupCalls = 0
 local mutableDependencies = {
     Capability = mutableCapabilities,
-    getPlayerByOnlineID = function()
+    getPlayerByOnlineID = function() error("online lookup must not run") end,
+    getPlayerFromUsername = function()
         return capturedTarget
     end,
 }
@@ -620,7 +712,7 @@ assertTrue(capturedConstruction.ok, "captured dependency construction")
 local capturedBoundary = capturedConstruction.boundary
 mutableCapabilities.CanSeePlayersStats = {}
 mutableCapabilities.CanModifyPlayerStatsInThePlayerStatsUI = {}
-mutableDependencies.getPlayerByOnlineID = function()
+mutableDependencies.getPlayerFromUsername = function()
     replacementLookupCalls = replacementLookupCalls + 1
     return nil
 end
@@ -628,7 +720,7 @@ local capturedRole = makeRole({ [oldSee] = true }, 10)
 local capturedResult = capturedBoundary.authorizeAndResolve(
     makeActor(capturedRole),
     "inspect",
-    { onlineId = 8, username = "Target" }
+    { username = "Target" }
 )
 assertSuccess(capturedResult, capturedTarget, 8, "Target", "dependencies captured")
 assertEqual(oldSee, capturedRole.lastCapability, "captured capability identity")
