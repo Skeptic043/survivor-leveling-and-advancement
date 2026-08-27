@@ -23,6 +23,8 @@ if evidence == nil then
         setClientStateListener = function() return { ok = true } end,
         requestAdvancement = function() return { ok = false, code = "blocked", detail = "blocked" } end,
         advancementStatus = function() return { ok = true, pending = false } end,
+        requestAdmin = function() return { ok = false, code = "unavailable", detail = "unavailable" } end,
+        adminStatus = function() return { ok = true, pending = false } end,
     }
     evidence.clientOwnerState = {}
     evidence.allotment = {}

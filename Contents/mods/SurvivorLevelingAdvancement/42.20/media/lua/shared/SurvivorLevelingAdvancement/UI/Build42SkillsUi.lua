@@ -102,6 +102,8 @@ local function validOwner(owner)
         setClientStateListener = true,
         requestAdvancement = true,
         advancementStatus = true,
+        requestAdmin = true,
+        adminStatus = true,
     }) then return false end
     for key in pairs(owner) do
         if not callable(rawget(owner, key)) then return false end

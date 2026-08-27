@@ -92,6 +92,8 @@ local function makeEnvironment(options)
         settingsReads = 0,
         modelBuilds = 0,
         requests = { 0, 0, 0, 0 },
+        adminRequests = 0,
+        adminStatusReads = 0,
         progressionBuilds = 0,
         progressionDescribes = 0,
         progressionInspects = 0,
@@ -231,6 +233,14 @@ local function makeEnvironment(options)
                 return { ok = true, pending = true, requestId = "pending-id", perkId = "Axe" }
             end
             return { ok = true, pending = false }
+        end,
+        requestAdmin = function()
+            evidence.adminRequests = evidence.adminRequests + 1
+            error("Skills UI must not request admin")
+        end,
+        adminStatus = function()
+            evidence.adminStatusReads = evidence.adminStatusReads + 1
+            error("Skills UI must not read admin status")
         end,
     }
 
@@ -373,7 +383,7 @@ local function makeEnvironment(options)
         end,
     }
 
-    local created = Build42SkillsUi.create({
+    local dependencies = {
         ISCharacterInfo = CharacterInfo,
         ISSkillProgressBar = ProgressBar,
         ISButton = Button,
@@ -388,12 +398,15 @@ local function makeEnvironment(options)
         getText = formatText,
         measureText = function(text) return #text * (evidence.measureScale or 1) end,
         smallFont = "small-font",
-    })
+    }
+    local created = Build42SkillsUi.create(dependencies)
     expect(created.ok, "integration creates")
     evidence.integration = created.integration
     evidence.CharacterInfo = CharacterInfo
     evidence.ProgressBar = ProgressBar
     evidence.Button = Button
+    evidence.owner = owner
+    evidence.dependencies = dependencies
     return evidence
 end
 
@@ -567,11 +580,56 @@ equal(malformed.ok, false, "malformed dependencies fail")
 equal(malformed.code, "invalid_dependencies", "malformed dependency code")
 
 local environment = makeEnvironment()
+expect(exact(environment.owner, {
+    install = true,
+    status = true,
+    clientState = true,
+    refreshOwner = true,
+    setClientStateListener = true,
+    requestAdvancement = true,
+    advancementStatus = true,
+    requestAdmin = true,
+    adminStatus = true,
+}), "exact nine-method owner is accepted")
+
+local function copyOwner(owner)
+    local copy = {}
+    for key, value in pairs(owner) do copy[key] = value end
+    return copy
+end
+
+local function createWithOwner(owner)
+    local dependencies = {}
+    for key, value in pairs(environment.dependencies) do dependencies[key] = value end
+    dependencies.owner = owner
+    return Build42SkillsUi.create(dependencies)
+end
+
+local ownerMissingAdmin = copyOwner(environment.owner)
+ownerMissingAdmin.requestAdmin = nil
+local missingAdmin = createWithOwner(ownerMissingAdmin)
+equal(missingAdmin.ok, false, "owner missing admin request fails closed")
+equal(missingAdmin.code, "invalid_dependencies", "missing admin request failure code")
+
+local ownerNoncallableAdmin = copyOwner(environment.owner)
+ownerNoncallableAdmin.adminStatus = true
+local noncallableAdmin = createWithOwner(ownerNoncallableAdmin)
+equal(noncallableAdmin.ok, false, "owner noncallable admin status fails closed")
+equal(noncallableAdmin.code, "invalid_dependencies", "noncallable admin status failure code")
+
+local ownerWithExtraMember = copyOwner(environment.owner)
+ownerWithExtraMember.unexpected = function() end
+local extraOwnerMember = createWithOwner(ownerWithExtraMember)
+equal(extraOwnerMember.ok, false, "owner extra member fails closed")
+equal(extraOwnerMember.code, "invalid_dependencies", "extra owner member failure code")
+
 expect(exact(environment.integration.status(), { ok = true, installed = true })
     and environment.integration.status().installed == false, "creation is inert")
 equal(environment.listenerSets, 0, "creation installs no listener")
 equal(environment.buttonCreates, 0, "creation creates no UI")
 equal(environment.settingsReads, 0, "creation reads no settings")
+equal(environment.adminRequests, 0, "creation does not call admin request")
+equal(environment.adminStatusReads, 0, "creation does not read admin status")
 equal(total(environment.stateReads), 0, "creation reads no state")
 equal(total(environment.refresh), 0, "creation sends no refresh")
 local installed = environment.integration.install()
@@ -1205,5 +1263,8 @@ vanillaThrowView.throwRender = true
 local renderOk = pcall(function() vanillaThrowView:render() end)
 expect(not renderOk, "vanilla render throw propagates")
 equal(vanillaThrowEnvironment.priorRender, 1, "throwing vanilla render called once")
+
+equal(environment.adminRequests, 0, "Skills UI never calls admin request")
+equal(environment.adminStatusReads, 0, "Skills UI never reads admin status")
 
 return assertions
