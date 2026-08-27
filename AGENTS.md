@@ -4,7 +4,7 @@ Active project folder: `E:\Projects\PZ Mods\Survivor Leveling and Advancement`
 
 ## Scope
 
-- Work only in this project folder and inspect the installed Project Zomboid files read-only when needed.
+- Confine runtime and project modifications to this project folder unless explicitly authorized otherwise. Read-only access is permitted to installed Project Zomboid files and to `../pz-knowledge` for shared PZ research; other sibling mod repositories remain off-limits. Any write to `pz-knowledge` is separate work governed by that repository's own `AGENTS.md`, branch/PR, risk, and review rules and requires current authorization.
 - Do not modify or borrow from `Basekeeper (shelved)` or any other mod.
 - Do not add runtime mod files until the user explicitly lifts the implementation pause.
 
