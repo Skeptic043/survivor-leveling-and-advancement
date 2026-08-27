@@ -62,6 +62,11 @@ local function sequenceEquals(actual, expected, message)
     end
 end
 
+local function isEmpty(value)
+    for _ in pairs(value) do return false end
+    return true
+end
+
 local function assertFailure(result, code, message)
     exactKeys(result, { ok = true, code = true, detail = true, committed = true }, message or "failure")
     expectEqual(result.ok, false, (message or "failure") .. " ok")
@@ -97,9 +102,11 @@ local function fixture(configure)
     local state = baseState()
     local original = deepCopy(state)
     local target = {}
-    local options = { published = { Axe = true } }
+    local options = { loadedPerks = { Axe = { effectiveMaximum = 10 } } }
     local savedStates = {}
     local applyInputs = {}
+    local positionReads = {}
+    local positions = { Axe = 88.5 }
     local dependencies = {
         store = {
             load = function(actualTarget, actualOptions)
@@ -115,7 +122,17 @@ local function fixture(configure)
                 return { ok = true }
             end,
         },
-        catalog = { resolver = { loadOptions = options } },
+        catalog = {
+            resolver = { loadOptions = options },
+            positionReader = {
+                read = function(actualTarget, perkId)
+                    calls[#calls + 1] = "read:" .. tostring(perkId)
+                    expectEqual(actualTarget, target, "position target identity")
+                    positionReads[#positionReads + 1] = perkId
+                    return { ok = true, position = positions[perkId] }
+                end,
+            },
+        },
         ownerSession = {
             isReady = function(actualTarget)
                 calls[#calls + 1] = "ready"
@@ -138,6 +155,19 @@ local function fixture(configure)
                 return SurvivorEconomy.applyXp(survivor, amount)
             end,
         },
+        NaturalLedger = {
+            baseline = function(position)
+                calls[#calls + 1] = "baseline"
+                return NaturalLedger.baseline(position)
+            end,
+        },
+        ActualObservation = {
+            clearPlayer = function(actualTarget)
+                calls[#calls + 1] = "clear"
+                expectEqual(actualTarget, target, "observation target identity")
+                return { ok = true }
+            end,
+        },
     }
     local values = {
         calls = calls,
@@ -147,6 +177,8 @@ local function fixture(configure)
         options = options,
         savedStates = savedStates,
         applyInputs = applyInputs,
+        positionReads = positionReads,
+        positions = positions,
         dependencies = dependencies,
     }
     if configure then configure(dependencies, values) end
@@ -162,13 +194,15 @@ assertFailure(AdminSession.create(setmetatable({}, {})), "invalid_dependencies",
 do
     local dependencies = {
         store = { load = function() end, save = function() end },
-        catalog = { resolver = { loadOptions = {} } },
+        catalog = { resolver = { loadOptions = { loadedPerks = {} } }, positionReader = { read = function() end } },
         ownerSession = { isReady = function() end },
         SurvivorEconomy = {
             nextLevelCost = function() end,
             availableAp = function() end,
             applyXp = function() end,
         },
+        NaturalLedger = { baseline = function() end },
+        ActualObservation = { clearPlayer = function() end },
         extra = true,
     }
     assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "extra dependency")
@@ -178,24 +212,35 @@ do
     dependencies.store.save = function() end
     dependencies.catalog.resolver.loadOptions = nil
     assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "missing load options")
-    dependencies.catalog.resolver.loadOptions = {}
+    dependencies.catalog.resolver.loadOptions = { loadedPerks = {} }
+    dependencies.catalog.positionReader.read = nil
+    assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "missing position reader")
+    dependencies.catalog.positionReader.read = function() end
     dependencies.ownerSession.isReady = nil
     assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "missing readiness")
     dependencies.ownerSession.isReady = function() end
     dependencies.SurvivorEconomy.applyXp = nil
     assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "missing apply XP")
+    dependencies.SurvivorEconomy.applyXp = function() end
+    dependencies.NaturalLedger.baseline = nil
+    assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "missing baseline")
+    dependencies.NaturalLedger.baseline = function() end
+    dependencies.ActualObservation.clearPlayer = nil
+    assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "missing observation clear")
 end
 do
     local function validDependencies()
         return {
             store = { load = function() end, save = function() end },
-            catalog = { resolver = { loadOptions = {} } },
+            catalog = { resolver = { loadOptions = { loadedPerks = {} } }, positionReader = { read = function() end } },
             ownerSession = { isReady = function() end },
             SurvivorEconomy = {
                 nextLevelCost = function() end,
                 availableAp = function() end,
                 applyXp = function() end,
             },
+            NaturalLedger = { baseline = function() end },
+            ActualObservation = { clearPlayer = function() end },
         }
     end
     local dependencies = validDependencies()
@@ -210,6 +255,12 @@ do
     dependencies = validDependencies()
     dependencies.SurvivorEconomy = setmetatable(dependencies.SurvivorEconomy, {})
     assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "metatable economy")
+    dependencies = validDependencies()
+    dependencies.NaturalLedger = setmetatable(dependencies.NaturalLedger, {})
+    assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "metatable ledger")
+    dependencies = validDependencies()
+    dependencies.ActualObservation = setmetatable(dependencies.ActualObservation, {})
+    assertFailure(AdminSession.create(dependencies), "invalid_dependencies", "metatable observation")
 end
 
 do
@@ -247,12 +298,18 @@ do
     local capturedCost = values.dependencies.SurvivorEconomy.nextLevelCost
     local capturedAvailable = values.dependencies.SurvivorEconomy.availableAp
     local capturedApply = values.dependencies.SurvivorEconomy.applyXp
+    local capturedRead = values.dependencies.catalog.positionReader.read
+    local capturedBaseline = values.dependencies.NaturalLedger.baseline
+    local capturedClear = values.dependencies.ActualObservation.clearPlayer
     values.dependencies.store.load = function() error("replacement load") end
     values.dependencies.store.save = function() error("replacement save") end
     values.dependencies.ownerSession.isReady = function() error("replacement ready") end
     values.dependencies.SurvivorEconomy.nextLevelCost = function() error("replacement cost") end
     values.dependencies.SurvivorEconomy.availableAp = function() error("replacement available") end
     values.dependencies.SurvivorEconomy.applyXp = function() error("replacement apply") end
+    values.dependencies.catalog.positionReader.read = function() error("replacement read") end
+    values.dependencies.NaturalLedger.baseline = function() error("replacement baseline") end
+    values.dependencies.ActualObservation.clearPlayer = function() error("replacement clear") end
     values.dependencies.catalog.resolver.loadOptions = { replacement = true }
     expect(capturedLoad ~= values.dependencies.store.load, "load replacement differs")
     expect(capturedSave ~= values.dependencies.store.save, "save replacement differs")
@@ -260,9 +317,15 @@ do
     expect(capturedCost ~= values.dependencies.SurvivorEconomy.nextLevelCost, "cost replacement differs")
     expect(capturedAvailable ~= values.dependencies.SurvivorEconomy.availableAp, "available replacement differs")
     expect(capturedApply ~= values.dependencies.SurvivorEconomy.applyXp, "apply replacement differs")
+    expect(capturedRead ~= values.dependencies.catalog.positionReader.read, "read replacement differs")
+    expect(capturedBaseline ~= values.dependencies.NaturalLedger.baseline, "baseline replacement differs")
+    expect(capturedClear ~= values.dependencies.ActualObservation.clearPlayer, "clear replacement differs")
     local result = session.request(values.target, { kind = "awardSurvivorXp", expectedRevision = 7, amount = 50 })
     expectEqual(result.ok, true, "captured callables remain usable")
     sequenceEquals(values.calls, { "ready", "load", "cost", "available", "apply", "cost", "available", "save" }, "captured callable ordering")
+    values.calls = {}
+    result = session.request(values.target, { kind = "clearAdvancementSlots", expectedRevision = 7 })
+    expectEqual(result.ok, true, "captured clear callables remain usable")
 end
 
 local function assertXpAward(amount, expectedLevel, expectedXp, expectedGained)
@@ -375,6 +438,181 @@ do
     sequenceEquals(values.calls, { "ready", "load", "cost", "available" }, "stale ordering")
 end
 
+do
+    local session, values = fixture(function(_, configured)
+        configured.state.perks.Spear = {
+            adapterId = "modded",
+            adapterVersion = 4,
+            curveFingerprint = "spear-curve",
+            effectiveMaximum = 12,
+            naturalPosition = 11,
+            highWaterPosition = 19,
+            activeTargets = {},
+            postMaxFullRateUsed = 9.25,
+            compatibilityNote = "retain",
+        }
+        configured.state.perks.Cooking = {
+            adapterId = "core",
+            adapterVersion = 1,
+            curveFingerprint = "cooking-curve",
+            effectiveMaximum = 10,
+            naturalPosition = 30,
+            highWaterPosition = 30,
+            activeTargets = {},
+            postMaxFullRateUsed = 2,
+        }
+        configured.state.perks.Removed = {
+            adapterId = "old",
+            adapterVersion = 1,
+            curveFingerprint = "old-curve",
+            effectiveMaximum = 5,
+            naturalPosition = 1,
+            highWaterPosition = 4,
+            activeTargets = { { targetId = "gone", targetLevel = 2, targetPosition = 5 } },
+            postMaxFullRateUsed = 1,
+        }
+        configured.options.loadedPerks.Spear = { effectiveMaximum = 12 }
+        configured.options.loadedPerks.Cooking = { effectiveMaximum = 10 }
+        configured.positions.Axe = 83.25
+        configured.positions.Spear = 17.75
+        configured.original = deepCopy(configured.state)
+    end)
+    local originalSurvivor = deepCopy(values.state.survivor)
+    local originalPrivate = deepCopy(values.state.privateRoot)
+    local result = session.request(values.target, {
+        kind = "clearAdvancementSlots",
+        expectedRevision = 7,
+    })
+    exactKeys(result, {
+        ok = true,
+        applied = true,
+        kind = true,
+        levelsGained = true,
+        apGained = true,
+        summary = true,
+    }, "clear success")
+    expectEqual(result.ok, true, "clear succeeds")
+    expectEqual(result.applied, true, "clear applies")
+    expectEqual(result.kind, "clearAdvancementSlots", "clear kind")
+    expectEqual(result.levelsGained, 0, "clear gains no levels")
+    expectEqual(result.apGained, 0, "clear gains no AP")
+    expectEqual(result.summary.revision, 8, "clear revision increments once")
+    expectEqual(result.summary.level, 2, "clear preserves Survivor level")
+    expectEqual(result.summary.xpIntoLevel, 100, "clear preserves Survivor XP")
+    expectEqual(result.summary.spent, 1, "clear preserves spent AP")
+    expectEqual(#values.savedStates, 1, "clear saves once")
+    local saved = values.savedStates[1]
+    expect(deepEqual(saved.survivor, originalSurvivor), "clear preserves Survivor state")
+    expect(deepEqual(saved.privateRoot, originalPrivate), "clear preserves unrelated root state")
+    expectEqual(saved.perks.Axe.naturalPosition, 83.25, "blue and red Axe natural reset")
+    expectEqual(saved.perks.Axe.highWaterPosition, 83.25, "blue and red Axe high water reset")
+    expectEqual(#saved.perks.Axe.activeTargets, 0, "blue Axe targets cleared")
+    expectEqual(saved.perks.Axe.adapterId, "core", "Axe adapter identity preserved")
+    expectEqual(saved.perks.Axe.effectiveMaximum, 10, "Axe maximum preserved")
+    expectEqual(saved.perks.Axe.postMaxFullRateUsed, 3.75, "Axe post-max usage preserved")
+    expectEqual(saved.perks.Spear.naturalPosition, 17.75, "red-only natural reset")
+    expectEqual(saved.perks.Spear.highWaterPosition, 17.75, "red-only high water reset")
+    expectEqual(#saved.perks.Spear.activeTargets, 0, "red-only targets stay empty")
+    expectEqual(saved.perks.Spear.compatibilityNote, "retain", "compatibility field preserved")
+    expectEqual(saved.perks.Spear.effectiveMaximum, 12, "red-only maximum preserved")
+    expectEqual(saved.perks.Spear.postMaxFullRateUsed, 9.25, "red-only post-max usage preserved")
+    expectEqual(saved.perks.Cooking.naturalPosition, 30, "clean loaded record preserved")
+    expectEqual(saved.perks.Removed, nil, "removed perk record deleted")
+    expect(isEmpty(saved.orphanedPerks), "orphaned perks cleared")
+    sequenceEquals(values.positionReads, { "Axe", "Spear" }, "authoritative candidates read once")
+    expect(deepEqual(values.state, values.original), "clear does not mutate loaded state")
+    sequenceEquals(values.calls, {
+        "ready", "load", "cost", "available",
+        "read:Axe", "baseline", "read:Spear", "baseline", "clear",
+        "cost", "available", "save",
+    }, "clear ordering")
+end
+
+do
+    local session, values = fixture(function(_, configured)
+        configured.state.perks.Axe.naturalPosition = 12
+        configured.state.perks.Axe.highWaterPosition = 12
+        configured.state.perks.Axe.activeTargets = {}
+        configured.state.orphanedPerks = {}
+        configured.original = deepCopy(configured.state)
+    end)
+    local result = session.request(values.target, { kind = "clearAdvancementSlots", expectedRevision = 7 })
+    expectEqual(result.ok, true, "already-clean clear succeeds")
+    expectEqual(result.summary.revision, 8, "already-clean clear establishes revision barrier")
+    expectEqual(#values.positionReads, 0, "already-clean record does not read position")
+    expectEqual(#values.savedStates, 1, "already-clean clear saves once")
+    sequenceEquals(values.calls, { "ready", "load", "cost", "available", "clear", "cost", "available", "save" }, "already-clean ordering")
+end
+
+do
+    local session, values = fixture()
+    local result = session.request(values.target, { kind = "clearAdvancementSlots", expectedRevision = 6 })
+    expectEqual(result.ok, true, "stale clear is handled")
+    expectEqual(result.applied, false, "stale clear does not apply")
+    expectEqual(result.kind, "clearAdvancementSlots", "stale clear kind")
+    expectEqual(result.code, "stale_revision", "stale clear code")
+    expectEqual(#values.positionReads, 0, "stale clear reads no positions")
+    expectEqual(#values.savedStates, 0, "stale clear does not save")
+    sequenceEquals(values.calls, { "ready", "load", "cost", "available" }, "stale clear ordering")
+end
+
+local function assertClearFailure(name, configure, expectedCode, expectedCalls)
+    local session, values = fixture(configure)
+    local result = session.request(values.target, { kind = "clearAdvancementSlots", expectedRevision = 7 })
+    assertFailure(result, expectedCode, name)
+    sequenceEquals(values.calls, expectedCalls, name .. " ordering")
+    expectEqual(#values.savedStates, 0, name .. " does not save")
+    expect(deepEqual(values.state, values.original), name .. " preserves loaded state")
+end
+
+assertClearFailure("Free clear", function(_, values)
+    values.state.accountingMode = "Free"
+    values.original.accountingMode = "Free"
+end, "accounting_mode_free", { "ready", "load", "cost", "available" })
+
+assertClearFailure("in-flight clear", function(_, values)
+    values.state.inFlightAdvancement = { requestId = "pending" }
+    values.original.inFlightAdvancement = { requestId = "pending" }
+end, "advancement_in_flight", { "ready", "load", "cost", "available" })
+
+assertClearFailure("position read failure", function(dependencies)
+    dependencies.catalog.positionReader.read = function()
+        return { ok = false, code = "unavailable", detail = "private" }
+    end
+end, "position_read_failed", { "ready", "load", "cost", "available" })
+
+assertClearFailure("position read malformed", function(dependencies)
+    dependencies.catalog.positionReader.read = function()
+        return { ok = true, position = -1 }
+    end
+end, "position_read_invalid", { "ready", "load", "cost", "available" })
+
+assertClearFailure("observation clear failure", function(dependencies, values)
+    dependencies.ActualObservation.clearPlayer = function(actualTarget)
+        values.calls[#values.calls + 1] = "clear"
+        expectEqual(actualTarget, values.target, "failed clear target")
+        return { ok = false, code = "private", detail = "private" }
+    end
+end, "observation_clear_failed", { "ready", "load", "cost", "available", "read:Axe", "baseline", "clear" })
+
+do
+    local session, values = fixture(function(dependencies, configured)
+        dependencies.store.save = function(actualTarget, candidate)
+            configured.calls[#configured.calls + 1] = "save-attempt"
+            expectEqual(actualTarget, configured.target, "failed save target")
+            expectEqual(candidate.revision, 8, "failed save sees incremented candidate")
+            return { ok = false, code = "private", detail = "private" }
+        end
+    end)
+    local result = session.request(values.target, { kind = "clearAdvancementSlots", expectedRevision = 7 })
+    assertFailure(result, "store_save_failed", "clear save failure")
+    sequenceEquals(values.calls, {
+        "ready", "load", "cost", "available", "read:Axe", "baseline", "clear", "cost", "available", "save-attempt",
+    }, "clear save failure ordering")
+    expectEqual(#values.savedStates, 0, "clear save failure records no success")
+    expect(deepEqual(values.state, values.original), "clear save failure preserves loaded state")
+end
+
 local invalidRequests = {
     { value = nil, label = "nil" },
     { value = "request", label = "non-table" },
@@ -398,6 +636,12 @@ local invalidRequests = {
     { value = { kind = "awardSurvivorLevels", expectedRevision = 7, count = 1.5 }, label = "fractional count" },
     { value = { kind = "awardSurvivorLevels", expectedRevision = 7, count = math.huge }, label = "infinite count" },
     { value = { kind = "awardSurvivorLevels", expectedRevision = 7, count = 9007199254740992 }, label = "unsafe count" },
+    { value = { kind = "clearAdvancementSlots" }, label = "clear missing revision" },
+    { value = { kind = "clearAdvancementSlots", expectedRevision = 7, extra = true }, label = "clear extra" },
+    { value = { kind = "clearAdvancementSlots", expectedRevision = 7, amount = 1 }, label = "clear XP operand" },
+    { value = { kind = "clearAdvancementSlots", expectedRevision = 7, count = 1 }, label = "clear level operand" },
+    { value = { kind = "clearAdvancementSlots", expectedRevision = -1 }, label = "clear negative revision" },
+    { value = { kind = "clearAdvancementSlots", expectedRevision = 1.5 }, label = "clear fractional revision" },
 }
 
 for index = 1, #invalidRequests do

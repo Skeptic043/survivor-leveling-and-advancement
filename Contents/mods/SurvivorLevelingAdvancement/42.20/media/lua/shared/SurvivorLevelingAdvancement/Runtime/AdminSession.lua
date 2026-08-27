@@ -68,6 +68,11 @@ local function protectedCall(method, ...)
     return result, nil
 end
 
+local function hasEntries(value)
+    for _ in pairs(value) do return true end
+    return false
+end
+
 local function validateStateShape(state)
     if type(state) ~= "table" or getmetatable(state) ~= nil then
         return failure("invalid_state", "loaded state must be a plain table")
@@ -133,6 +138,19 @@ local function validateRequest(request)
         end
         return { ok = true, kind = kind }
     end
+    if kind == "clearAdvancementSlots" then
+        if not exactPlainTable(
+            request,
+            { kind = true, expectedRevision = true },
+            { "kind", "expectedRevision" }
+        ) then
+            return failure("invalid_request", "clear request fields are invalid")
+        end
+        if not safeInteger(request.expectedRevision) then
+            return failure("invalid_request", "expectedRevision must be a nonnegative safe integer")
+        end
+        return { ok = true, kind = kind }
+    end
     return failure("invalid_request", "kind is invalid")
 end
 
@@ -143,8 +161,15 @@ end
 function AdminSession.create(dependencies)
     if not exactPlainTable(
         dependencies,
-        { store = true, catalog = true, ownerSession = true, SurvivorEconomy = true },
-        { "store", "catalog", "ownerSession", "SurvivorEconomy" }
+        {
+            store = true,
+            catalog = true,
+            ownerSession = true,
+            SurvivorEconomy = true,
+            NaturalLedger = true,
+            ActualObservation = true,
+        },
+        { "store", "catalog", "ownerSession", "SurvivorEconomy", "NaturalLedger", "ActualObservation" }
     ) then
         return failure("invalid_dependencies", "dependencies must be an exact plain table")
     end
@@ -162,8 +187,13 @@ function AdminSession.create(dependencies)
         or type(catalog.resolver) ~= "table"
         or getmetatable(catalog.resolver) ~= nil
         or type(catalog.resolver.loadOptions) ~= "table"
-        or getmetatable(catalog.resolver.loadOptions) ~= nil then
-        return failure("invalid_dependencies", "catalog.resolver.loadOptions is required")
+        or getmetatable(catalog.resolver.loadOptions) ~= nil
+        or type(catalog.resolver.loadOptions.loadedPerks) ~= "table"
+        or getmetatable(catalog.resolver.loadOptions.loadedPerks) ~= nil
+        or type(catalog.positionReader) ~= "table"
+        or getmetatable(catalog.positionReader) ~= nil
+        or type(catalog.positionReader.read) ~= "function" then
+        return failure("invalid_dependencies", "catalog load options and position reader are required")
     end
     local ownerSession = dependencies.ownerSession
     if type(ownerSession) ~= "table"
@@ -179,14 +209,29 @@ function AdminSession.create(dependencies)
         or type(economy.applyXp) ~= "function" then
         return failure("invalid_dependencies", "SurvivorEconomy capabilities are required")
     end
+    local naturalLedger = dependencies.NaturalLedger
+    if type(naturalLedger) ~= "table"
+        or getmetatable(naturalLedger) ~= nil
+        or type(naturalLedger.baseline) ~= "function" then
+        return failure("invalid_dependencies", "NaturalLedger.baseline is required")
+    end
+    local actualObservation = dependencies.ActualObservation
+    if type(actualObservation) ~= "table"
+        or getmetatable(actualObservation) ~= nil
+        or type(actualObservation.clearPlayer) ~= "function" then
+        return failure("invalid_dependencies", "ActualObservation.clearPlayer is required")
+    end
 
     local load = store.load
     local save = store.save
     local loadOptions = catalog.resolver.loadOptions
+    local readPosition = catalog.positionReader.read
     local isReady = ownerSession.isReady
     local nextLevelCost = economy.nextLevelCost
     local availableAp = economy.availableAp
     local applyXp = economy.applyXp
+    local baseline = naturalLedger.baseline
+    local clearObservation = actualObservation.clearPlayer
     local session = {}
 
     local function requireReady(target)
@@ -265,6 +310,92 @@ function AdminSession.create(dependencies)
         return { ok = true }
     end
 
+    local function clearSlotsCandidate(target, state)
+        if state.accountingMode ~= "Tracked" then
+            return failure("accounting_mode_free", "Advancement Slots cannot be cleared in Free mode")
+        end
+        if rawget(state, "inFlightAdvancement") ~= nil then
+            return failure("advancement_in_flight", "in-flight advancement must be resolved first")
+        end
+        if type(state.perks) ~= "table" or getmetatable(state.perks) ~= nil
+            or type(state.orphanedPerks) ~= "table" or getmetatable(state.orphanedPerks) ~= nil then
+            return failure("invalid_state", "perk accounting maps are malformed")
+        end
+        local loadedPerks = rawget(loadOptions, "loadedPerks")
+        if type(loadedPerks) ~= "table" or getmetatable(loadedPerks) ~= nil then
+            return failure("invalid_catalog", "catalog loaded perks are malformed")
+        end
+
+        local candidate, cloneError = cloneValue(state)
+        if not candidate then return failure("invalid_state", "loaded state cannot be detached: " .. cloneError) end
+        local candidateIds = {}
+        for perkId, record in pairs(state.perks) do
+            if type(perkId) ~= "string" or perkId == ""
+                or type(record) ~= "table" or getmetatable(record) ~= nil then
+                return failure("invalid_state", "persisted perk accounting is malformed")
+            end
+            if rawget(loadedPerks, perkId) == nil then
+                candidate.perks[perkId] = nil
+            elseif not finite(record.naturalPosition) or record.naturalPosition < 0
+                or not finite(record.highWaterPosition) or record.highWaterPosition < record.naturalPosition
+                or type(record.activeTargets) ~= "table" or getmetatable(record.activeTargets) ~= nil then
+                return failure("invalid_state", "persisted perk accounting is malformed")
+            elseif hasEntries(record.activeTargets) or record.naturalPosition < record.highWaterPosition then
+                local insertion = #candidateIds + 1
+                while insertion > 1 and perkId < candidateIds[insertion - 1] do
+                    candidateIds[insertion] = candidateIds[insertion - 1]
+                    insertion = insertion - 1
+                end
+                candidateIds[insertion] = perkId
+            end
+        end
+
+        for index = 1, #candidateIds do
+            local perkId = candidateIds[index]
+            local read, readError = protectedCall(readPosition, target, perkId)
+            if readError then return failure("position_read_threw", "catalog.positionReader.read threw") end
+            if type(read) ~= "table" or getmetatable(read) ~= nil then
+                return failure("position_read_invalid", "position reader returned a malformed result")
+            end
+            if rawget(read, "ok") ~= true then
+                return failure("position_read_failed", "position reader failed")
+            end
+            if not exactPlainTable(read, { ok = true, position = true }, { "ok", "position" })
+                or not finite(read.position) or read.position < 0 then
+                return failure("position_read_invalid", "position reader returned a malformed result")
+            end
+
+            local rebased, baselineError = protectedCall(baseline, read.position)
+            if baselineError then return failure("ledger_baseline_threw", "NaturalLedger.baseline threw") end
+            if type(rebased) ~= "table" or getmetatable(rebased) ~= nil or rawget(rebased, "ok") ~= true
+                or not exactPlainTable(rebased, { ok = true, state = true }, { "ok", "state" })
+                or not exactPlainTable(
+                    rebased.state,
+                    { naturalPosition = true, highWaterPosition = true, activeTargets = true },
+                    { "naturalPosition", "highWaterPosition", "activeTargets" }
+                )
+                or rebased.state.naturalPosition ~= read.position
+                or rebased.state.highWaterPosition ~= read.position
+                or type(rebased.state.activeTargets) ~= "table"
+                or getmetatable(rebased.state.activeTargets) ~= nil
+                or hasEntries(rebased.state.activeTargets) then
+                return failure("ledger_baseline_invalid", "NaturalLedger.baseline returned a malformed result")
+            end
+            local record = candidate.perks[perkId]
+            record.naturalPosition = rebased.state.naturalPosition
+            record.highWaterPosition = rebased.state.highWaterPosition
+            record.activeTargets = rebased.state.activeTargets
+        end
+        candidate.orphanedPerks = {}
+
+        local cleared, clearError = protectedCall(clearObservation, target)
+        if clearError then return failure("observation_clear_threw", "ActualObservation.clearPlayer threw") end
+        if type(cleared) ~= "table" or getmetatable(cleared) ~= nil or rawget(cleared, "ok") ~= true then
+            return failure("observation_clear_failed", "ActualObservation.clearPlayer failed")
+        end
+        return { ok = true, state = candidate }
+    end
+
     function session.inspect(target)
         local ready = requireReady(target)
         if not ready.ok then return ready end
@@ -299,8 +430,16 @@ function AdminSession.create(dependencies)
             return failure("revision_overflow", "revision cannot be incremented safely")
         end
 
-        local candidate, cloneError = cloneValue(loaded.state)
-        if not candidate then return failure("invalid_state", "loaded state cannot be detached: " .. cloneError) end
+        local candidate
+        if request.kind == "clearAdvancementSlots" then
+            local cleared = clearSlotsCandidate(target, loaded.state)
+            if not cleared.ok then return cleared end
+            candidate = cleared.state
+        else
+            local cloneError
+            candidate, cloneError = cloneValue(loaded.state)
+            if not candidate then return failure("invalid_state", "loaded state cannot be detached: " .. cloneError) end
+        end
         local levelsGained
         local apGained
 
@@ -341,13 +480,16 @@ function AdminSession.create(dependencies)
                 xpIntoLevel = nextSurvivor.xpIntoLevel,
                 spent = nextSurvivor.spent,
             }
-        else
+        elseif request.kind == "awardSurvivorLevels" then
             if request.count > MAX_SAFE_INTEGER - candidate.survivor.level then
                 return failure("level_overflow", "Survivor level cannot be incremented safely")
             end
             candidate.survivor.level = candidate.survivor.level + request.count
             levelsGained = request.count
             apGained = request.count
+        else
+            levelsGained = 0
+            apGained = 0
         end
 
         candidate.revision = candidate.revision + 1
@@ -364,6 +506,16 @@ function AdminSession.create(dependencies)
                 amount = request.amount,
                 levelsGained = levelsGained,
                 apGained = apGained,
+                summary = summarized.summary,
+            }
+        end
+        if request.kind == "clearAdvancementSlots" then
+            return {
+                ok = true,
+                applied = true,
+                kind = "clearAdvancementSlots",
+                levelsGained = 0,
+                apGained = 0,
                 summary = summarized.summary,
             }
         end

@@ -307,12 +307,18 @@ do
     assertSame(fixture.arguments.admin.catalog, dependencies.catalog, "admin catalog identity")
     assertSame(fixture.arguments.admin.ownerSession, fixture.ownerSession, "admin owner identity")
     assertSame(fixture.arguments.admin.SurvivorEconomy, dependencies.SurvivorEconomy, "admin economy identity")
+    assertSame(fixture.arguments.admin.NaturalLedger, dependencies.NaturalLedger, "admin ledger identity")
+    assertSame(fixture.arguments.admin.ActualObservation, dependencies.ActualObservation, "admin observation identity")
     local adminDependencyCount = 0
     for key in pairs(fixture.arguments.admin) do
         adminDependencyCount = adminDependencyCount + 1
-        assertTrue(key == "store" or key == "catalog" or key == "ownerSession" or key == "SurvivorEconomy", "admin dependency allowlist")
+        assertTrue(
+            key == "store" or key == "catalog" or key == "ownerSession" or key == "SurvivorEconomy"
+                or key == "NaturalLedger" or key == "ActualObservation",
+            "admin dependency allowlist"
+        )
     end
-    assertEqual(adminDependencyCount, 4, "admin receives four dependencies only")
+    assertEqual(adminDependencyCount, 6, "admin receives six dependencies only")
     assertSame(result.services.store, fixture.store, "result store")
     assertSame(result.services.worldSettings, fixture.worldSettings, "result settings")
     assertSame(result.services.accountingMode, fixture.accountingMode, "result accounting mode")

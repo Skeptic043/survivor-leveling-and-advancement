@@ -479,6 +479,8 @@ function ServiceComposition.create(dependencies)
             catalog = dependencies.catalog,
             ownerSession = ownerSession,
             SurvivorEconomy = dependencies.SurvivorEconomy,
+            NaturalLedger = dependencies.NaturalLedger,
+            ActualObservation = dependencies.ActualObservation,
         }
     )
     if adminSession == nil then
