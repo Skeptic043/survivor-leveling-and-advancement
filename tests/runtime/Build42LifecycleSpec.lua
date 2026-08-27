@@ -26,6 +26,7 @@ end
 local function fixture(server, client, configure)
     local calls = {}
     local debugCalls = 0
+    local specificPlayers, specificPlayerCalls = {}, {}
     local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
     local session = {
         ready = function(player) calls[#calls + 1] = { "ready", player }; return { ok = true, snapshot = { marker = player, ready = true, revision = 0 } } end,
@@ -167,12 +168,16 @@ local function fixture(server, client, configure)
         end,
         sendClientCommand = function() end,
         sendServerCommand = function() end,
+        getSpecificPlayer = function(slot)
+            specificPlayerCalls[#specificPlayerCalls + 1] = slot
+            return specificPlayers[slot]
+        end,
         Capability = { CanSeePlayersStats = "inspect", CanModifyPlayerStatsInThePlayerStatsUI = "mutate" },
         getPlayerByOnlineID = function() end,
         getPlayerFromUsername = function() end,
         writeLog = function(name, line) calls[#calls + 1] = { "write_log", name, line } end,
     }
-    if configure ~= nil then configure({ modules = modules, globals = globals, localClient = localClient, session = session, advancementSession = advancementSession, adminSession = adminSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
+    if configure ~= nil then configure({ modules = modules, globals = globals, events = events, specificPlayers = specificPlayers, localClient = localClient, session = session, advancementSession = advancementSession, adminSession = adminSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
     local created = Build42Lifecycle.create({ modules = modules, globals = globals })
     return created, { calls = calls, events = events, modules = modules, globals = globals, session = session, source = source, runtime = runtime, localClient = localClient, serverTransport = serverTransport,
         advancementSession = advancementSession, advancementClient = advancementClient, advancementServer = advancementServer,
@@ -181,7 +186,8 @@ local function fixture(server, client, configure)
         advancementClientCreates = function() return advancementClientCreates end, advancementServerCreates = function() return advancementServerCreates end,
         adminClientCreates = function() return adminClientCreates end, adminServerCreates = function() return adminServerCreates end,
         adminBoundaryCreates = function() return adminBoundaryCreates end,
-        debugCalls = function() return debugCalls end, validator = validator }
+        debugCalls = function() return debugCalls end, validator = validator,
+        specificPlayers = specificPlayers, specificPlayerCalls = specificPlayerCalls }
 end
 
 do
@@ -384,6 +390,111 @@ do
 end
 
 do
+    local slotOne, slotThree = {}, {}
+    local ready = {}
+    local created, f = fixture(false, true, function(values)
+        values.specificPlayers[1], values.specificPlayers[3] = slotOne, slotThree
+        values.localClient.ready = function(slot, player)
+            ready[#ready + 1] = { slot, player }
+            return { ok = true }
+        end
+    end)
+    yes(created.owner.install().ok, "client adoption installs")
+    eq(#f.specificPlayerCalls, 4, "client adoption checks exactly four slots")
+    for slot = 0, 3 do eq(f.specificPlayerCalls[slot + 1], slot, "client adoption slot order " .. slot) end
+    eq(#ready, 2, "client adoption ignores nil slots")
+    eq(ready[1][1], 1, "client adoption retains nonzero slot")
+    eq(ready[1][2], slotOne, "client adoption preserves slot-one player")
+    eq(ready[2][1], 3, "client adoption reaches slot three")
+    created.owner.requestAdvancement(1, "Strength")
+    eq(f.calls[#f.calls][3], slotOne, "adopted nonzero player serves later request")
+end
+
+do
+    local player, readyCalls, resolverCalls = {}, 0, 0
+    local created, f = fixture(false, true, function(values)
+        values.globals.getSpecificPlayer = function(slot)
+            resolverCalls = resolverCalls + 1
+            if slot == 2 then
+                values.events.OnCreatePlayer.fire(2, player)
+                return player
+            end
+            return nil
+        end
+        values.localClient.ready = function(slot, value)
+            readyCalls = readyCalls + 1
+            eq(slot, 2, "overlap preserves exact slot")
+            eq(value, player, "overlap preserves exact player")
+            return { ok = true }
+        end
+    end)
+    yes(created.owner.install().ok, "event-adoption overlap installs")
+    eq(readyCalls, 1, "event-adoption overlap readies exact slot and object once")
+    eq(resolverCalls, 4, "overlap adoption remains bounded")
+end
+
+do
+    local shared, eventPlayer, adoptedPlayer = {}, {}, {}
+    local ready = {}
+    local created = fixture(false, true, function(values)
+        values.globals.getSpecificPlayer = function(slot)
+            if slot == 0 or slot == 1 then return shared end
+            if slot == 2 then
+                values.events.OnCreatePlayer.fire(2, eventPlayer)
+                return adoptedPlayer
+            end
+            return nil
+        end
+        values.localClient.ready = function(slot, player)
+            ready[#ready + 1] = { slot, player }
+            return { ok = true }
+        end
+    end)
+    created.owner.install()
+    eq(#ready, 4, "dedupe is limited to an exact slot-object pair")
+    eq(ready[1][1], 0, "same object is retained in first adopted slot")
+    eq(ready[2][1], 1, "same object in another slot is readied")
+    eq(ready[3][2], eventPlayer, "overlap event preserves its player")
+    eq(ready[4][1], 2, "different object in same slot is readied")
+end
+
+do
+    local player, readyCalls = {}, 0
+    local created = fixture(false, true, function(values)
+        values.globals.getSpecificPlayer = function(slot)
+            if slot == 2 then
+                values.events.OnCreatePlayer.fire(2, player)
+                return player
+            end
+            return nil
+        end
+        values.localClient.ready = function()
+            readyCalls = readyCalls + 1
+            error("ready failed")
+        end
+    end)
+    yes(created.owner.install().ok, "failing event-adoption overlap keeps completed installation")
+    eq(readyCalls, 1, "failed event readiness is not retried by adoption")
+    eq(created.owner.status().failure.code, "owner_ready_invalid", "failed overlap readiness remains bounded")
+end
+
+do
+    local calls, retained = {}, {}
+    local created = fixture(false, true, function(values)
+        values.globals.getSpecificPlayer = function(slot)
+            calls[#calls + 1] = slot
+            if slot == 1 then error("resolver boom") end
+            if slot == 3 then return retained end
+            return nil
+        end
+    end)
+    yes(created.owner.install().ok, "throwing adoption resolver does not break installation")
+    eq(#calls, 4, "throwing adoption resolver remains bounded to four slots")
+    eq(created.owner.status().failure.code, "player_resolver_threw", "throwing adoption resolver is retained")
+    yes(created.owner.requestAdvancement(3, "Strength").ok, "later bounded slot still adopts after resolver throw")
+end
+
+do
     local created, f = fixture(false, false)
     local player = {}
     yes(created.owner.install().ok, "SP installs")
@@ -405,6 +516,17 @@ do
     no(created.ok, "both modes fail closed")
     eq(created.code, "mode_invalid", "both-mode code")
     eq(#f.calls, 2, "mode checks called once each")
+end
+
+do
+    local _, f = fixture(false, true)
+    f.globals.isServer = function() error("authoritative mode must not recheck server") end
+    f.globals.isClient = function() error("authoritative mode must not recheck client") end
+    local created = Build42Lifecycle.create({ modules = f.modules, globals = f.globals, mode = "client" })
+    yes(created.ok, "authoritative client mode bypasses process mode recheck")
+    local invalid = Build42Lifecycle.create({ modules = f.modules, globals = f.globals, mode = "unresolved" })
+    no(invalid.ok, "unresolved is not a concrete authoritative mode")
+    eq(invalid.code, "mode_invalid", "invalid authoritative mode is bounded")
 end
 
 do
@@ -442,12 +564,21 @@ do
 end
 
 do
-    local created, f = fixture(false, true)
+    local readyCalls = 0
+    local created, f = fixture(false, true, function(values)
+        values.localClient.ready = function()
+            readyCalls = readyCalls + 1
+            return { ok = true }
+        end
+    end)
     f.events.OnServerCommand.Add = function() error("partial add") end
     no(created.owner.install().ok, "partial event registration fails")
     no(created.owner.install().ok, "partial event registration is never retried")
     eq(f.events.OnCreatePlayer.adds(), 1, "first partial hook remains singular")
     eq(f.events.OnServerCommand.adds(), 0, "throwing partial hook is not counted")
+    eq(#f.specificPlayerCalls, 0, "partial client installation never starts adoption")
+    f.events.OnCreatePlayer.fire(0, {})
+    eq(readyCalls, 0, "callback registered before a later Add failure remains inert")
 end
 
 do
@@ -564,6 +695,23 @@ do
     eq(advancementResetCalls, 1, "disconnect attempts advancement reset after owner failure")
     eq(created.owner.status().failure.code, "owner_reset_invalid", "first disconnect failure retained")
     eq(created.owner.requestAdvancement(1, "Strength").code, "player_not_ready", "disconnect clears retained players")
+end
+
+do
+    local player, readyCalls = {}, 0
+    local created, f = fixture(false, true, function(values)
+        values.localClient.ready = function()
+            readyCalls = readyCalls + 1
+            return { ok = true }
+        end
+    end)
+    created.owner.install()
+    f.events.OnCreatePlayer.fire(0, player)
+    f.events.OnCreatePlayer.fire(0, player)
+    eq(readyCalls, 1, "duplicate exact create-player pair is readied once")
+    f.events.OnDisconnect.fire()
+    f.events.OnCreatePlayer.fire(0, player)
+    eq(readyCalls, 2, "disconnect reset permits reconnect of the same player object")
 end
 
 do
@@ -1727,8 +1875,8 @@ end
 
 local bootstrapEvidence = rawget(_G, "__C10T_BOOTSTRAP_EVIDENCE")
 if bootstrapEvidence ~= nil then
-    eq(bootstrapEvidence.phase, 7, "bootstrap harness completes every phase")
-    yes(bootstrapEvidence.checks >= 25, "bootstrap harness performs exact boundary checks")
+    eq(bootstrapEvidence.phase, 18, "bootstrap harness completes every phase")
+    yes(bootstrapEvidence.checks >= 75, "bootstrap harness performs exact boundary checks")
     local malformedInstall = rawget(_G, "C10TBootstrapMalformed")
     local malformedOwner = rawget(_G, "C10TBootstrapMalformedOwner")
     local extraOwner = rawget(_G, "C10TBootstrapExtraOwner")

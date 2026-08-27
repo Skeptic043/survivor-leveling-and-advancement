@@ -23,20 +23,40 @@ if ($pendingWrites.Count -ne 3 -or $clearWrites.Count -ne 2 -or $enqueueWrites.C
     Spec = 'tests/runtime/Build42LifecycleSpec.lua'
     Sources = @(
         [pscustomobject]@{ Global = 'Build42Lifecycle'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Runtime/Build42Lifecycle.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapHarness'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapHarnessSetup'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapFirst'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapReload'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapCollisionSetup'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapFirstCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapReloadFalse'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapReloadFalseCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapReloadClient'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapReloadClientCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapSpFirst'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapSpFirstCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapSpReload'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapSpReloadCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapCreateFirst'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapCreateFirstCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapOwnershipFirst'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapOwnershipFirstCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapBothTrue'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapBothTrueCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapThrowMode'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapThrowModeCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapMalformedMode'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapMalformedModeCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapCollision'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapThrowSetup'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapCollisionCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapThrow'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapMalformedSetup'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapThrowCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapMalformed'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapMalformedOwnerSetup'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapMalformedCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapCandidateFailure'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapCandidateFailureCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapMalformedOwner'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapExtraOwnerSetup'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapMalformedOwnerCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapExtraOwner'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
-        [pscustomobject]@{ Global = 'C10TBootstrapIndexOwnerSetup'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapExtraOwnerCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapIndexOwner'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C10TBootstrapIndexOwnerCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
     )
 }
