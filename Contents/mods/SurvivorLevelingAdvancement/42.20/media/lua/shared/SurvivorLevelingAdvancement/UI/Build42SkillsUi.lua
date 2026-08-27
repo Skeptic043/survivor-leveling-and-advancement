@@ -1085,30 +1085,40 @@ function Build42SkillsUi.create(dependencies)
                 or not leftCalled or not finite(leftWidth) or leftWidth < 0
                 or not secondCalled or not finite(secondWidth) or secondWidth < 0
                 or not gapCalled or not finite(gapWidth) or gapWidth < 0 then return false end
-            local firstRowRight = contentLeft + leftWidth
+            local viewX = readNumber(view, "getX")
+            if viewX == nil then return false end
+            local headerWidth = math.max(
+                STATUS_LEFT_MARGIN + leftWidth + STATUS_LEFT_MARGIN,
+                STATUS_LEFT_MARGIN + secondWidth + STATUS_LEFT_MARGIN)
             if state.statusRightText ~= nil then
                 local rightCalled, rightWidth = pcall(measureText, state.statusRightText)
                 if not rightCalled or not finite(rightWidth) or rightWidth < 0 then return false end
-                firstRowRight = firstRowRight + gapWidth + rightWidth
+                local composedWidth = STATUS_LEFT_MARGIN + leftWidth + gapWidth + rightWidth
+                    + STATUS_LEFT_MARGIN
+                headerWidth = math.max(headerWidth, composedWidth)
             end
             state.contentLeft = contentLeft
             state.statusLeft = STATUS_LEFT_MARGIN
             state.statusFirstY = y
             state.statusSecondY = y + rowHeight
-            requiredRight = math.max(requiredRight, firstRowRight, contentLeft + secondWidth)
-            state.statusRight = state.statusRightText ~= nil and requiredRight or nil
+            local windowWidth = viewX + requiredRight + gutter
+            windowWidth = math.max(windowWidth, headerWidth)
             if adminLauncher ~= nil then
                 if not ensureAdminButton(view, state) then return false end
                 local buttonWidth = readNumber(state.adminButton, "getWidth")
-                local viewX = readNumber(view, "getX")
-                if buttonWidth == nil or buttonWidth <= 0 or viewX == nil then return false end
-                local adminRight = math.max(controlRight,
-                    contentLeft + secondWidth + gapWidth + buttonWidth)
-                local buttonX = adminRight - buttonWidth
+                if buttonWidth == nil or buttonWidth <= 0 then return false end
+                windowWidth = math.max(windowWidth,
+                    STATUS_LEFT_MARGIN + secondWidth + gapWidth + buttonWidth + STATUS_LEFT_MARGIN)
+            end
+            requiredRight = windowWidth - viewX - gutter
+            state.statusRight = state.statusRightText ~= nil and requiredRight + gutter
+                - STATUS_LEFT_MARGIN or nil
+            if adminLauncher ~= nil then
+                local buttonWidth = readNumber(state.adminButton, "getWidth")
+                local buttonX = requiredRight + gutter - STATUS_LEFT_MARGIN - buttonWidth
                 if not writeNumber(state.adminButton, "setX", viewX + buttonX)
                     or not writeNumber(state.adminButton, "setY",
                         state.baseY + state.statusSecondY) then return false end
-                requiredRight = math.max(requiredRight, adminRight)
             end
         else
             state.statusLeft, state.statusRight = nil, nil
@@ -1195,7 +1205,7 @@ function Build42SkillsUi.create(dependencies)
         local natural, high = barState.row.naturalPosition, barState.row.highWaterPosition
         if natural == nil then return end
         local highX = curvePosition(barState, high)
-        if highX ~= nil then
+        if #barState.row.activeTargets > 0 and highX ~= nil then
             pcall(drawRect, bar, highX - 1, 0, 2, cell, 0.85,
                 POSITION_R, POSITION_G, POSITION_B)
         end

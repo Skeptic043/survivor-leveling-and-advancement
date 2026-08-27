@@ -944,6 +944,39 @@ boundaryBar.mouseX = 60.001
 boundaryBar:updateTooltip()
 equal(boundaryBar.message, "Vanilla tooltip", "position beyond final outer edge is outside")
 
+local paidUpEnvironment = makeEnvironment()
+paidUpEnvironment.activeTargets = {}
+paidUpEnvironment.naturalPosition = 150
+paidUpEnvironment.highWaterPosition = 150
+expect(paidUpEnvironment.integration.install().ok, "paid-up integration installs")
+local paidUpBar = makeBar(paidUpEnvironment, "Axe", { mouseX = 25 })
+local paidUpView = makeView(paidUpEnvironment, 0, { paidUpBar })
+paidUpView:prerender()
+paidUpBar:renderPerkRect()
+equal(#paidUpBar.draws, 0, "paid-up tracked record draws no SLA overlay")
+paidUpBar:updateTooltip()
+equal(paidUpBar.message, "Vanilla tooltip", "paid-up tracked record keeps vanilla-only tooltip")
+
+local redOnlyEnvironment = makeEnvironment()
+redOnlyEnvironment.activeTargets = {}
+redOnlyEnvironment.naturalPosition = 100
+redOnlyEnvironment.highWaterPosition = 150
+expect(redOnlyEnvironment.integration.install().ok, "red-only recovery integration installs")
+local redOnlyBar = makeBar(redOnlyEnvironment, "Axe", { mouseX = 20 })
+local redOnlyView = makeView(redOnlyEnvironment, 0, { redOnlyBar })
+redOnlyView:prerender()
+redOnlyBar:renderPerkRect()
+equal(#redOnlyBar.draws, 2, "red-only recovery draws span and position without blue overlays")
+expect(redOnlyBar.draws[1].r == 0.95 and redOnlyBar.draws[1].g == 0.25
+    and redOnlyBar.draws[1].b == 0.25 and redOnlyBar.draws[1].width == 10,
+    "red-only recovery retains the red span")
+expect(redOnlyBar.draws[2].r == 0.45 and redOnlyBar.draws[2].g == 0.08
+    and redOnlyBar.draws[2].b == 0.08 and redOnlyBar.draws[2].x == 19,
+    "red-only recovery retains the red position marker")
+redOnlyBar:updateTooltip()
+expect(string.find(redOnlyBar.message, "50 lost skill XP left", 1, true) ~= nil,
+    "red-only recovery retains its recovery tooltip")
+
 local formatCases = {
     { targetPosition = 100, expected = "0 natural skill XP left", label = "zero" },
     { targetPosition = 100.125, expected = "0.13 natural skill XP left", label = "ordinary decimal" },
@@ -1022,7 +1055,8 @@ local survivorXp = lastDrawText(view.statusDraws, "Survivor XP: 10 / 100")
 equal(globalLeft.text, "AP: 3", "Global status binds compact AP left")
 equal(globalLeft.x, 4, "Global AP binds four logical pixels from containing window left edge")
 equal(globalRight.text, "Advancement Slots: 2/6", "Global status binds slots right")
-equal(globalRight.x, axe.x + axe.width, "Global slots bind to required content-right edge")
+equal(globalRight.x, view.parent.width - 4,
+    "Global slots bind four logical pixels from containing window right edge")
 expect(survivorXp ~= nil, "second row binds exact cached Survivor XP")
 equal(survivorXp.x, 4, "Survivor XP binds four logical pixels from containing window left edge")
 equal(survivorXp.y, 38, "Survivor XP uses the second native-height row")
@@ -1038,12 +1072,27 @@ narrowView.parent.width = 220
 narrowView:prerender()
 narrowView:render()
 local narrowStatus = lastDraw(narrowView.statusDraws, "right")
-local requiredStatusRight = 30 + (#"AP: 3" * 10) + (#"  " * 10)
-    + (#"Advancement Slots: 2/6" * 10)
-equal(narrowStatus.x, requiredStatusRight, "Global labels use independent widths and exact measured gap")
-equal(narrowView.width, requiredStatusRight + 50, "Global width follows exact header equation plus captured gutter")
+local requiredWindowWidth = 4 + (#"AP: 3" * 10) + (#"  " * 10)
+    + (#"Advancement Slots: 2/6" * 10) + 4
+equal(narrowStatus.x, narrowView.parent.width - 4,
+    "Global labels retain the four-pixel containing-window right margin")
+equal(narrowView.width, requiredWindowWidth,
+    "Global width uses the collision-safe header minimum with symmetric outer margins")
 expect(narrowView.width > 200 and narrowView.parent.width > 220,
     "narrow view and containing window widen for measured copy")
+
+local originalSecondRowCopy = translations.IGUI_SLA_StatusSurvivorXp
+translations.IGUI_SLA_StatusSurvivorXp = string.rep("W", 500) .. " %1 / %2"
+local wideSecondRowEnvironment = makeEnvironment()
+expect(wideSecondRowEnvironment.integration.install().ok, "wide second-row integration installs")
+local wideSecondRowBar = makeBar(wideSecondRowEnvironment, "Axe")
+local wideSecondRowView = makeView(wideSecondRowEnvironment, 0, { wideSecondRowBar })
+wideSecondRowView:prerender()
+wideSecondRowView:render()
+local wideSecondRowText = formatText("IGUI_SLA_StatusSurvivorXp", 10, 100)
+equal(wideSecondRowView.width, 4 + #wideSecondRowText + 4,
+    "wider second row remains the collision-safe header minimum in Global mode")
+translations.IGUI_SLA_StatusSurvivorXp = originalSecondRowCopy
 
 local resolutionEnvironment = makeEnvironment()
 expect(resolutionEnvironment.integration.install().ok, "resolution integration installs")
@@ -1353,11 +1402,16 @@ equal(adminButton.title, "Admin", "admin launcher uses localized compact label")
 expect(adminButton.visible and adminButton.enabled, "debug launcher is visible and enabled")
 local adminRight = lastDraw(adminView.statusDraws, "right")
 local adminXp = lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100")
-expect(adminRight ~= nil and adminRight.x == adminBar.x + adminBar.width,
-    "first-row Global label keeps its content-right alignment")
+expect(adminRight ~= nil and adminRight.x == adminView.parent.width - 4,
+    "first-row Global label keeps its containing-window right margin")
 expect(adminXp ~= nil and adminXp.x == 4 and adminButton.x > adminXp.x,
     "second-row Survivor XP and Admin keep separate left and right alignment")
+equal(adminButton.x, adminView.parent.width - 4 - adminButton.width,
+    "Admin binds four logical pixels from containing window right edge")
 equal(adminButton.y, 38, "Admin uses the second native-height row")
+local stableAdminX = adminButton.x
+adminView:render()
+equal(adminButton.x, stableAdminX, "repeated render keeps Admin right-margin placement stable")
 local visibleApX = lastDrawText(adminView.statusDraws, "AP: 3").x
 local visibleXpX = adminXp.x
 adminButton:click()
@@ -1380,6 +1434,33 @@ adminEnvironment.adminInstalled = false
 local lostAdminHook = adminEnvironment.integration.install()
 equal(lostAdminHook.ok, false, "lost admin hook ownership fails composite closed")
 equal(lostAdminHook.code, "hook_ownership_lost", "lost admin ownership code")
+
+local offsetAdminEnvironment = makeEnvironment({ adminLauncher = true })
+expect(offsetAdminEnvironment.integration.install().ok, "offset Admin integration installs")
+local offsetAdminBar = makeBar(offsetAdminEnvironment, "Axe")
+local offsetAdminView = makeView(offsetAdminEnvironment, 1, { offsetAdminBar })
+offsetAdminView.x = 23
+offsetAdminView:prerender()
+offsetAdminView:render()
+local offsetAdminButton = offsetAdminView.parent.children[1]
+local offsetGlobalRight = lastDraw(offsetAdminView.statusDraws, "right")
+equal(offsetGlobalRight.x, offsetAdminView.parent.width - 4,
+    "offset Global label uses the containing-window right margin")
+equal(offsetAdminButton.x, offsetAdminView.parent.width - 4 - offsetAdminButton.width,
+    "offset Admin uses the containing-window right margin")
+equal(offsetAdminView.parent.width, offsetAdminView.x + offsetAdminView.width,
+    "offset Skills view width propagates through its containing parent")
+equal(offsetAdminView.outer.width, offsetAdminView.parent.x + offsetAdminView.parent.width,
+    "offset containing-parent width propagates through its ancestor")
+local stableOffsetParentWidth = offsetAdminView.parent.width
+local stableOffsetButtonX = offsetAdminButton.x
+offsetAdminView:render()
+equal(offsetAdminView.parent.width, stableOffsetParentWidth,
+    "offset repeated render keeps propagated containing width stable")
+equal(offsetAdminButton.x, stableOffsetButtonX,
+    "offset repeated render keeps Admin right-margin placement stable")
+equal(lastDraw(offsetAdminView.statusDraws, "right").x, offsetAdminView.parent.width - 4,
+    "offset repeated render keeps Global right-margin placement stable")
 
 equal(environment.adminRequests, 0, "Skills UI never calls admin request")
 equal(environment.adminStatusReads, 0, "Skills UI never reads admin status")
