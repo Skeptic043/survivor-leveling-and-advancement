@@ -1,0 +1,550 @@
+local Build42AdminTransport = {}
+
+local MODULE = "SurvivorLevelingAdvancement"
+local REQUEST_COMMAND = "adminRequest"
+local RESPONSE_COMMAND = "adminResult"
+local PROTOCOL_VERSION = 1
+local MAX_SAFE_INTEGER = 9007199254740991
+local MAX_REQUEST_ID_LENGTH = 64
+local MAX_USERNAME_LENGTH = 64
+local MAX_CODE_LENGTH = 64
+local MAX_DETAIL_LENGTH = 160
+
+local INSPECT_REQUEST_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+}
+local XP_REQUEST_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+    expectedRevision = true,
+    amount = true,
+}
+local LEVEL_REQUEST_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+    expectedRevision = true,
+    count = true,
+}
+local TARGET_FIELDS = { onlineId = true, username = true }
+local SUMMARY_FIELDS = {
+    accountingMode = true,
+    revision = true,
+    level = true,
+    xpIntoLevel = true,
+    xpForNextLevel = true,
+    spent = true,
+    availableAp = true,
+}
+local INSPECTION_RESULT_FIELDS = { ok = true, summary = true }
+local XP_APPLIED_FIELDS = {
+    ok = true,
+    applied = true,
+    kind = true,
+    amount = true,
+    levelsGained = true,
+    apGained = true,
+    summary = true,
+}
+local LEVEL_APPLIED_FIELDS = {
+    ok = true,
+    applied = true,
+    kind = true,
+    count = true,
+    levelsGained = true,
+    apGained = true,
+    summary = true,
+}
+local REJECTION_RESULT_FIELDS = {
+    ok = true,
+    applied = true,
+    kind = true,
+    code = true,
+    detail = true,
+    summary = true,
+}
+local SESSION_FAILURE_FIELDS = {
+    ok = true,
+    code = true,
+    detail = true,
+    committed = true,
+}
+
+local function failure(code, detail, committed)
+    local result = { ok = false, code = code, detail = detail }
+    if committed ~= nil then result.committed = committed end
+    return result
+end
+
+local function exactPlainTable(value, fields)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return false end
+    for key in pairs(value) do
+        if type(key) ~= "string" or not fields[key] then return false end
+    end
+    for key in pairs(fields) do
+        if rawget(value, key) == nil then return false end
+    end
+    return true
+end
+
+local function safeInteger(value)
+    return type(value) == "number"
+        and value == value
+        and value >= 0
+        and value <= MAX_SAFE_INTEGER
+        and value == math.floor(value)
+end
+
+local function positiveSafeInteger(value)
+    return safeInteger(value) and value > 0
+end
+
+local function finitePositive(value)
+    return type(value) == "number"
+        and value == value
+        and value > 0
+        and value < math.huge
+end
+
+local function safeId(value, maximumLength)
+    if type(value) ~= "string" or #value == 0 or #value > maximumLength then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        local allowed = (byte >= 48 and byte <= 57)
+            or (byte >= 65 and byte <= 90)
+            or (byte >= 97 and byte <= 122)
+            or byte == 95 or byte == 46 or byte == 58 or byte == 45
+        if not allowed then return false end
+    end
+    return true
+end
+
+local function safePrintable(value, maximumLength)
+    if type(value) ~= "string" or #value == 0 or #value > maximumLength then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        if byte < 32 or byte > 126 then return false end
+    end
+    return true
+end
+
+local function safeUsername(value)
+    if type(value) ~= "string" or #value == 0 or #value > MAX_USERNAME_LENGTH then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        if byte < 32 or byte == 127 then return false end
+    end
+    return true
+end
+
+local function safeCode(value)
+    return safeId(value, MAX_CODE_LENGTH)
+end
+
+local function safeDetail(value)
+    return safePrintable(value, MAX_DETAIL_LENGTH)
+end
+
+local function copyTarget(value)
+    if not exactPlainTable(value, TARGET_FIELDS)
+        or not safeInteger(rawget(value, "onlineId"))
+        or not safeUsername(rawget(value, "username")) then
+        return nil
+    end
+    return {
+        onlineId = rawget(value, "onlineId"),
+        username = rawget(value, "username"),
+    }
+end
+
+local function copySummary(value)
+    if not exactPlainTable(value, SUMMARY_FIELDS) then return nil end
+    local accountingMode = rawget(value, "accountingMode")
+    local revision = rawget(value, "revision")
+    local level = rawget(value, "level")
+    local xpIntoLevel = rawget(value, "xpIntoLevel")
+    local xpForNextLevel = rawget(value, "xpForNextLevel")
+    local spent = rawget(value, "spent")
+    local availableAp = rawget(value, "availableAp")
+    if (accountingMode ~= "Tracked" and accountingMode ~= "Free")
+        or not safeInteger(revision)
+        or not safeInteger(level)
+        or type(xpIntoLevel) ~= "number" or xpIntoLevel ~= xpIntoLevel
+        or xpIntoLevel < 0 or xpIntoLevel == math.huge
+        or not finitePositive(xpForNextLevel)
+        or xpIntoLevel >= xpForNextLevel
+        or not safeInteger(spent) or spent > level
+        or not safeInteger(availableAp) or availableAp ~= level - spent then
+        return nil
+    end
+    return {
+        accountingMode = accountingMode,
+        revision = revision,
+        level = level,
+        xpIntoLevel = xpIntoLevel,
+        xpForNextLevel = xpForNextLevel,
+        spent = spent,
+        availableAp = availableAp,
+    }
+end
+
+local function validateRequestEnvelope(value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil
+        or rawget(value, "protocolVersion") ~= PROTOCOL_VERSION
+        or not safeId(rawget(value, "requestId"), MAX_REQUEST_ID_LENGTH) then
+        return nil
+    end
+
+    local operation = rawget(value, "operation")
+    local fields
+    if operation == "inspect" then
+        fields = INSPECT_REQUEST_FIELDS
+    elseif operation == "awardSurvivorXp" then
+        fields = XP_REQUEST_FIELDS
+    elseif operation == "awardSurvivorLevels" then
+        fields = LEVEL_REQUEST_FIELDS
+    else
+        return nil
+    end
+    if not exactPlainTable(value, fields) then return nil end
+
+    local target = copyTarget(rawget(value, "target"))
+    if target == nil then return nil end
+    if operation == "awardSurvivorXp" then
+        if not safeInteger(rawget(value, "expectedRevision"))
+            or not finitePositive(rawget(value, "amount")) then
+            return nil
+        end
+    elseif operation == "awardSurvivorLevels" then
+        if not safeInteger(rawget(value, "expectedRevision"))
+            or not positiveSafeInteger(rawget(value, "count")) then
+            return nil
+        end
+    end
+
+    return {
+        requestId = rawget(value, "requestId"),
+        operation = operation,
+        target = target,
+        expectedRevision = rawget(value, "expectedRevision"),
+        amount = rawget(value, "amount"),
+        count = rawget(value, "count"),
+    }
+end
+
+local function responseBase(request, target)
+    return {
+        protocolVersion = PROTOCOL_VERSION,
+        requestId = request.requestId,
+        operation = request.operation,
+        target = {
+            onlineId = target.onlineId,
+            username = target.username,
+        },
+    }
+end
+
+local function failureEnvelope(request, target, code, detail, committed)
+    local result = responseBase(request, target)
+    result.ok = false
+    result.code = code
+    result.detail = detail
+    result.committed = committed
+    return result
+end
+
+local function sendResult(sender, actor, envelope, committed)
+    local called = pcall(sender, actor, MODULE, RESPONSE_COMMAND, envelope)
+    if not called then return failure("send_failed", "sendServerCommand", committed) end
+    return { ok = true, handled = true }
+end
+
+local function publicBoundaryFailure(request, sender, actor)
+    return sendResult(sender, actor, failureEnvelope(
+        request,
+        request.target,
+        "request_denied",
+        "unavailable",
+        false
+    ), false)
+end
+
+local function validDependencySuccess(result)
+    return type(result) == "table"
+        and getmetatable(result) == nil
+        and rawget(result, "ok") == true
+end
+
+local function validateBoundaryResult(result)
+    if not exactPlainTable(result, { ok = true, target = true, targetRef = true })
+        or rawget(result, "ok") ~= true
+        or rawget(result, "target") == nil then
+        return nil, nil
+    end
+    local targetRef = copyTarget(rawget(result, "targetRef"))
+    if targetRef == nil then return nil, nil end
+    return rawget(result, "target"), targetRef
+end
+
+local function validateInspectionResult(result)
+    if not exactPlainTable(result, INSPECTION_RESULT_FIELDS)
+        or rawget(result, "ok") ~= true then
+        return nil
+    end
+    return copySummary(rawget(result, "summary"))
+end
+
+local function validGains(levelsGained, apGained, summary)
+    return safeInteger(levelsGained)
+        and safeInteger(apGained)
+        and apGained == levelsGained
+        and levelsGained <= summary.level
+end
+
+local function validateAppliedResult(result, request)
+    local fields = request.operation == "awardSurvivorXp"
+        and XP_APPLIED_FIELDS or LEVEL_APPLIED_FIELDS
+    if not exactPlainTable(result, fields)
+        or rawget(result, "ok") ~= true
+        or rawget(result, "applied") ~= true
+        or rawget(result, "kind") ~= request.operation then
+        return nil
+    end
+
+    if request.operation == "awardSurvivorXp" then
+        if rawget(result, "amount") ~= request.amount then return nil end
+    else
+        if rawget(result, "count") ~= request.count
+            or rawget(result, "levelsGained") ~= request.count
+            or rawget(result, "apGained") ~= request.count then
+            return nil
+        end
+    end
+
+    local summary = copySummary(rawget(result, "summary"))
+    if summary == nil
+        or request.expectedRevision >= MAX_SAFE_INTEGER
+        or summary.revision ~= request.expectedRevision + 1
+        or not validGains(rawget(result, "levelsGained"), rawget(result, "apGained"), summary) then
+        return nil
+    end
+    return summary
+end
+
+local function validateRejectionResult(result, request)
+    if not exactPlainTable(result, REJECTION_RESULT_FIELDS)
+        or rawget(result, "ok") ~= true
+        or rawget(result, "applied") ~= false
+        or rawget(result, "kind") ~= request.operation
+        or rawget(result, "code") ~= "stale_revision"
+        or not safeDetail(rawget(result, "detail")) then
+        return nil
+    end
+    local summary = copySummary(rawget(result, "summary"))
+    if summary == nil or summary.revision == request.expectedRevision then return nil end
+    return summary
+end
+
+local function validateSessionFailure(result)
+    return exactPlainTable(result, SESSION_FAILURE_FIELDS)
+        and rawget(result, "ok") == false
+        and safeCode(rawget(result, "code"))
+        and safeDetail(rawget(result, "detail"))
+        and rawget(result, "committed") == false
+end
+
+local function inspectionEnvelope(request, targetRef, summary)
+    local result = responseBase(request, targetRef)
+    result.ok = true
+    result.outcome = "inspected"
+    result.summary = summary
+    return result
+end
+
+local function appliedEnvelope(request, targetRef, sessionResult, summary)
+    local result = responseBase(request, targetRef)
+    result.ok = true
+    result.outcome = "applied"
+    result.levelsGained = rawget(sessionResult, "levelsGained")
+    result.apGained = rawget(sessionResult, "apGained")
+    result.summary = summary
+    return result
+end
+
+local function rejectionEnvelope(request, targetRef, sessionResult, summary)
+    local result = responseBase(request, targetRef)
+    result.ok = true
+    result.outcome = "rejected"
+    result.code = rawget(sessionResult, "code")
+    result.detail = rawget(sessionResult, "detail")
+    result.summary = summary
+    return result
+end
+
+function Build42AdminTransport.createServer(dependencies)
+    if not exactPlainTable(dependencies, {
+        adminBoundary = true,
+        adminSession = true,
+        ownerPublisher = true,
+        audit = true,
+        sendServerCommand = true,
+    }) then
+        return failure("invalid_dependencies", "dependencies")
+    end
+
+    local adminBoundary = rawget(dependencies, "adminBoundary")
+    local adminSession = rawget(dependencies, "adminSession")
+    local ownerPublisher = rawget(dependencies, "ownerPublisher")
+    local audit = rawget(dependencies, "audit")
+    local sender = rawget(dependencies, "sendServerCommand")
+    if type(adminBoundary) ~= "table" or getmetatable(adminBoundary) ~= nil
+        or type(rawget(adminBoundary, "authorizeAndResolve")) ~= "function"
+        or type(adminSession) ~= "table" or getmetatable(adminSession) ~= nil
+        or type(rawget(adminSession, "inspect")) ~= "function"
+        or type(rawget(adminSession, "request")) ~= "function"
+        or type(ownerPublisher) ~= "table" or getmetatable(ownerPublisher) ~= nil
+        or type(rawget(ownerPublisher, "publish")) ~= "function"
+        or type(audit) ~= "table" or getmetatable(audit) ~= nil
+        or type(rawget(audit, "record")) ~= "function"
+        or type(sender) ~= "function" then
+        return failure("invalid_dependencies", "dependencies")
+    end
+
+    local authorizeAndResolve = rawget(adminBoundary, "authorizeAndResolve")
+    local inspect = rawget(adminSession, "inspect")
+    local requestMutation = rawget(adminSession, "request")
+    local publish = rawget(ownerPublisher, "publish")
+    local record = rawget(audit, "record")
+    local server = {}
+
+    function server.handle(module, command, actor, args)
+        if module ~= MODULE or command ~= REQUEST_COMMAND then
+            return { ok = true, handled = false }
+        end
+
+        local request = validateRequestEnvelope(args)
+        if request == nil then return failure("invalid_request", "request", false) end
+
+        local selector = {
+            onlineId = request.target.onlineId,
+            username = request.target.username,
+        }
+        local boundaryCalled, boundaryResult = pcall(
+            authorizeAndResolve,
+            actor,
+            request.operation,
+            selector
+        )
+        if not boundaryCalled then return publicBoundaryFailure(request, sender, actor) end
+
+        local target, targetRef = validateBoundaryResult(boundaryResult)
+        if target == nil then return publicBoundaryFailure(request, sender, actor) end
+
+        if request.operation == "inspect" then
+            local sessionCalled, sessionResult = pcall(inspect, target)
+            if not sessionCalled then
+                return sendResult(sender, actor, failureEnvelope(
+                    request, targetRef, "session_failed", "unavailable", false
+                ), false)
+            end
+            local summary = validateInspectionResult(sessionResult)
+            if summary == nil then
+                return sendResult(sender, actor, failureEnvelope(
+                    request, targetRef, "session_failed", "malformed", false
+                ), false)
+            end
+            return sendResult(sender, actor, inspectionEnvelope(request, targetRef, summary), false)
+        end
+
+        local sessionRequest = {
+            kind = request.operation,
+            expectedRevision = request.expectedRevision,
+        }
+        if request.operation == "awardSurvivorXp" then
+            sessionRequest.amount = request.amount
+        else
+            sessionRequest.count = request.count
+        end
+
+        local sessionCalled, sessionResult = pcall(requestMutation, target, sessionRequest)
+        if not sessionCalled then
+            return sendResult(sender, actor, failureEnvelope(
+                request, targetRef, "session_failed", "unavailable", false
+            ), false)
+        end
+
+        local appliedSummary = validateAppliedResult(sessionResult, request)
+        if appliedSummary ~= nil then
+            local auditCalled, auditResult = pcall(
+                record,
+                actor,
+                {
+                    onlineId = targetRef.onlineId,
+                    username = targetRef.username,
+                },
+                request.operation,
+                "committed"
+            )
+            local publicationCalled, publicationResult = pcall(publish, target)
+            local auditSucceeded = auditCalled and validDependencySuccess(auditResult)
+            local publicationSucceeded = publicationCalled
+                and validDependencySuccess(publicationResult)
+
+            if not auditSucceeded or not publicationSucceeded then
+                local code = "post_commit_failed"
+                local detail = "audit and publication"
+                if auditSucceeded then
+                    code = "publication_failed"
+                    detail = "publication"
+                elseif publicationSucceeded then
+                    code = "audit_failed"
+                    detail = "audit"
+                end
+                return sendResult(sender, actor, failureEnvelope(
+                    request, targetRef, code, detail, true
+                ), true)
+            end
+
+            return sendResult(
+                sender,
+                actor,
+                appliedEnvelope(request, targetRef, sessionResult, appliedSummary),
+                true
+            )
+        end
+
+        local rejectionSummary = validateRejectionResult(sessionResult, request)
+        if rejectionSummary ~= nil then
+            return sendResult(
+                sender,
+                actor,
+                rejectionEnvelope(request, targetRef, sessionResult, rejectionSummary),
+                false
+            )
+        end
+
+        if validateSessionFailure(sessionResult) then
+            return sendResult(sender, actor, failureEnvelope(
+                request,
+                targetRef,
+                rawget(sessionResult, "code"),
+                rawget(sessionResult, "detail"),
+                false
+            ), false)
+        end
+
+        return sendResult(sender, actor, failureEnvelope(
+            request, targetRef, "session_failed", "malformed", false
+        ), false)
+    end
+
+    return { ok = true, server = server }
+end
+
+return Build42AdminTransport
