@@ -22,6 +22,7 @@ end
 local translations = {
     IGUI_SLA_StatusAP = "AP: %1",
     IGUI_SLA_StatusActive = "Advancement Slots: %1/%2",
+    IGUI_SLA_StatusSurvivorXp = "Survivor XP: %1 / %2",
     IGUI_SLA_Advance = "Advance to level %1 for %2 AP.",
     IGUI_SLA_PerSkillActive = "Advancement Slots: %1/%2.",
     IGUI_SLA_TargetXpLeft = "%1 natural skill XP left",
@@ -611,6 +612,13 @@ local function lastDraw(list, kind)
     return nil
 end
 
+local function lastDrawText(list, text)
+    for index = #list, 1, -1 do
+        if list[index].text == text then return list[index] end
+    end
+    return nil
+end
+
 expect(type(Build42SkillsUi) == "table", "module loads")
 expect(type(Build42SkillsUi.create) == "function", "module exposes create")
 equal(SkillsUiBootstrapHarness, 24, "bootstrap harness checks")
@@ -693,9 +701,9 @@ expect(type(view.parent.drawTextRight) == "function", "containing parent exposes
 equal(view.parent.drawTextRightStatic, nil, "live-faithful parent exposes no static text helper")
 view:prerender()
 equal(environment.priorPrerender, 1, "first prerender chains vanilla once")
-equal(environment.prerenderGeometry[1].y, 38, "header inset is applied before vanilla prerender")
+equal(environment.prerenderGeometry[1].y, 58, "two-row header inset is applied before vanilla prerender")
 equal(environment.prerenderGeometry[1].height, 270, "header viewport is reserved before vanilla stencil")
-equal(view.y, 38, "view moves by the exact native header inset")
+equal(view.y, 58, "view moves by the exact two-row native header inset")
 equal(environment.refresh[1], 1, "first visible prerender requests refresh")
 equal(total(environment.stateReads), 0, "first prerender reads no owner state")
 equal(total(environment.statusReads), 0, "first prerender reads no advancement status")
@@ -705,8 +713,8 @@ equal(environment.modelBuilds, 0, "first prerender builds no model")
 view:render()
 equal(environment.priorRender, 1, "first render chains vanilla once")
 equal(view.height, 270, "viewport loses exactly one native header inset")
-equal(view.parent.height, 308, "containing panel retains vanilla absolute height")
-equal(view.outer.height, 328, "outer window retains vanilla unshifted height")
+equal(view.parent.height, 328, "containing panel grows by exactly one native row")
+equal(view.outer.height, 348, "outer window grows by exactly one native row")
 equal(view.scrollHeight, 500, "vanilla scroll height remains unchanged")
 equal(#view.progressBars, 1, "vanilla creates one bar")
 equal(environment.buttonCreates, 1, "reconciliation creates one button")
@@ -796,7 +804,7 @@ environment.now = 1600
 slotView:prerender()
 equal(environment.stateReads[2], 1, "slot one rebuild isolated")
 equal(environment.stateReads[1], 3, "slot zero read count unchanged")
-equal(slotView.y, 42, "slot one keeps its independent vanilla header base")
+equal(slotView.y, 62, "slot one keeps its independent two-row header base")
 for slot = 2, 3 do
     local isolatedBar = makeBar(environment, "Slot" .. tostring(slot), { x = 120 + slot })
     local isolatedView = makeView(environment, slot, { isolatedBar }, false)
@@ -805,7 +813,7 @@ for slot = 2, 3 do
     equal(environment.stateReads[slot + 1], 1, "slot rebuild isolated " .. tostring(slot))
     equal(environment.refresh[slot + 1], 1, "slot refresh isolated " .. tostring(slot))
     expect(isolatedBar.children[1].enabled, "slot button isolated " .. tostring(slot))
-    equal(isolatedView.y, 38 + slot, "slot header geometry isolated " .. tostring(slot))
+    equal(isolatedView.y, 58 + slot, "slot header geometry isolated " .. tostring(slot))
 end
 environment.listener(0, "owner_snapshot")
 environment.now = 1601
@@ -976,8 +984,8 @@ local rowScreenY = view.parent.y + view.y + view:getYScroll() + axe.y
 view:setYScroll(-60)
 local statusDrawsBeforeScroll = #view.statusDraws
 view:render()
-equal(#view.statusDraws, statusDrawsBeforeScroll + 2,
-    "ordinary containing parent receives one split Global header")
+equal(#view.statusDraws, statusDrawsBeforeScroll + 3,
+    "ordinary containing parent receives both fixed status rows")
 equal(view.statusDraws[#view.statusDraws].screenY, stableStatusY,
     "status screen position stays fixed while skill rows scroll")
 equal(view.parent.y + view.y + view:getYScroll() + axe.y, rowScreenY - 60,
@@ -1002,13 +1010,18 @@ equal(view.width - (axe.x + axe.width), 100, "expanded bar preserves measured va
 equal(view.parent.width, view.x + view.width, "view width propagates absolutely to parent")
 equal(view.outer.width, view.parent.x + view.parent.width, "width propagates through every ancestor")
 expect(#view.statusDraws > 0, "status draws on first category row")
-equal(view.statusDraws[#view.statusDraws].y, 18, "status uses fixed parent-local header coordinates")
-local globalLeft = lastDraw(view.statusDraws, "left")
+equal(lastDrawText(view.statusDraws, "AP: 3").y, 18,
+    "first status row uses fixed parent-local coordinates")
+local globalLeft = lastDrawText(view.statusDraws, "AP: 3")
 local globalRight = lastDraw(view.statusDraws, "right")
+local survivorXp = lastDrawText(view.statusDraws, "Survivor XP: 10 / 100")
 equal(globalLeft.text, "AP: 3", "Global status binds compact AP left")
 equal(globalLeft.x, 30, "Global AP binds to captured content-left edge")
 equal(globalRight.text, "Advancement Slots: 2/6", "Global status binds slots right")
 equal(globalRight.x, axe.x + axe.width, "Global slots bind to required content-right edge")
+expect(survivorXp ~= nil, "second row binds exact cached Survivor XP")
+equal(survivorXp.x, 30, "Survivor XP binds to the captured content-left edge")
+equal(survivorXp.y, 38, "Survivor XP uses the second native-height row")
 
 local narrowEnvironment = makeEnvironment()
 narrowEnvironment.measureScale = 10
@@ -1020,7 +1033,7 @@ narrowView.vanillaWidth = 200
 narrowView.parent.width = 220
 narrowView:prerender()
 narrowView:render()
-local narrowStatus = narrowView.statusDraws[#narrowView.statusDraws]
+local narrowStatus = lastDraw(narrowView.statusDraws, "right")
 local requiredStatusRight = 30 + (#"AP: 3" * 10) + (#"  " * 10)
     + (#"Advancement Slots: 2/6" * 10)
 equal(narrowStatus.x, requiredStatusRight, "Global labels use independent widths and exact measured gap")
@@ -1069,17 +1082,19 @@ view:setY(16)
 view:render()
 expect(tornParent.width > 300, "torn-off parent identity widens independently")
 equal(view.width, stableViewWidth, "torn-off reconciliation remains non-cumulative")
-equal(view.y, 46, "torn-off view rebases one header inset from its new vanilla position")
-equal(tornParent.height, 316, "torn-off parent receives exact absolute vanilla height")
-equal(tornOuter.height, 340, "torn-off outer window receives full ancestor height")
-equal(tornParent.statusDraws[#tornParent.statusDraws].y, 26,
-    "torn-off status uses the new parent-local fixed row")
+equal(view.y, 66, "torn-off view rebases two header rows from its new vanilla position")
+equal(tornParent.height, 336, "torn-off parent receives one-row-expanded absolute height")
+equal(tornOuter.height, 360, "torn-off outer window receives full expanded ancestor height")
+equal(lastDrawText(tornParent.statusDraws, "AP: 3").y, 26,
+    "torn-off first status row uses the new parent-local position")
+equal(lastDrawText(tornParent.statusDraws, "Survivor XP: 10 / 100").y, 46,
+    "torn-off second status row follows one native row below")
 view.parent = dockedParent
 view:setY(8)
 view:render()
-equal(view.y, 38, "reattached view reapplies one header inset")
-equal(dockedParent.height, 308, "reattached panel restores vanilla height")
-equal(dockedOuter.height, 328, "reattached outer window restores vanilla height")
+equal(view.y, 58, "reattached view reapplies the two-row header inset")
+equal(dockedParent.height, 328, "reattached panel restores one-row-expanded height")
+equal(dockedOuter.height, 348, "reattached outer window restores one-row-expanded height")
 
 local unsupported = makeBar(environment, "Unsupported", { unsupported = true })
 view.progressBars = { unsupported }
@@ -1179,11 +1194,10 @@ for index = 1, #modes do
         equal(modeBar.message, "Vanilla tooltip", "Free skill tooltip appends no accounting copy")
     end
     modeView:render()
-    local statusText = modeView.statusDraws[#modeView.statusDraws].text
-    expect(string.find(statusText, "AP: 3", 1, true) ~= nil,
-        modes[index] .. " status includes AP")
-    equal(string.find(statusText, "Advancement Slots", 1, true), nil,
-        modes[index] .. " status omits global count")
+    expect(lastDrawText(modeView.statusDraws, "AP: 3") ~= nil,
+        modes[index] .. " first row includes AP")
+    expect(lastDrawText(modeView.statusDraws, "Survivor XP: 10 / 100") ~= nil,
+        modes[index] .. " second row includes exact Survivor XP")
     equal(lastDraw(modeView.statusDraws, "right"), nil, modes[index] .. " header makes no right draw")
     equal(modeView.width, 420, modes[index] .. " width uses max control edge plus captured gutter")
 end
@@ -1329,20 +1343,31 @@ local adminView = makeView(adminEnvironment, 2, { adminBar })
 adminView:prerender()
 adminView:render()
 equal(adminEnvironment.lastAdminAvailabilitySlot, 2, "launcher visibility preserves exact Skills slot")
-equal(#adminView.parent.children, 1, "one fixed-row admin button is created")
+equal(#adminView.parent.children, 1, "one second-row admin button is created")
 local adminButton = adminView.parent.children[1]
 equal(adminButton.title, "Admin", "admin launcher uses localized compact label")
 expect(adminButton.visible and adminButton.enabled, "debug launcher is visible and enabled")
 local adminRight = lastDraw(adminView.statusDraws, "right")
-expect(adminRight ~= nil and adminRight.x < adminButton.x,
-    "Global slot label moves left of the native admin gap")
+local adminXp = lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100")
+expect(adminRight ~= nil and adminRight.x == adminBar.x + adminBar.width,
+    "first-row Global label keeps its content-right alignment")
+expect(adminXp ~= nil and adminXp.x == 30 and adminButton.x > adminXp.x,
+    "second-row Survivor XP and Admin keep separate left and right alignment")
+equal(adminButton.y, 38, "Admin uses the second native-height row")
+local visibleApX = lastDrawText(adminView.statusDraws, "AP: 3").x
+local visibleXpX = adminXp.x
 adminButton:click()
 equal(#adminEnvironment.adminOpens, 1, "admin launcher activates once")
 equal(adminEnvironment.adminOpens[1], 2, "admin launcher activation preserves exact slot")
 adminEnvironment.adminAvailable = false
 adminView:prerender()
+adminView:render()
 expect(not adminButton.visible and not adminButton.enabled,
     "launcher disappears and disables on the next visible prerender")
+equal(lastDrawText(adminView.statusDraws, "AP: 3").x, visibleApX,
+    "first-row label does not move when Admin disappears")
+equal(lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100").x, visibleXpX,
+    "second-row label does not move when Admin disappears")
 adminButton:click()
 equal(#adminEnvironment.adminOpens, 1, "hidden launcher cannot activate")
 equal(adminEnvironment.adminRequests, 0, "Skills launcher never calls lifecycle admin request")

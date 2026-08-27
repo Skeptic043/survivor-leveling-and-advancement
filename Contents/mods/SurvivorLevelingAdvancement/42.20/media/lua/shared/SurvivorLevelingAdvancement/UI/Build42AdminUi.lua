@@ -114,8 +114,8 @@ local function validSummary(value)
         spent = true,
         availableAp = true,
     }) then return false end
-    return type(rawget(value, "accountingMode")) == "string"
-        and #rawget(value, "accountingMode") > 0
+    return (rawget(value, "accountingMode") == "Tracked"
+            or rawget(value, "accountingMode") == "Free")
         and nonnegativeInteger(rawget(value, "revision"))
         and nonnegativeInteger(rawget(value, "level"))
         and finite(rawget(value, "xpIntoLevel"))
@@ -281,11 +281,18 @@ function Build42AdminUi.create(dependencies)
         return type(result) == "table" and getmetatable(result) == nil and result or nil
     end
 
+    local function validClearGains(result, operation, outcome)
+        return operation ~= "clearAdvancementSlots" or outcome ~= "applied"
+            or (rawget(result, "levelsGained") == 0
+                and rawget(result, "apGained") == 0)
+    end
+
     local function validStatusTerminal(result)
         if type(result) ~= "table" or getmetatable(result) ~= nil then return false end
         local operation = rawget(result, "operation")
         if operation ~= "inspect" and operation ~= "awardSurvivorXp"
-            and operation ~= "awardSurvivorLevels" then return false end
+            and operation ~= "awardSurvivorLevels"
+            and operation ~= "clearAdvancementSlots" then return false end
         local succeeded = rawget(result, "ok")
         if type(succeeded) ~= "boolean" then return false end
         if rawget(result, "protocolVersion") ~= nil then return false end
@@ -305,7 +312,7 @@ function Build42AdminUi.create(dependencies)
         if not validSummary(rawget(result, "summary")) then return false end
         local outcome = rawget(result, "outcome")
         if operation == "inspect" then return outcome == "inspected" end
-        return outcome == "applied"
+        return (outcome == "applied" and validClearGains(result, operation, outcome))
             or (outcome == "rejected" and rawget(result, "code") == "stale_revision")
     end
 
@@ -331,7 +338,8 @@ function Build42AdminUi.create(dependencies)
             return exactPlainTable(target, { username = true })
                 and boundedUsername(rawget(target, "username"))
         end
-        return (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels")
+        return (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
+                or operation == "clearAdvancementSlots")
             and validTarget(target)
     end
 
@@ -371,13 +379,22 @@ function Build42AdminUi.create(dependencies)
         return pcall(setter, control, enabled)
     end
 
+    local function setVisible(control, visible)
+        local setter = type(control) == "table" and control.setVisible or nil
+        return callable(setter) and pcall(setter, control, visible)
+    end
+
     local function updateControls(state)
         local access = mode == "multiplayer" or debugAvailable(state.slot)
         state.access = access
         local mutationEnabled = access and not state.waiting and state.summary ~= nil
         local refreshEnabled = access and not state.waiting
+        local clearVisible = state.summary ~= nil
+            and state.summary.accountingMode == "Tracked"
         setEnabled(state.awardXpButton, mutationEnabled)
         setEnabled(state.awardLevelsButton, mutationEnabled)
+        setVisible(state.clearSlotsButton, clearVisible)
+        setEnabled(state.clearSlotsButton, mutationEnabled and clearVisible)
         setEnabled(state.refreshButton, refreshEnabled)
         setEditable(state.xpEntry, mutationEnabled)
         setEditable(state.levelsEntry, mutationEnabled)
@@ -393,7 +410,7 @@ function Build42AdminUi.create(dependencies)
         else
             if mode == "multiplayer" then request.target = copyTarget(state.target) end
             request.expectedRevision = state.summary.revision
-            request[operandName] = operand
+            if operandName ~= nil then request[operandName] = operand end
         end
         return request
     end
@@ -439,6 +456,7 @@ function Build42AdminUi.create(dependencies)
                 and not (outcome == "rejected" and rawget(result, "code") == "stale_revision") then
                 return false
             end
+            if not validClearGains(result, expectedOperation, outcome) then return false end
             state.summary = copySummary(summary)
             if mode == "multiplayer" and expectedOperation == "inspect" then
                 state.target = copyTarget(rawget(result, "target"))
@@ -530,6 +548,8 @@ function Build42AdminUi.create(dependencies)
                 return
             end
             beginRequest(state, "awardSurvivorLevels", "count", count)
+        elseif action == "CLEAR" and state.summary.accountingMode == "Tracked" then
+            beginRequest(state, "clearAdvancementSlots")
         end
     end
 
@@ -577,16 +597,21 @@ function Build42AdminUi.create(dependencies)
         local awardXp = makeButton(state, 182, 170, 160, localized("IGUI_SLA_Admin_AwardXp"), "XP")
         local awardLevels = makeButton(state, 182, 230, 160,
             localized("IGUI_SLA_Admin_AwardLevels"), "LEVELS")
+        local clearSlots = makeButton(state, 16, 274, 154,
+            localized("IGUI_SLA_Admin_ClearSlots"), "CLEAR")
         local refresh = makeButton(state, 182, 274, 160, localized("IGUI_SLA_Admin_Refresh"), "REFRESH")
         if xpEntry == nil or levelsEntry == nil or awardXp == nil
-            or awardLevels == nil or refresh == nil then return false end
+            or awardLevels == nil or clearSlots == nil or refresh == nil
+            or not callable(clearSlots.setVisible) then return false end
         state.xpEntry = xpEntry
         state.levelsEntry = levelsEntry
         state.awardXpButton = awardXp
         state.awardLevelsButton = awardLevels
+        state.clearSlotsButton = clearSlots
         state.refreshButton = refresh
         return addChild(state.window, xpEntry) and addChild(state.window, awardXp)
             and addChild(state.window, levelsEntry) and addChild(state.window, awardLevels)
+            and addChild(state.window, clearSlots)
             and addChild(state.window, refresh)
     end
 

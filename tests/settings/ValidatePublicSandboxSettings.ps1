@@ -107,6 +107,7 @@ Assert (-not ($info.Values -join ' ' -match "(?i)$forbidden")) 'metadata contain
 $requiredUi = [ordered]@{
     'IGUI_SLA_StatusAP' = 'AP: %1'
     'IGUI_SLA_StatusActive' = 'Advancement Slots: %1/%2'
+    'IGUI_SLA_StatusSurvivorXp' = 'Survivor XP: %1 / %2'
     'IGUI_SLA_Advance' = 'Advance to level %1 for %2 AP.'
     'IGUI_SLA_PerSkillActive' = 'Advancement Slots: %1/%2.'
     'IGUI_SLA_TargetXpLeft' = '%1 natural skill XP left'
@@ -131,6 +132,7 @@ $requiredUi = [ordered]@{
     'IGUI_SLA_Admin_AwardXp' = 'Award XP'
     'IGUI_SLA_Admin_LevelsInput' = 'Levels to award'
     'IGUI_SLA_Admin_AwardLevels' = 'Award Levels'
+    'IGUI_SLA_Admin_ClearSlots' = 'Clear Advancement Slots'
     'IGUI_SLA_Admin_Refresh' = 'Refresh'
     'IGUI_SLA_Admin_Waiting' = 'Waiting for Survivor data.'
     'IGUI_SLA_Admin_Inspected' = 'Survivor data refreshed.'

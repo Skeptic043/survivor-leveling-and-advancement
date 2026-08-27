@@ -31,6 +31,7 @@ local translations = {
     IGUI_SLA_Admin_AwardXp = "Award XP",
     IGUI_SLA_Admin_LevelsInput = "Levels to award",
     IGUI_SLA_Admin_AwardLevels = "Award Levels",
+    IGUI_SLA_Admin_ClearSlots = "Clear Advancement Slots",
     IGUI_SLA_Admin_Refresh = "Refresh",
     IGUI_SLA_Admin_Waiting = "Waiting for Survivor data.",
     IGUI_SLA_Admin_Inspected = "Survivor data refreshed.",
@@ -53,9 +54,9 @@ local function getText(key, ...)
     return value
 end
 
-local function summary(revision, level, spent, xp)
+local function summary(revision, level, spent, xp, accountingMode)
     return {
-        accountingMode = "Tracked",
+        accountingMode = accountingMode or "Tracked",
         revision = revision,
         level = level,
         xpIntoLevel = xp or 25,
@@ -201,9 +202,11 @@ local function makeEnvironment(processMode)
             target = target,
             onclick = onclick,
             enabled = true,
+            visible = true,
         }
         function button:initialise() self.initialised = true end
         function button:setEnable(value) self.enabled = value end
+        function button:setVisible(value) self.visible = value end
         function button:click()
             if self.enabled and self.onclick ~= nil then self.onclick(self.target, self) end
         end
@@ -317,6 +320,7 @@ end
 local function findButton(state, internal)
     if internal == "XP" then return state.awardXpButton end
     if internal == "LEVELS" then return state.awardLevelsButton end
+    if internal == "CLEAR" then return state.clearSlotsButton end
     return state.refreshButton
 end
 
@@ -397,12 +401,15 @@ equal(table.concat(window.phaseOrder, ","), "initialise,instantiate,manager,visi
     "window lifecycle orders child construction before manager add and visibility")
 equal(mp.windowChildren, 1, "window child phase runs exactly once")
 equal(window.baseCloseControls, 1, "base close controls are created exactly once")
-equal(#window.children, 6, "base close control and five SLA controls are created once")
+equal(#window.children, 7, "base close control and six SLA controls are created once")
 expect(state.xpEntry.initialised and state.levelsEntry.initialised
     and state.awardXpButton.initialised and state.awardLevelsButton.initialised
-    and state.refreshButton.initialised, "all SLA entries and buttons initialise exactly once")
+    and state.clearSlotsButton.initialised and state.refreshButton.initialised,
+    "all SLA entries and buttons initialise exactly once")
 expect(not state.awardXpButton.enabled and not state.awardLevelsButton.enabled,
     "mutations disable while inspection waits")
+expect(not state.clearSlotsButton.visible and not state.clearSlotsButton.enabled,
+    "clear action stays hidden before a tracked summary exists")
 option:click()
 equal(#mp.windows, 1, "reopening exact route does not stack")
 equal(#mp.requests, 1, "reopening exact route sends no duplicate")
@@ -440,6 +447,8 @@ expect(state.target ~= canonical, "canonical target retained detached")
 expect(state.summary ~= mp.status.result.summary, "displayed summary retained detached from envelope")
 expect(state.awardXpButton.enabled and state.awardLevelsButton.enabled,
     "valid terminal enables mutation controls")
+expect(state.clearSlotsButton.visible and state.clearSlotsButton.enabled,
+    "tracked summary shows and enables the clear action")
 expect(containsDraw(window, "Survivor Level: 5"), "panel draws Survivor Level")
 expect(containsDraw(window, "Survivor XP: 25 / 100"), "panel draws exact XP progress")
 expect(containsDraw(window, "Available AP: 3"), "panel draws available AP")
@@ -527,6 +536,66 @@ window:prerender()
 equal(state.message, "The change may have applied. Refresh before trying again.",
     "committed ambiguity explicitly directs refresh")
 equal(string.find(state.message, "secret", 1, true), nil, "failure copy omits backend detail")
+
+state.clearSlotsButton:click()
+equal(#mp.requests, 5, "tracked clear activates once")
+local clearRequest = mp.requests[5].request
+expect(exact(clearRequest, {
+    operation = true, target = true, expectedRevision = true,
+}), "clear mutation shape has no operand")
+equal(clearRequest.operation, "clearAdvancementSlots", "clear operation exact")
+equal(clearRequest.expectedRevision, 9, "clear uses displayed current revision")
+expect(exact(clearRequest.target, { onlineId = true, username = true })
+    and clearRequest.target.onlineId == 77 and clearRequest.target.username == "Alpha",
+    "clear uses retained canonical pair")
+expect(not state.clearSlotsButton.enabled and not state.awardXpButton.enabled
+    and not state.awardLevelsButton.enabled and not state.xpEntry.editable
+    and not state.levelsEntry.editable,
+    "pending clear disables every panel mutation")
+state.clearSlotsButton:click()
+state.awardXpButton:click()
+equal(#mp.requests, 5, "pending clear suppresses duplicate and other mutations")
+mp.status = {
+    ok = true,
+    pending = false,
+    result = {
+        requestId = "request-5",
+        operation = "clearAdvancementSlots",
+        target = { onlineId = 77, username = "Alpha" },
+        ok = true,
+        outcome = "applied",
+        levelsGained = 0,
+        apGained = 0,
+        summary = summary(10, 7, 2, 12),
+    },
+}
+window:prerender()
+equal(state.summary.revision, 10, "applied clear replaces the complete summary")
+equal(state.message, "Survivor progression updated.", "applied clear uses bounded copy")
+expect(state.clearSlotsButton.visible and state.clearSlotsButton.enabled,
+    "tracked clear re-enables after its terminal")
+
+state.clearSlotsButton:click()
+equal(#mp.requests, 6, "second tracked clear sends once")
+mp.status = {
+    ok = true,
+    pending = false,
+    result = {
+        requestId = "request-6",
+        operation = "clearAdvancementSlots",
+        target = { onlineId = 77, username = "Alpha" },
+        ok = true,
+        outcome = "rejected",
+        code = "stale_revision",
+        detail = "secret stale clear detail",
+        summary = summary(11, 7, 2, 12),
+    },
+}
+window:prerender()
+equal(state.summary.revision, 11, "stale clear replaces the complete summary")
+equal(state.message, "Survivor data changed. Refresh and try again.",
+    "stale clear keeps the existing refresh instruction")
+equal(#mp.requests, 6, "stale clear never retries")
 
 local requestsBeforeInvalid = #mp.requests
 local invalidXp = { "", "0", "-1", "1e309" }
@@ -618,6 +687,34 @@ equal(#malformedTerminalStatus.requests, 0,
     "malformed retained terminal status sends no inspection")
 equal(rawget(malformedTerminalStatus.windows[1], "__slaAdminState").message,
     "The request failed. Refresh and try again.", "malformed retained terminal fails closed visibly")
+
+local malformedClearGainCases = {
+    { label = "missing clear gains" },
+    { label = "nonzero clear gains", levelsGained = 1, apGained = 0 },
+}
+for index = 1, #malformedClearGainCases do
+    local gainCase = malformedClearGainCases[index]
+    local retainedClear = makeEnvironment("multiplayer")
+    expect(retainedClear.integration.install().ok,
+        gainCase.label .. " retained-status environment installs")
+    local result = {
+        requestId = "old-clear",
+        operation = "clearAdvancementSlots",
+        target = { onlineId = 14, username = "ClearTarget" },
+        ok = true,
+        outcome = "applied",
+        summary = summary(4, 5, 2),
+    }
+    if gainCase.levelsGained ~= nil then result.levelsGained = gainCase.levelsGained end
+    if gainCase.apGained ~= nil then result.apGained = gainCase.apGained end
+    retainedClear.status = { ok = true, pending = false, result = result }
+    retainedClear:openFromScoreboard("ClearTarget", 0)
+    equal(#retainedClear.requests, 0,
+        gainCase.label .. " retained terminal starts no inspection")
+    equal(rawget(retainedClear.windows[1], "__slaAdminState").message,
+        "The request failed. Refresh and try again.",
+        gainCase.label .. " retained terminal fails closed")
+end
 
 local transportEnvelopeStatus = makeEnvironment("multiplayer")
 expect(transportEnvelopeStatus.integration.install().ok,
@@ -770,6 +867,29 @@ expect(not wrongState.waiting, "mismatched pending route fails closed")
 equal(wrongState.message, "The request failed. Refresh and try again.",
     "mismatched pending route uses bounded failure copy")
 
+local freeMode = makeEnvironment("multiplayer")
+expect(freeMode.integration.install().ok, "Free-mode environment installs")
+freeMode:openFromScoreboard("FreeTarget", 0)
+local freeWindow = freeMode.windows[1]
+local freeState = rawget(freeWindow, "__slaAdminState")
+freeMode.status = {
+    ok = true,
+    pending = false,
+    result = {
+        requestId = "request-1",
+        operation = "inspect",
+        target = { onlineId = 12, username = "FreeTarget" },
+        ok = true,
+        outcome = "inspected",
+        summary = summary(2, 3, 1, 25, "Free"),
+    },
+}
+freeWindow:prerender()
+expect(not freeState.clearSlotsButton.visible and not freeState.clearSlotsButton.enabled,
+    "Free summary hides and disables the clear action")
+freeState.clearSlotsButton:click()
+equal(#freeMode.requests, 1, "hidden Free clear action sends nothing")
+
 local lost = makeEnvironment("multiplayer")
 expect(lost.integration.install().ok, "ownership environment installs")
 lost.Scoreboard.doPlayerListContextMenu = function() end
@@ -879,6 +999,55 @@ for index = 1, #malformedImmediateCases do
         immediateCase.label .. " adopts no summary or target")
     equal(immediateState.message, "The request failed. Refresh and try again.",
         immediateCase.label .. " uses generic UI failure")
+end
+
+local malformedSummary = makeEnvironment("singleplayer")
+malformedSummary.requestHandler = function()
+    local invalid = summary(1, 2, 0)
+    invalid.accountingMode = "PerSkill"
+    return { ok = true, operation = "inspect", outcome = "inspected", summary = invalid }
+end
+expect(malformedSummary.integration.install().ok, "malformed-summary environment installs")
+expect(malformedSummary.integration.open(0).ok, "malformed-summary panel opens")
+local malformedSummaryState = rawget(malformedSummary.windows[1], "__slaAdminState")
+expect(malformedSummaryState.summary == nil and not malformedSummaryState.clearSlotsButton.visible,
+    "malformed accounting mode adopts no summary and exposes no clear action")
+equal(malformedSummaryState.message, "The request failed. Refresh and try again.",
+    "malformed summary fails closed with bounded copy")
+
+for index = 1, #malformedClearGainCases do
+    local gainCase = malformedClearGainCases[index]
+    local immediateClear = makeEnvironment("singleplayer")
+    immediateClear.requestHandler = function(_, request)
+        if request.operation == "inspect" then
+            return {
+                ok = true,
+                operation = "inspect",
+                outcome = "inspected",
+                summary = summary(6, 5, 2),
+            }
+        end
+        local result = {
+            ok = true,
+            operation = "clearAdvancementSlots",
+            outcome = "applied",
+            summary = summary(7, 5, 2),
+        }
+        if gainCase.levelsGained ~= nil then result.levelsGained = gainCase.levelsGained end
+        if gainCase.apGained ~= nil then result.apGained = gainCase.apGained end
+        return result
+    end
+    expect(immediateClear.integration.install().ok,
+        gainCase.label .. " immediate environment installs")
+    expect(immediateClear.integration.open(0).ok,
+        gainCase.label .. " immediate panel opens")
+    local immediateState = rawget(immediateClear.windows[1], "__slaAdminState")
+    immediateState.clearSlotsButton:click()
+    equal(#immediateClear.requests, 2, gainCase.label .. " clear requests once")
+    equal(immediateState.summary.revision, 6,
+        gainCase.label .. " adopts no malformed replacement summary")
+    equal(immediateState.message, "The request failed. Refresh and try again.",
+        gainCase.label .. " active terminal fails closed")
 end
 
 return assertions
