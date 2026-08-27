@@ -82,6 +82,18 @@ local function automaticNormalization(economy, description)
     return result.normalization
 end
 
+local function isMarkedCustom(perk)
+    local read, marker = pcall(function()
+        return perk.isCustom
+    end)
+    if not read or type(marker) ~= "function" then
+        return false
+    end
+
+    local called, result = pcall(marker, perk)
+    return called and result == true
+end
+
 function Build42NormalizationSnapshot.build(dependencies)
     if type(dependencies) ~= "table"
         or type(dependencies.catalog) ~= "table"
@@ -141,7 +153,10 @@ function Build42NormalizationSnapshot.build(dependencies)
             return failure("PERK_DESCRIPTION_FAILED", "resolved perk description did not succeed")
         end
 
-        local normalization = automaticNormalization(economy, description)
+        local normalization = nil
+        if isMarkedCustom(perk) then
+            normalization = automaticNormalization(economy, description)
+        end
         if normalization == nil then
             normalizationByPerk[identity.perkId] = 1.0
             fallbackCount = fallbackCount + 1
