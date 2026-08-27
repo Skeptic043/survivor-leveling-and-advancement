@@ -25,6 +25,7 @@ end
 
 local function fixture(server, client, configure)
     local calls = {}
+    local debugCalls = 0
     local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
     local session = {
         ready = function(player) calls[#calls + 1] = { "ready", player }; return { ok = true, snapshot = { marker = player, ready = true, revision = 0 } } end,
@@ -47,8 +48,30 @@ local function fixture(server, client, configure)
         end,
     }
     local adminSession = {
-        inspect = function(player) calls[#calls + 1] = { "admin_inspect", player }; return { ok = true } end,
-        request = function(player, request) calls[#calls + 1] = { "admin_session_request", player, request }; return { ok = true } end,
+        inspect = function(player)
+            calls[#calls + 1] = { "admin_inspect", player }
+            return { ok = true, summary = {
+                accountingMode = "Tracked", revision = 0, level = 0, xpIntoLevel = 0,
+                xpForNextLevel = 100, spent = 0, availableAp = 0,
+            } }
+        end,
+        request = function(player, request)
+            calls[#calls + 1] = { "admin_session_request", player, request }
+            local result = {
+                ok = true, applied = true, kind = request.kind,
+                levelsGained = request.kind == "awardSurvivorLevels" and request.count or 1,
+                apGained = request.kind == "awardSurvivorLevels" and request.count or 1,
+                summary = {
+                    accountingMode = "Tracked", revision = request.expectedRevision + 1,
+                    level = request.kind == "awardSurvivorLevels" and request.count or 1,
+                    xpIntoLevel = 0, xpForNextLevel = 100, spent = 0,
+                    availableAp = request.kind == "awardSurvivorLevels" and request.count or 1,
+                },
+            }
+            if request.kind == "awardSurvivorXp" then result.amount = request.amount
+            else result.count = request.count end
+            return result
+        end,
     }
     local source = { install = function() calls[#calls + 1] = { "install_source" }; return { ok = true } end }
     local runtime = { catalog = {}, services = {
@@ -135,6 +158,11 @@ local function fixture(server, client, configure)
         Events = events,
         isServer = function() calls[#calls + 1] = { "isServer" }; return server end,
         isClient = function() calls[#calls + 1] = { "isClient" }; return client end,
+        isDebugEnabled = function()
+            debugCalls = debugCalls + 1
+            calls[#calls + 1] = { "isDebugEnabled" }
+            return true
+        end,
         sendClientCommand = function() end,
         sendServerCommand = function() end,
         Capability = { CanSeePlayersStats = "inspect", CanModifyPlayerStatsInThePlayerStatsUI = "mutate" },
@@ -149,7 +177,8 @@ local function fixture(server, client, configure)
         factoryCalls = function() return factoryCalls end, clientCreates = function() return clientCreates end, serverCreates = function() return serverCreates end,
         advancementClientCreates = function() return advancementClientCreates end, advancementServerCreates = function() return advancementServerCreates end,
         adminClientCreates = function() return adminClientCreates end, adminServerCreates = function() return adminServerCreates end,
-        adminBoundaryCreates = function() return adminBoundaryCreates end, validator = validator }
+        adminBoundaryCreates = function() return adminBoundaryCreates end,
+        debugCalls = function() return debugCalls end, validator = validator }
 end
 
 do
@@ -1079,9 +1108,447 @@ do
     eq(created.owner.requestAdmin(1, {}).code, "player_not_ready", "disconnect clears admin player route")
 
     created, f = fixture(false, false)
-    eq(created.owner.requestAdmin(0, {}).code, "admin_unavailable", "SP admin request unavailable")
-    eq(created.owner.adminStatus(0).code, "admin_unavailable", "SP admin status unavailable")
+    eq(created.owner.requestAdmin(0, {}).code, "player_not_ready", "SP admin requires retained player")
+    no(created.owner.adminStatus(0).pending, "SP admin status is synchronously nonpending")
     eq(f.adminClientCreates(), 0, "SP creates no admin client")
+end
+
+do
+    local created = fixture(false, false, function(values)
+        values.globals.isDebugEnabled = nil
+    end)
+    no(created.ok, "SP construction requires debug capability")
+    eq(created.code, "invalid_dependencies", "missing SP debug capability is bounded")
+
+    created = fixture(true, false, function(values) values.globals.isDebugEnabled = nil end)
+    yes(created.ok, "server construction does not require debug capability")
+    created = fixture(false, true, function(values) values.globals.isDebugEnabled = nil end)
+    yes(created.ok, "multiplayer construction does not require debug capability")
+end
+
+do
+    local player = {}
+    local created, f = fixture(false, false, function(values)
+        values.localClient.get = function()
+            return { ok = true, present = true, snapshot = { ready = true, revision = 1 } }
+        end
+    end)
+    eq(f.debugCalls(), 0, "SP construction does not call debug capability")
+    created.owner.install()
+    f.events.OnGameStart.fire()
+    f.events.OnCreatePlayer.fire(0, player)
+    eq(f.debugCalls(), 0, "SP startup and readiness do not call debug capability")
+    created.owner.refreshOwner(0)
+    created.owner.requestAdvancement(0, "Strength")
+    created.owner.advancementStatus(0)
+    eq(f.debugCalls(), 0, "SP refresh and advancement do not call debug capability")
+end
+
+do
+    local inspectCalls = 0
+    local falseDebugCalls = 0
+    local created, f = fixture(false, false, function(values)
+        values.globals.isDebugEnabled = function() falseDebugCalls = falseDebugCalls + 1; return false end
+        values.adminSession.inspect = function() inspectCalls = inspectCalls + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    local unavailable = created.owner.requestAdmin(0, { operation = "inspect" })
+    eq(unavailable.code, "admin_unavailable", "debug false disables SP admin request")
+    eq(created.owner.status().failure, nil, "debug false does not retain lifecycle failure")
+    unavailable = created.owner.adminStatus(0)
+    eq(unavailable.code, "admin_unavailable", "debug false hides SP admin status")
+    eq(falseDebugCalls, 2, "debug false is checked exactly once per request and status")
+    eq(inspectCalls, 0, "debug false calls no admin session")
+
+    local debugCalls = 0
+    created, f = fixture(false, false, function(values)
+        values.globals.isDebugEnabled = function()
+            debugCalls = debugCalls + 1
+            error("debug boom")
+        end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    eq(created.owner.requestAdmin(0, { operation = "inspect" }).code,
+        "debug_capability_invalid", "throwing debug request is bounded")
+    eq(debugCalls, 1, "request checks throwing debug exactly once")
+    eq(created.owner.status().failure.code, "debug_capability_invalid", "throwing debug failure retained")
+    eq(created.owner.adminStatus(0).code, "debug_capability_invalid", "throwing debug status is bounded")
+    eq(debugCalls, 2, "status checks throwing debug exactly once")
+
+    debugCalls = 0
+    created, f = fixture(false, false, function(values)
+        values.globals.isDebugEnabled = function() debugCalls = debugCalls + 1; return "true" end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    eq(created.owner.requestAdmin(0, { operation = "inspect" }).code,
+        "debug_capability_invalid", "nonboolean debug request is bounded")
+    eq(debugCalls, 1, "nonboolean debug checked exactly once")
+
+    local capturedCalls, replacementCalls = 0, 0
+    created, f = fixture(false, false, function(values)
+        values.globals.isDebugEnabled = function() capturedCalls = capturedCalls + 1; return true end
+    end)
+    f.globals.isDebugEnabled = function() replacementCalls = replacementCalls + 1; return false end
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    yes(created.owner.requestAdmin(0, { operation = "inspect" }).ok,
+        "SP admin uses construction-captured debug capability")
+    eq(capturedCalls, 1, "captured debug capability called once")
+    eq(replacementCalls, 0, "replacement debug capability unused")
+end
+
+do
+    local created, f = fixture(false, false, function(values)
+        values.adminSession.inspect = function()
+            return { ok = true, summary = {
+                accountingMode = "Tracked", revision = 0, level = 0, xpIntoLevel = 0,
+                xpForNextLevel = 100, spent = 0, availableAp = 0,
+            }, private = true }
+        end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    local malformed = created.owner.requestAdmin(0, { operation = "inspect" })
+    no(malformed.ok, "malformed SP inspect result fails closed")
+    no(malformed.committed, "malformed SP inspect cannot be committed")
+    eq(malformed.code, "session_result_invalid", "malformed SP inspect is bounded")
+    eq(created.owner.status().failure.code, "sp_admin_session_invalid", "malformed SP inspect retained")
+
+    created, f = fixture(false, false, function(values)
+        values.adminSession.request = function() error("admin request boom") end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    local thrown = created.owner.requestAdmin(0, {
+        operation = "awardSurvivorXp", expectedRevision = 0, amount = 1,
+    })
+    no(thrown.ok, "throwing SP mutation fails closed")
+    yes(thrown.committed, "throwing SP mutation conservatively reports committed")
+    eq(thrown.code, "session_call_threw", "throwing SP mutation is bounded")
+end
+
+do
+    local sessionCalls = 0
+    local created, f = fixture(false, false, function(values)
+        values.adminSession.inspect = function() sessionCalls = sessionCalls + 1; return { ok = true } end
+        values.adminSession.request = function() sessionCalls = sessionCalls + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire()
+    eq(created.owner.requestAdmin(4, { operation = "inspect" }).code, "invalid_slot", "SP admin rejects invalid slot")
+    eq(created.owner.requestAdmin(0, { operation = "inspect" }).code, "player_not_ready", "SP admin rejects unready player")
+    local player = {}
+    f.events.OnCreatePlayer.fire(0, player)
+    local invalidRequests = {
+        {},
+        { operation = "unknown" },
+        { operation = "inspect", target = {} },
+        { operation = "inspect", expectedRevision = 0 },
+        { operation = "awardSurvivorXp", expectedRevision = 0 },
+        { operation = "awardSurvivorXp", expectedRevision = -1, amount = 1 },
+        { operation = "awardSurvivorXp", expectedRevision = 0, amount = 0 },
+        { operation = "awardSurvivorXp", expectedRevision = 0, amount = math.huge },
+        { operation = "awardSurvivorXp", expectedRevision = 0, amount = 1, requestId = "fake" },
+        { operation = "awardSurvivorLevels", expectedRevision = 0, count = 0 },
+        { operation = "awardSurvivorLevels", expectedRevision = 0, count = 1.5 },
+        { operation = "awardSurvivorLevels", expectedRevision = 0, count = 9007199254740992 },
+        { operation = "awardSurvivorLevels", expectedRevision = 0, count = 1, onlineId = 3 },
+        setmetatable({ operation = "inspect" }, {}),
+    }
+    eq(created.owner.requestAdmin(0, nil).code, "invalid_request", "SP admin rejects nil request")
+    for index = 1, #invalidRequests do
+        eq(created.owner.requestAdmin(0, invalidRequests[index]).code,
+            "invalid_request", "SP admin rejects hostile request " .. index)
+    end
+    eq(sessionCalls, 0, "invalid SP admin paths call no admin session")
+end
+
+do
+    local player = {}
+    local inspectCalls, snapshotCalls, sendCalls, logCalls = 0, 0, 0, 0
+    local notices = {}
+    local sessionSummary = {
+        accountingMode = "Tracked", revision = 3, level = 2, xpIntoLevel = 25,
+        xpForNextLevel = 100, spent = 1, availableAp = 1,
+    }
+    local created, f = fixture(false, false, function(values)
+        values.globals.sendClientCommand = function() sendCalls = sendCalls + 1 end
+        values.globals.writeLog = function() logCalls = logCalls + 1 end
+        values.adminSession.inspect = function(target)
+            inspectCalls = inspectCalls + 1
+            eq(target, player, "SP inspect receives exact retained player")
+            return { ok = true, summary = sessionSummary }
+        end
+        values.session.snapshot = function() snapshotCalls = snapshotCalls + 1; return { ok = true, snapshot = {} } end
+    end)
+    created.owner.setClientStateListener(function(slot, kind) notices[#notices + 1] = { slot, kind } end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(2, player)
+    f.adminSession.inspect = function() error("mutated admin inspect") end
+    local terminal = created.owner.requestAdmin(2, { operation = "inspect" })
+    yes(terminal.ok, "SP inspect succeeds")
+    eq(terminal.operation, "inspect", "SP inspect terminal operation")
+    eq(terminal.outcome, "inspected", "SP inspect terminal outcome")
+    exactKeys(terminal, { ok = true, operation = true, outcome = true, summary = true }, 4, "SP inspect terminal")
+    eq(inspectCalls, 1, "SP inspect session called once")
+    eq(snapshotCalls, 0, "SP inspect does not refresh owner snapshot")
+    eq(sendCalls, 0, "SP inspect sends no command")
+    eq(logCalls, 0, "SP inspect writes no audit log")
+    eq(f.adminClientCreates(), 0, "SP inspect creates no admin client")
+    eq(f.adminBoundaryCreates(), 0, "SP inspect creates no admin boundary")
+    eq(terminal.requestId, nil, "SP inspect has no request ID")
+    eq(terminal.target, nil, "SP inspect has no synthetic target")
+    local status = created.owner.adminStatus(2)
+    no(status.pending, "SP inspect status is nonpending")
+    exactKeys(status, { ok = true, pending = true, result = true }, 3, "SP inspect status")
+    no(status.result == terminal, "SP inspect status terminal detached")
+    no(status.result.summary == terminal.summary, "SP inspect status summary detached")
+    terminal.summary.level = 99
+    eq(created.owner.adminStatus(2).result.summary.level, 2, "stored SP inspect terminal remains detached")
+    eq(notices[#notices][1], 2, "SP inspect terminal notice preserves slot")
+    eq(notices[#notices][2], "admin_terminal", "SP inspect terminal notice kind")
+end
+
+do
+    local player, acceptedSnapshot = {}, nil
+    local requestCalls, snapshotCalls, acceptCalls = 0, 0, 0
+    local notices = {}
+    local created, f = fixture(false, false, function(values)
+        values.adminSession.request = function(target, request)
+            requestCalls = requestCalls + 1
+            eq(target, player, "SP XP request receives exact player")
+            exactKeys(request, { kind = true, expectedRevision = true, amount = true }, 3, "converted XP request")
+            eq(request.kind, "awardSurvivorXp", "converted XP kind")
+            eq(request.expectedRevision, 7, "converted XP revision")
+            eq(request.amount, 125.5, "converted XP amount")
+            return {
+                ok = true, applied = true, kind = request.kind, amount = request.amount,
+                levelsGained = 2, apGained = 2,
+                summary = { accountingMode = "Tracked", revision = 8, level = 4,
+                    xpIntoLevel = 5, xpForNextLevel = 100, spent = 1, availableAp = 3 },
+            }
+        end
+        values.session.snapshot = function(target)
+            snapshotCalls = snapshotCalls + 1
+            eq(target, player, "post-admin snapshot receives exact player")
+            return { ok = true, snapshot = { marker = "admin" } }
+        end
+        values.localClient.acceptLocal = function(slot, snapshot)
+            if snapshot.marker == "admin" then
+                acceptCalls = acceptCalls + 1
+                eq(slot, 1, "post-admin acceptance preserves slot")
+                acceptedSnapshot = snapshot
+            end
+            return { ok = true, accepted = true }
+        end
+    end)
+    created.owner.setClientStateListener(function(slot, kind) notices[#notices + 1] = { slot, kind } end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(1, player)
+    local terminal = created.owner.requestAdmin(1, {
+        operation = "awardSurvivorXp", expectedRevision = 7, amount = 125.5,
+    })
+    yes(terminal.ok, "SP XP mutation succeeds")
+    eq(terminal.outcome, "applied", "SP XP terminal applied")
+    eq(terminal.levelsGained, 2, "SP XP levels gained")
+    eq(terminal.apGained, 2, "SP XP AP gained")
+    exactKeys(terminal, {
+        ok = true, operation = true, outcome = true, levelsGained = true,
+        apGained = true, summary = true,
+    }, 6, "SP XP terminal")
+    eq(requestCalls, 1, "SP XP session called once")
+    eq(snapshotCalls, 1, "SP XP projects owner snapshot once")
+    eq(acceptCalls, 1, "SP XP accepts owner snapshot once")
+    eq(acceptedSnapshot.marker, "admin", "SP XP accepts exact projected snapshot")
+    eq(notices[#notices - 1][2], "owner_snapshot", "SP XP owner snapshot notice precedes terminal")
+    eq(notices[#notices][2], "admin_terminal", "SP XP emits terminal notice")
+end
+
+do
+    local player = {}
+    local snapshotCalls = 0
+    local created, f = fixture(false, false, function(values)
+        values.adminSession.request = function(target, request)
+            eq(target, player, "SP level request receives exact player")
+            exactKeys(request, { kind = true, expectedRevision = true, count = true }, 3, "converted level request")
+            return {
+                ok = true, applied = true, kind = request.kind, count = request.count,
+                levelsGained = request.count, apGained = request.count,
+                summary = { accountingMode = "Free", revision = 10, level = 8,
+                    xpIntoLevel = 20, xpForNextLevel = 200, spent = 0, availableAp = 8 },
+            }
+        end
+        values.session.snapshot = function() snapshotCalls = snapshotCalls + 1; return { ok = true, snapshot = {} } end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(3, player)
+    local terminal = created.owner.requestAdmin(3, {
+        operation = "awardSurvivorLevels", expectedRevision = 9, count = 3,
+    })
+    yes(terminal.ok, "SP level mutation succeeds")
+    eq(terminal.operation, "awardSurvivorLevels", "SP level terminal operation")
+    eq(terminal.levelsGained, 3, "SP level gains preserved")
+    eq(snapshotCalls, 1, "SP level mutation refreshes once")
+end
+
+do
+    local snapshotCalls = 0
+    local failNext = false
+    local created, f = fixture(false, false, function(values)
+        values.adminSession.request = function(_, request)
+            if failNext then
+                return { ok = false, code = "store_save_failed", detail = "store.save failed", committed = false }
+            end
+            return {
+                ok = true, applied = false, kind = request.kind,
+                code = "stale_revision", detail = "revision",
+                summary = { accountingMode = "Tracked", revision = 5, level = 2,
+                    xpIntoLevel = 1, xpForNextLevel = 100, spent = 1, availableAp = 1 },
+            }
+        end
+        values.session.snapshot = function() snapshotCalls = snapshotCalls + 1; return { ok = true, snapshot = {} } end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    local stale = created.owner.requestAdmin(0, {
+        operation = "awardSurvivorXp", expectedRevision = 4, amount = 1,
+    })
+    yes(stale.ok, "SP stale revision is handled")
+    eq(stale.outcome, "rejected", "SP stale terminal rejected")
+    eq(stale.code, "stale_revision", "SP stale code preserved")
+    eq(snapshotCalls, 0, "SP stale mutation does not refresh owner")
+
+    failNext = true
+    local failed = created.owner.requestAdmin(0, {
+        operation = "awardSurvivorLevels", expectedRevision = 5, count = 1,
+    })
+    no(failed.ok, "SP precommit failure returned")
+    no(failed.committed, "SP precommit failure preserves committed false")
+    eq(failed.code, "store_save_failed", "SP precommit code preserved")
+    eq(snapshotCalls, 0, "SP precommit failure does not refresh owner")
+    eq(created.owner.status().failure, nil, "valid SP session rejection does not poison lifecycle")
+end
+
+do
+    local function invariantSummary(revision, level)
+        return {
+            accountingMode = "Tracked", revision = revision, level = level,
+            xpIntoLevel = 0, xpForNextLevel = 100, spent = 0, availableAp = level,
+        }
+    end
+    local cases = {
+        {
+            label = "zero level gains",
+            request = { operation = "awardSurvivorLevels", expectedRevision = 4, count = 2 },
+            result = { ok = true, applied = true, kind = "awardSurvivorLevels", count = 2,
+                levelsGained = 0, apGained = 0, summary = invariantSummary(5, 6) },
+        },
+        {
+            label = "wrong level gains",
+            request = { operation = "awardSurvivorLevels", expectedRevision = 4, count = 2 },
+            result = { ok = true, applied = true, kind = "awardSurvivorLevels", count = 2,
+                levelsGained = 1, apGained = 1, summary = invariantSummary(5, 6) },
+        },
+        {
+            label = "unchanged applied revision",
+            request = { operation = "awardSurvivorXp", expectedRevision = 4, amount = 10 },
+            result = { ok = true, applied = true, kind = "awardSurvivorXp", amount = 10,
+                levelsGained = 1, apGained = 1, summary = invariantSummary(4, 5) },
+        },
+        {
+            label = "wrong applied revision",
+            request = { operation = "awardSurvivorXp", expectedRevision = 4, amount = 10 },
+            result = { ok = true, applied = true, kind = "awardSurvivorXp", amount = 10,
+                levelsGained = 1, apGained = 1, summary = invariantSummary(6, 5) },
+        },
+        {
+            label = "unchanged stale revision",
+            request = { operation = "awardSurvivorXp", expectedRevision = 4, amount = 10 },
+            result = { ok = true, applied = false, kind = "awardSurvivorXp",
+                code = "stale_revision", detail = "revision", summary = invariantSummary(4, 5) },
+        },
+        {
+            label = "gains exceed resulting level",
+            request = { operation = "awardSurvivorXp", expectedRevision = 4, amount = 10 },
+            result = { ok = true, applied = true, kind = "awardSurvivorXp", amount = 10,
+                levelsGained = 1, apGained = 1, summary = invariantSummary(5, 0) },
+        },
+        {
+            label = "applied maximum revision",
+            request = {
+                operation = "awardSurvivorXp", expectedRevision = 9007199254740991, amount = 10,
+            },
+            result = { ok = true, applied = true, kind = "awardSurvivorXp", amount = 10,
+                levelsGained = 1, apGained = 1,
+                summary = invariantSummary(9007199254740991, 5) },
+        },
+    }
+    for index = 1, #cases do
+        local item = cases[index]
+        local snapshotCalls = 0
+        local created, f = fixture(false, false, function(values)
+            values.adminSession.request = function() return item.result end
+            values.session.snapshot = function()
+                snapshotCalls = snapshotCalls + 1
+                return { ok = true, snapshot = {} }
+            end
+        end)
+        created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+        local failed = created.owner.requestAdmin(0, item.request)
+        no(failed.ok, item.label .. " fails closed")
+        yes(failed.committed, item.label .. " conservatively reports committed")
+        eq(failed.code, "session_result_invalid", item.label .. " is bounded")
+        eq(snapshotCalls, 0, item.label .. " cannot refresh owner state")
+    end
+end
+
+do
+    local created, f = fixture(false, false, function(values)
+        values.session.snapshot = function() return { ok = false, code = "project_failed", detail = "snapshot" } end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    local failed = created.owner.requestAdmin(0, {
+        operation = "awardSurvivorLevels", expectedRevision = 0, count = 1,
+    })
+    no(failed.ok, "SP postcommit projection failure returned")
+    yes(failed.committed, "SP projection failure preserves committed truth")
+    eq(failed.code, "owner_snapshot_failed", "SP projection failure is bounded")
+    eq(created.owner.status().failure.code, "project_failed", "SP projection failure retained")
+
+    local acceptCalls = 0
+    created, f = fixture(false, false, function(values)
+        values.session.snapshot = function() return { ok = true, snapshot = { marker = "admin" } } end
+        values.localClient.acceptLocal = function(_, snapshot)
+            if snapshot.marker == "admin" then
+                acceptCalls = acceptCalls + 1
+                return { ok = true, accepted = false, code = "stale_snapshot" }
+            end
+            return { ok = true, accepted = true }
+        end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, {})
+    failed = created.owner.requestAdmin(0, {
+        operation = "awardSurvivorXp", expectedRevision = 0, amount = 1,
+    })
+    no(failed.ok, "SP postcommit acceptance failure returned")
+    yes(failed.committed, "SP acceptance failure preserves committed truth")
+    eq(acceptCalls, 1, "SP failed acceptance is attempted once")
+end
+
+do
+    local firstPlayer, secondPlayer = {}, {}
+    local inspectIndex = 0
+    local created, f = fixture(false, false, function(values)
+        values.adminSession.inspect = function()
+            inspectIndex = inspectIndex + 1
+            return { ok = true, summary = {
+                accountingMode = "Tracked", revision = inspectIndex, level = inspectIndex,
+                xpIntoLevel = 0, xpForNextLevel = 100, spent = 0, availableAp = inspectIndex,
+            } }
+        end
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, firstPlayer)
+    local first = created.owner.requestAdmin(0, { operation = "inspect" })
+    local second = created.owner.requestAdmin(0, { operation = "inspect" })
+    eq(created.owner.adminStatus(0).result.summary.revision, 2, "SP stores only newest terminal per slot")
+    first.summary.revision, second.summary.revision = 99, 99
+    eq(created.owner.adminStatus(0).result.summary.revision, 2, "SP stored terminal detached from returns")
+    f.events.OnCreatePlayer.fire(0, secondPlayer)
+    local cleared = created.owner.adminStatus(0)
+    no(cleared.pending, "SP re-ready status remains nonpending")
+    eq(cleared.result, nil, "SP re-ready clears prior character terminal")
 end
 
 do

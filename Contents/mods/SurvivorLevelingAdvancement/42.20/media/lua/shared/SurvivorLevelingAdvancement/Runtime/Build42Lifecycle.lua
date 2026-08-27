@@ -269,6 +269,138 @@ local function detachAdminStatus(value)
     return nil
 end
 
+local function localAdminRequest(value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+    local operation = rawget(value, "operation")
+    if operation == "inspect" then
+        if exactTable(value, { operation = true }) then
+            return { operation = operation }
+        end
+        return nil
+    end
+    local expectedRevision = rawget(value, "expectedRevision")
+    if not safeInteger(expectedRevision) then return nil end
+    if operation == "awardSurvivorXp" then
+        local amount = rawget(value, "amount")
+        if exactTable(value, { operation = true, expectedRevision = true, amount = true })
+            and type(amount) == "number" and amount == amount
+            and amount ~= math.huge and amount ~= -math.huge and amount > 0 then
+            return { kind = operation, expectedRevision = expectedRevision, amount = amount }
+        end
+        return nil
+    end
+    if operation == "awardSurvivorLevels" then
+        local count = rawget(value, "count")
+        if exactTable(value, { operation = true, expectedRevision = true, count = true })
+            and safeInteger(count) and count > 0 then
+            return { kind = operation, expectedRevision = expectedRevision, count = count }
+        end
+    end
+    return nil
+end
+
+local function detachLocalAdminTerminal(value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil
+        or type(rawget(value, "ok")) ~= "boolean" then return nil end
+    local operation = rawget(value, "operation")
+    if operation ~= "inspect" and operation ~= "awardSurvivorXp"
+        and operation ~= "awardSurvivorLevels" then return nil end
+    local terminal = { ok = rawget(value, "ok"), operation = operation }
+    if terminal.ok then
+        local outcome = rawget(value, "outcome")
+        local fields = { ok = true, operation = true, outcome = true, summary = true }
+        if outcome == "applied" then
+            fields.levelsGained, fields.apGained = true, true
+        elseif outcome == "rejected" then
+            fields.code, fields.detail = true, true
+        elseif outcome ~= "inspected" or operation ~= "inspect" then
+            return nil
+        end
+        local summary = detachAdminSummary(rawget(value, "summary"))
+        if not exactTable(value, fields) or summary == nil then return nil end
+        if outcome == "applied" then
+            local levelsGained, apGained = rawget(value, "levelsGained"), rawget(value, "apGained")
+            if not safeInteger(levelsGained) or apGained ~= levelsGained then return nil end
+            terminal.levelsGained, terminal.apGained = levelsGained, apGained
+        elseif outcome == "rejected" then
+            if rawget(value, "code") ~= "stale_revision"
+                or not safeText(rawget(value, "detail"), 160, false) then return nil end
+            terminal.code, terminal.detail = rawget(value, "code"), rawget(value, "detail")
+        end
+        terminal.outcome, terminal.summary = outcome, summary
+        return terminal
+    end
+    if not exactTable(value, {
+        ok = true, operation = true, code = true, detail = true, committed = true,
+    }) or not safeId(rawget(value, "code"), 64)
+        or not safeText(rawget(value, "detail"), 160, false)
+        or type(rawget(value, "committed")) ~= "boolean" then return nil end
+    terminal.code, terminal.detail = rawget(value, "code"), rawget(value, "detail")
+    terminal.committed = rawget(value, "committed")
+    return terminal
+end
+
+local function localAdminSessionTerminal(operation, request, value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+    if rawget(value, "ok") == false then
+        if exactTable(value, { ok = true, code = true, detail = true, committed = true })
+            and safeId(rawget(value, "code"), 64)
+            and safeText(rawget(value, "detail"), 160, false)
+            and rawget(value, "committed") == false then
+            return {
+                ok = false, operation = operation, code = rawget(value, "code"),
+                detail = rawget(value, "detail"), committed = false,
+            }
+        end
+        return nil
+    end
+    if operation == "inspect" then
+        local summary = detachAdminSummary(rawget(value, "summary"))
+        if exactTable(value, { ok = true, summary = true })
+            and rawget(value, "ok") == true and summary ~= nil then
+            return { ok = true, operation = operation, outcome = "inspected", summary = summary }
+        end
+        return nil
+    end
+    local kind = rawget(request, "kind")
+    if exactTable(value, {
+        ok = true, applied = true, kind = true, code = true, detail = true, summary = true,
+    }) and rawget(value, "ok") == true and rawget(value, "applied") == false
+        and rawget(value, "kind") == kind and rawget(value, "code") == "stale_revision"
+        and safeText(rawget(value, "detail"), 160, false) then
+        local summary = detachAdminSummary(rawget(value, "summary"))
+        if summary ~= nil and summary.revision ~= rawget(request, "expectedRevision") then
+            return {
+                ok = true, operation = operation, outcome = "rejected",
+                code = "stale_revision", detail = rawget(value, "detail"), summary = summary,
+            }
+        end
+        return nil
+    end
+    local fields = {
+        ok = true, applied = true, kind = true, levelsGained = true,
+        apGained = true, summary = true,
+    }
+    local operand
+    if kind == "awardSurvivorXp" then fields.amount, operand = true, "amount"
+    elseif kind == "awardSurvivorLevels" then fields.count, operand = true, "count"
+    else return nil end
+    local summary = detachAdminSummary(rawget(value, "summary"))
+    local levelsGained, apGained = rawget(value, "levelsGained"), rawget(value, "apGained")
+    if not exactTable(value, fields) or rawget(value, "ok") ~= true
+        or rawget(value, "applied") ~= true or rawget(value, "kind") ~= kind
+        or rawget(value, operand) ~= rawget(request, operand) or summary == nil
+        or rawget(request, "expectedRevision") >= MAX_SAFE_INTEGER
+        or summary.revision ~= rawget(request, "expectedRevision") + 1
+        or not safeInteger(levelsGained) or apGained ~= levelsGained
+        or levelsGained > summary.level
+        or (kind == "awardSurvivorLevels" and levelsGained ~= rawget(request, "count")) then return nil end
+    return {
+        ok = true, operation = operation, outcome = "applied",
+        levelsGained = levelsGained, apGained = apGained, summary = summary,
+    }
+end
+
 local function ownerHandled(value)
     if exactTable(value, { ok = true, handled = true, accepted = true, localSlot = true }) then
         return rawget(value, "ok") == true and rawget(value, "handled") == true
@@ -358,6 +490,10 @@ function Build42Lifecycle.create(dependencies)
     end
     if serverMode and clientMode then return failure("mode_invalid", "server and client cannot both be true") end
     local mode = serverMode and "server" or clientMode and "client" or "single_player"
+    local isDebugEnabled = rawget(globals, "isDebugEnabled")
+    if mode == "single_player" and not callable(isDebugEnabled) then
+        return failure("invalid_dependencies", "single-player debug capability is required")
+    end
     local sendCommand = mode == "server" and rawget(globals, "sendServerCommand") or rawget(globals, "sendClientCommand")
     if not callable(sendCommand) then return failure("invalid_dependencies", "mode command sender is required") end
 
@@ -385,7 +521,8 @@ function Build42Lifecycle.create(dependencies)
     local installed, installAttempted, startupAttempted, started = false, false, false, false
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
     local ownerSessionReady, ownerSessionSnapshot, advancementRequest
-    local pendingPlayers, readyPlayers, singlePlayerResults = {}, {}, {}
+    local adminSessionInspect, adminSessionRequest
+    local pendingPlayers, readyPlayers, singlePlayerResults, singlePlayerAdminResults = {}, {}, {}, {}
     local owner, readySingle = {}, nil
     local clientStateListener = nil
 
@@ -507,6 +644,8 @@ function Build42Lifecycle.create(dependencies)
         ownerSessionReady = rawget(ownerSession, "ready")
         ownerSessionSnapshot = rawget(ownerSession, "snapshot")
         advancementRequest = rawget(advancementSession, "request")
+        adminSessionInspect = rawget(adminSession, "inspect")
+        adminSessionRequest = rawget(adminSession, "request")
         started, retainedFailure = true, nil
         if mode == "single_player" then
             for slot = 0, 3 do
@@ -519,7 +658,7 @@ function Build42Lifecycle.create(dependencies)
     end
 
     readySingle = function(localSlot, player)
-        readyPlayers[localSlot], singlePlayerResults[localSlot] = nil, nil
+        readyPlayers[localSlot], singlePlayerResults[localSlot], singlePlayerAdminResults[localSlot] = nil, nil, nil
         if trusted(ownerClient.resetSlot, "owner_slot_reset_invalid", "ownerClient.resetSlot", localSlot) == nil then return retainedFailure end
         local ready = trusted(ownerSessionReady, "session_ready_invalid", "ownerSession.ready", player)
         if ready == nil or type(rawget(ready, "snapshot")) ~= "table" then
@@ -653,6 +792,78 @@ function Build42Lifecycle.create(dependencies)
         singlePlayerResults[localSlot] = summary
         notifyClientState(localSlot, "advancement_terminal")
         return detachSummary(summary)
+    end
+
+    local function debugAvailable()
+        local called, enabled = pcall(isDebugEnabled)
+        if not called or type(enabled) ~= "boolean" then
+            return nil, retain(nil, "debug_capability_invalid", "isDebugEnabled")
+        end
+        return enabled
+    end
+
+    local function storeLocalAdminTerminal(localSlot, terminal)
+        local stored = detachLocalAdminTerminal(terminal)
+        if stored == nil then return nil end
+        singlePlayerAdminResults[localSlot] = stored
+        notifyClientState(localSlot, "admin_terminal")
+        return detachLocalAdminTerminal(stored)
+    end
+
+    local function postAdminMutation(localSlot, player, operation)
+        local called, snapshotResult = pcall(ownerSessionSnapshot, player)
+        if not called or not exactTable(snapshotResult, { ok = true, snapshot = true })
+            or rawget(snapshotResult, "ok") ~= true
+            or type(rawget(snapshotResult, "snapshot")) ~= "table" then
+            retain(snapshotResult, "sp_admin_snapshot_invalid", "ownerSession.snapshot")
+            return failure("owner_snapshot_failed", "ownerSession.snapshot", true)
+        end
+        local acceptedCalled, accepted = pcall(
+            ownerClient.acceptLocal,
+            localSlot,
+            rawget(snapshotResult, "snapshot")
+        )
+        local didAccept = acceptedCalled and acceptance(accepted) or nil
+        if didAccept ~= true then
+            retain(accepted, "sp_admin_snapshot_accept_invalid", "ownerClient.acceptLocal")
+            return failure("owner_snapshot_failed", "ownerClient.acceptLocal", true)
+        end
+        notifyClientState(localSlot, "owner_snapshot")
+        return { ok = true, operation = operation }
+    end
+
+    local function requestSingleAdmin(localSlot, request)
+        local debug = debugAvailable()
+        if debug == nil then return retainedFailure end
+        if not debug then return failure("admin_unavailable", "debug mode") end
+        if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        local player = readyPlayers[localSlot]
+        if not started or player == nil then return failure("player_not_ready", "localSlot") end
+        local converted = localAdminRequest(request)
+        if converted == nil then return failure("invalid_request", "request") end
+        local operation = rawget(request, "operation")
+        local callableValue = operation == "inspect" and adminSessionInspect or adminSessionRequest
+        local called, sessionResult
+        if operation == "inspect" then called, sessionResult = pcall(callableValue, player)
+        else called, sessionResult = pcall(callableValue, player, converted) end
+        local terminal = called and localAdminSessionTerminal(operation, converted, sessionResult) or nil
+        if terminal == nil then
+            local committed = operation ~= "inspect"
+            retain(sessionResult, "sp_admin_session_invalid", operation == "inspect" and "adminSession.inspect" or "adminSession.request")
+            terminal = failure(
+                called and "session_result_invalid" or "session_call_threw",
+                operation == "inspect" and "adminSession.inspect" or "adminSession.request",
+                committed
+            )
+            terminal.operation = operation
+        elseif terminal.ok and terminal.outcome == "applied" then
+            local refreshed = postAdminMutation(localSlot, player, operation)
+            if not refreshed.ok then
+                refreshed.operation = operation
+                terminal = refreshed
+            end
+        end
+        return storeLocalAdminTerminal(localSlot, terminal)
     end
 
     local callbacks = {}
@@ -818,7 +1029,7 @@ function Build42Lifecycle.create(dependencies)
 
     function owner.requestAdmin(localSlot, request)
         if mode == "server" then return failure("admin_unavailable", "server mode") end
-        if mode == "single_player" then return failure("admin_unavailable", "single player") end
+        if mode == "single_player" then return requestSingleAdmin(localSlot, request) end
         if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
         local player = readyPlayers[localSlot]
         if player == nil then return failure("player_not_ready", "localSlot") end
@@ -846,7 +1057,15 @@ function Build42Lifecycle.create(dependencies)
 
     function owner.adminStatus(localSlot)
         if mode == "server" then return failure("admin_unavailable", "server mode") end
-        if mode == "single_player" then return failure("admin_unavailable", "single player") end
+        if mode == "single_player" then
+            local debug = debugAvailable()
+            if debug == nil then return retainedFailure end
+            if not debug then return failure("admin_unavailable", "debug mode") end
+            if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+            local result = detachLocalAdminTerminal(singlePlayerAdminResults[localSlot])
+            if result == nil then return { ok = true, pending = false } end
+            return { ok = true, pending = false, result = result }
+        end
         if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
         local called, result = pcall(adminClient.status, localSlot)
         local detached = called and detachAdminStatus(result) or nil
