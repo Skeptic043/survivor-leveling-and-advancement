@@ -348,7 +348,13 @@ function Build42SkillsUi.create(dependencies)
         measureText = true,
         smallFont = true,
     }
-    if not exactPlainTable(dependencies, dependencyFields) then
+    local launcherDependencyFields = {}
+    for key in pairs(dependencyFields) do launcherDependencyFields[key] = true end
+    launcherDependencyFields.adminLauncher = true
+    local hasAdminLauncher = type(dependencies) == "table"
+        and rawget(dependencies, "adminLauncher") ~= nil
+    if not exactPlainTable(dependencies,
+        hasAdminLauncher and launcherDependencyFields or dependencyFields) then
         return failure("invalid_dependencies", "dependencies")
     end
 
@@ -363,6 +369,7 @@ function Build42SkillsUi.create(dependencies)
     local getText = rawget(dependencies, "getText")
     local measureText = rawget(dependencies, "measureText")
     local smallFont = rawget(dependencies, "smallFont")
+    local adminLauncher = rawget(dependencies, "adminLauncher")
 
     local priorPrerender = method(characterInfo, "prerender")
     local priorRender = method(characterInfo, "render")
@@ -380,6 +387,15 @@ function Build42SkillsUi.create(dependencies)
     local buildProgression = type(progression) == "table" and rawget(progression, "build") or nil
     local describeProgression = type(progression) == "table" and rawget(progression, "describe") or nil
     local inspectProgression = type(progression) == "table" and rawget(progression, "inspect") or nil
+    local adminInstall = type(adminLauncher) == "table" and rawget(adminLauncher, "install") or nil
+    local adminStatus = type(adminLauncher) == "table" and rawget(adminLauncher, "status") or nil
+    local adminAvailable = type(adminLauncher) == "table" and rawget(adminLauncher, "isAvailable") or nil
+    local adminOpen = type(adminLauncher) == "table" and rawget(adminLauncher, "open") or nil
+
+    local validAdminLauncher = adminLauncher == nil or (exactPlainTable(adminLauncher, {
+        install = true, status = true, isAvailable = true, open = true,
+    }) and callable(adminInstall) and callable(adminStatus)
+        and callable(adminAvailable) and callable(adminOpen))
 
     if type(characterInfo) ~= "table" or type(progressBar) ~= "table" or type(buttonClass) ~= "table"
         or not priorPrerender or not priorRender or not priorRenderPerkRect
@@ -389,7 +405,8 @@ function Build42SkillsUi.create(dependencies)
         or not callable(buildView) or not callable(readSettings)
         or not callable(buildProgression) or not callable(describeProgression)
         or not callable(inspectProgression) or not callable(clockMillis)
-        or not callable(getText) or not callable(measureText) or smallFont == nil then
+        or not callable(getText) or not callable(measureText) or smallFont == nil
+        or not validAdminLauncher then
         return failure("invalid_dependencies", "callables")
     end
 
@@ -457,6 +474,9 @@ function Build42SkillsUi.create(dependencies)
             statusLeft = nil,
             statusRight = nil,
             statusY = nil,
+            adminVisible = false,
+            adminButton = nil,
+            adminButtonParent = nil,
         }
         views[target] = state
         return state
@@ -488,6 +508,15 @@ function Build42SkillsUi.create(dependencies)
         state.statusRightText = nil
         state.statusLeft = nil
         state.statusRight = nil
+        state.adminVisible = false
+        if type(state.adminButton) == "table" then
+            local setVisible = state.adminButton.setVisible
+            local setEnable = state.adminButton.setEnable
+            if callable(setVisible) then pcall(setVisible, state.adminButton, false) end
+            if callable(setEnable) then pcall(setEnable, state.adminButton, false) end
+            rawset(state.adminButton, "onclick", nil)
+            rawset(state.adminButton, "target", nil)
+        end
         for bar in pairs(state.bars) do
             local barState = bars[bar]
             if barState and barState.button and callable(barState.button.setEnable) then
@@ -744,6 +773,73 @@ function Build42SkillsUi.create(dependencies)
         return left, right
     end
 
+    local function setAdminButtonState(state, visible)
+        state.adminVisible = visible
+        local button = state.adminButton
+        if type(button) ~= "table" then return true end
+        local setVisible = button.setVisible
+        local setEnable = button.setEnable
+        return callable(setVisible) and callable(setEnable)
+            and pcall(setVisible, button, visible)
+            and pcall(setEnable, button, visible)
+    end
+
+    local function updateAdminAvailability(state)
+        if adminLauncher == nil then return setAdminButtonState(state, false) end
+        local called, available = pcall(adminAvailable, state.slot)
+        return setAdminButtonState(state, called and available == true)
+    end
+
+    local function activateAdmin(state)
+        if state == nil or state.disabled then return end
+        local called, available = pcall(adminAvailable, state.slot)
+        if not called or available ~= true then
+            setAdminButtonState(state, false)
+            return
+        end
+        pcall(adminOpen, state.slot)
+    end
+
+    local function removeAdminButton(state)
+        local button = state.adminButton
+        local parent = state.adminButtonParent
+        if type(button) == "table" then
+            local setVisible = button.setVisible
+            if callable(setVisible) then pcall(setVisible, button, false) end
+            rawset(button, "onclick", nil)
+            rawset(button, "target", nil)
+            local removeChild = type(parent) == "table" and parent.removeChild or nil
+            if callable(removeChild) then pcall(removeChild, parent, button) end
+        end
+        state.adminButton = nil
+        state.adminButtonParent = nil
+    end
+
+    local function ensureAdminButton(view, state)
+        if adminLauncher == nil or not state.adminVisible then return true end
+        local parent = rawget(view, "parent")
+        if type(parent) ~= "table" then return false end
+        if state.adminButton ~= nil and state.adminButtonParent ~= parent then
+            removeAdminButton(state)
+        end
+        if state.adminButton == nil then
+            local title = localized("IGUI_SLA_Admin_Button")
+            if title == nil then return false end
+            local called, button = pcall(buttonNew, buttonClass, 0, 0, 1, 20,
+                title, state, activateAdmin)
+            if not called or type(button) ~= "table" then return false end
+            local initialise = button.initialise
+            local addChild = parent.addChild
+            if not callable(initialise) or not callable(addChild)
+                or not pcall(initialise, button) or not pcall(addChild, parent, button) then
+                return false
+            end
+            state.adminButton = button
+            state.adminButtonParent = parent
+        end
+        return setAdminButtonState(state, true)
+    end
+
     local function setButton(barState, enabled, tooltip)
         if barState.button == nil then return false end
         if not pcall(barState.button.setEnable, barState.button, enabled) then return false end
@@ -882,6 +978,7 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local function prepareHeader(view, state)
+        if not updateAdminAvailability(state) then return false end
         local _, buttonY, buttonHeight = firstButtonGeometry(view)
         if buttonY == nil or buttonHeight == nil then return false end
         local inset = buttonY + buttonHeight
@@ -975,18 +1072,38 @@ function Build42SkillsUi.create(dependencies)
             local leftCalled, leftWidth = pcall(measureText, state.statusLeftText)
             if contentLeft == nil or not leftCalled or not finite(leftWidth) or leftWidth < 0 then return false end
             local headerRight = contentLeft + leftWidth
+            local gapWidth = nil
             if state.statusRightText ~= nil then
-                local gapCalled, gapWidth = pcall(measureText, "  ")
+                local gapCalled, measuredGap = pcall(measureText, "  ")
                 local rightCalled, rightWidth = pcall(measureText, state.statusRightText)
-                if not gapCalled or not finite(gapWidth) or gapWidth < 0
+                if not gapCalled or not finite(measuredGap) or measuredGap < 0
                     or not rightCalled or not finite(rightWidth) or rightWidth < 0 then return false end
+                gapWidth = measuredGap
                 headerRight = headerRight + gapWidth + rightWidth
             end
-            requiredRight = math.max(requiredRight, headerRight)
             state.contentLeft = contentLeft
             state.statusLeft = contentLeft
-            state.statusRight = state.statusRightText ~= nil and requiredRight or nil
             state.statusY = y
+            if state.adminVisible then
+                if not ensureAdminButton(view, state) then return false end
+                if gapWidth == nil then
+                    local gapCalled, measuredGap = pcall(measureText, "  ")
+                    if not gapCalled or not finite(measuredGap) or measuredGap < 0 then return false end
+                    gapWidth = measuredGap
+                end
+                local buttonWidth = readNumber(state.adminButton, "getWidth")
+                local viewX = readNumber(view, "getX")
+                if buttonWidth == nil or buttonWidth <= 0 or viewX == nil then return false end
+                local adminRight = math.max(controlRight, headerRight + gapWidth + buttonWidth)
+                local buttonX = adminRight - buttonWidth
+                if not writeNumber(state.adminButton, "setX", viewX + buttonX)
+                    or not writeNumber(state.adminButton, "setY", state.baseY + y) then return false end
+                requiredRight = adminRight
+                state.statusRight = state.statusRightText ~= nil and buttonX - gapWidth or nil
+            else
+                requiredRight = math.max(requiredRight, headerRight)
+                state.statusRight = state.statusRightText ~= nil and requiredRight or nil
+            end
         else
             state.statusLeft, state.statusRight, state.statusY = nil, nil, nil
         end
@@ -1149,8 +1266,16 @@ function Build42SkillsUi.create(dependencies)
         return a, b, c
     end
 
+    local function ownsAdminIntegration()
+        if adminLauncher == nil then return true end
+        local called, value = pcall(adminStatus)
+        return called and type(value) == "table" and getmetatable(value) == nil
+            and rawget(value, "ok") == true and rawget(value, "installed") == true
+    end
+
     local function ownsHooks()
-        return rawget(characterInfo, "prerender") == wrappers.prerender
+        return ownsAdminIntegration()
+            and rawget(characterInfo, "prerender") == wrappers.prerender
             and rawget(characterInfo, "render") == wrappers.render
             and rawget(progressBar, "renderPerkRect") == wrappers.renderPerkRect
             and rawget(progressBar, "updateTooltip") == wrappers.updateTooltip
@@ -1165,6 +1290,12 @@ function Build42SkillsUi.create(dependencies)
             return retain("hook_ownership_lost", "Skills UI wrappers")
         end
         installAttempted = true
+        if adminLauncher ~= nil then
+            local adminCalled, adminResult = pcall(adminInstall)
+            if not adminCalled or not exactSuccess(adminResult) then
+                return retain("admin_launcher_install_failed", "adminLauncher.install")
+            end
+        end
         local listenerCalled, listenerResult = pcall(setClientStateListener, markSlotDirty)
         if not listenerCalled or not exactSuccess(listenerResult) then
             return retain("listener_install_failed", "owner.setClientStateListener")

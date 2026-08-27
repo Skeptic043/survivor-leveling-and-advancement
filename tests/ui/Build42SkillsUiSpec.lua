@@ -35,6 +35,7 @@ local translations = {
     IGUI_SLA_Reason_InsufficientAp = "Not enough AP.",
     IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
     IGUI_SLA_Reason_AllotmentCapacity = "This skill has reached its advancement limit.",
+    IGUI_SLA_Admin_Button = "Admin",
 }
 
 local function formatText(key, ...)
@@ -93,11 +94,17 @@ local function makeEnvironment(options)
         modelBuilds = 0,
         requests = { 0, 0, 0, 0 },
         adminRequests = 0,
-        adminStatusReads = 0,
+        launcherStatusReads = 0,
         progressionBuilds = 0,
         progressionDescribes = 0,
         progressionInspects = 0,
         buttonCreates = 0,
+        adminInstalls = 0,
+        adminStatusReads = 0,
+        adminAvailabilityReads = 0,
+        adminOpens = {},
+        adminAvailable = true,
+        adminInstalled = false,
         listenerSets = 0,
         listener = nil,
         prerenderGeometry = {},
@@ -172,13 +179,16 @@ local function makeEnvironment(options)
             target = target,
             onclick = onclick,
             enabled = true,
+            visible = true,
             tooltip = nil,
         }
         function button:initialise() self.initialised = true end
         function button:setEnable(value) self.enabled = value end
+        function button:setVisible(value) self.visible = value end
         function button:setTooltip(value) self.tooltip = value end
         function button:setBorderRGBA(r, g, b, a) self.border = { r, g, b, a } end
         function button:getWidth() return self.width end
+        function button:getHeight() return self.height end
         function button:setX(value) self.x = value end
         function button:setY(value) self.y = value end
         function button:click()
@@ -399,6 +409,29 @@ local function makeEnvironment(options)
         measureText = function(text) return #text * (evidence.measureScale or 1) end,
         smallFont = "small-font",
     }
+    if options.adminLauncher then
+        dependencies.adminLauncher = {
+            install = function()
+                evidence.adminInstalls = evidence.adminInstalls + 1
+                evidence.adminInstalled = true
+                return { ok = true }
+            end,
+            status = function()
+                evidence.launcherStatusReads = evidence.launcherStatusReads + 1
+                return { ok = true, installed = evidence.adminInstalled }
+            end,
+            isAvailable = function(slot)
+                evidence.adminAvailabilityReads = evidence.adminAvailabilityReads + 1
+                evidence.lastAdminAvailabilitySlot = slot
+                return evidence.adminAvailable
+            end,
+            open = function(slot)
+                evidence.adminOpens[#evidence.adminOpens + 1] = slot
+                return { ok = true }
+            end,
+        }
+        evidence.adminLauncher = dependencies.adminLauncher
+    end
     local created = Build42SkillsUi.create(dependencies)
     expect(created.ok, "integration creates")
     evidence.integration = created.integration
@@ -420,6 +453,7 @@ local function makeParent(width, height, ancestor, x, y)
         statusDraws = {},
         xScroll = 0,
         yScroll = 0,
+        children = {},
     }
     function parent:getX() return self.x end
     function parent:getY() return self.y end
@@ -427,6 +461,15 @@ local function makeParent(width, height, ancestor, x, y)
     function parent:getHeight() return self.height end
     function parent:setWidth(value) self.width = value end
     function parent:setHeight(value) self.height = value end
+    function parent:addChild(child)
+        self.children[#self.children + 1] = child
+        child.parent = self
+    end
+    function parent:removeChild(child)
+        for index = #self.children, 1, -1 do
+            if self.children[index] == child then table.remove(self.children, index) end
+        end
+    end
     function parent:drawText(text, drawX, drawY, r, g, b, a, font)
         if self.throwDraw then error("parent draw boom") end
         self.statusDraws[#self.statusDraws + 1] = {
@@ -570,7 +613,7 @@ end
 
 expect(type(Build42SkillsUi) == "table", "module loads")
 expect(type(Build42SkillsUi.create) == "function", "module exposes create")
-equal(SkillsUiBootstrapHarness, 19, "bootstrap harness checks")
+equal(SkillsUiBootstrapHarness, 24, "bootstrap harness checks")
 expect(C11CBootstrapFirst == rawget(_G, "__C11C_BOOTSTRAP_EVIDENCE").integration,
     "bootstrap returns integration")
 expect(C11CBootstrapReload == C11CBootstrapFirst, "reload returns exact integration")
@@ -1263,6 +1306,51 @@ vanillaThrowView.throwRender = true
 local renderOk = pcall(function() vanillaThrowView:render() end)
 expect(not renderOk, "vanilla render throw propagates")
 equal(vanillaThrowEnvironment.priorRender, 1, "throwing vanilla render called once")
+
+local invalidLauncherDependencies = {}
+for key, value in pairs(environment.dependencies) do invalidLauncherDependencies[key] = value end
+invalidLauncherDependencies.adminLauncher = {
+    install = function() return { ok = true } end,
+    status = function() return { ok = true, installed = true } end,
+    isAvailable = function() return true end,
+}
+local invalidLauncher = Build42SkillsUi.create(invalidLauncherDependencies)
+equal(invalidLauncher.ok, false, "incomplete admin launcher fails closed")
+equal(invalidLauncher.code, "invalid_dependencies", "incomplete admin launcher failure code")
+
+local adminEnvironment = makeEnvironment({ adminLauncher = true })
+equal(adminEnvironment.adminInstalls, 0, "admin launcher creation is inert")
+expect(adminEnvironment.integration.install().ok, "composite Skills and admin integration installs")
+equal(adminEnvironment.adminInstalls, 1, "composite install delegates to admin exactly once")
+expect(adminEnvironment.integration.install().ok, "composite reload install is idempotent")
+equal(adminEnvironment.adminInstalls, 1, "composite reload does not reinstall admin")
+local adminBar = makeBar(adminEnvironment, "Axe")
+local adminView = makeView(adminEnvironment, 2, { adminBar })
+adminView:prerender()
+adminView:render()
+equal(adminEnvironment.lastAdminAvailabilitySlot, 2, "launcher visibility preserves exact Skills slot")
+equal(#adminView.parent.children, 1, "one fixed-row admin button is created")
+local adminButton = adminView.parent.children[1]
+equal(adminButton.title, "Admin", "admin launcher uses localized compact label")
+expect(adminButton.visible and adminButton.enabled, "debug launcher is visible and enabled")
+local adminRight = lastDraw(adminView.statusDraws, "right")
+expect(adminRight ~= nil and adminRight.x < adminButton.x,
+    "Global slot label moves left of the native admin gap")
+adminButton:click()
+equal(#adminEnvironment.adminOpens, 1, "admin launcher activates once")
+equal(adminEnvironment.adminOpens[1], 2, "admin launcher activation preserves exact slot")
+adminEnvironment.adminAvailable = false
+adminView:prerender()
+expect(not adminButton.visible and not adminButton.enabled,
+    "launcher disappears and disables on the next visible prerender")
+adminButton:click()
+equal(#adminEnvironment.adminOpens, 1, "hidden launcher cannot activate")
+equal(adminEnvironment.adminRequests, 0, "Skills launcher never calls lifecycle admin request")
+equal(adminEnvironment.adminStatusReads, 0, "Skills launcher never reads lifecycle admin status")
+adminEnvironment.adminInstalled = false
+local lostAdminHook = adminEnvironment.integration.install()
+equal(lostAdminHook.ok, false, "lost admin hook ownership fails composite closed")
+equal(lostAdminHook.code, "hook_ownership_lost", "lost admin ownership code")
 
 equal(environment.adminRequests, 0, "Skills UI never calls admin request")
 equal(environment.adminStatusReads, 0, "Skills UI never reads admin status")

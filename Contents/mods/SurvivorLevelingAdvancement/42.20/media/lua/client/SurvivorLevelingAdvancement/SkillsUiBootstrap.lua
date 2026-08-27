@@ -1,6 +1,10 @@
 require "XpSystem/ISUI/ISCharacterInfo"
 require "XpSystem/ISUI/ISSkillProgressBar"
 require "ISUI/ISButton"
+require "ISUI/ISTextEntryBox"
+require "ISUI/ISCollapsableWindowJoypad"
+require "ISUI/AdminPanel/ISMiniScoreboardUI"
+require "ISUI/ISContextMenu"
 
 local SENTINEL_KEY = "__SLA_Build42SkillsUi_42_20_v1"
 local SENTINEL_SIGNATURE = "sla.build42-skills-ui/42.20/v1"
@@ -53,11 +57,35 @@ end
 
 local lifecycle = require "SurvivorLevelingAdvancement/Bootstrap"
 local Build42SkillsUi = require "SurvivorLevelingAdvancement/UI/Build42SkillsUi"
+local Build42AdminUi = require "SurvivorLevelingAdvancement/UI/Build42AdminUi"
 local SkillsViewModel = require "SurvivorLevelingAdvancement/UI/SkillsViewModel"
 local Build42WorldSettingsProvider = require "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider"
 local ClientOwnerState = require "SurvivorLevelingAdvancement/Runtime/ClientOwnerState"
 local Allotment = require "SurvivorLevelingAdvancement/Core/Allotment"
 local VanillaProgressionAdapter = require "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter"
+
+local adminCalled, adminCreated = pcall(Build42AdminUi.create, {
+    owner = lifecycle,
+    ISMiniScoreboardUI = ISMiniScoreboardUI,
+    ISCollapsableWindowJoypad = ISCollapsableWindowJoypad,
+    ISTextEntryBox = ISTextEntryBox,
+    ISButton = ISButton,
+    canSeePlayersStats = Capability.CanSeePlayersStats,
+    getPlayerContextMenu = function(playerNum) return getPlayerContextMenu(playerNum) end,
+    isServer = function() return isServer() end,
+    isClient = function() return isClient() end,
+    isDebugEnabled = function() return isDebugEnabled() end,
+    getText = function(key, ...) return getText(key, ...) end,
+    viewport = function(playerNum)
+        return getPlayerScreenLeft(playerNum), getPlayerScreenTop(playerNum),
+            getPlayerScreenWidth(playerNum), getPlayerScreenHeight(playerNum)
+    end,
+    smallFont = UIFont.Small,
+})
+if not adminCalled or type(adminCreated) ~= "table" or rawget(adminCreated, "ok") ~= true
+    or type(rawget(adminCreated, "integration")) ~= "table" then
+    return failure("admin_ui_create_failed", "Build42AdminUi.create")
+end
 
 local providerCalled, providerResult = pcall(Build42WorldSettingsProvider.create, {
     readSandboxVars = function() return SandboxVars end,
@@ -88,6 +116,7 @@ local createCalled, created = pcall(Build42SkillsUi.create, {
     getText = function(key, ...) return getText(key, ...) end,
     measureText = function(text) return getTextManager():MeasureStringX(UIFont.Small, text) end,
     smallFont = UIFont.Small,
+    adminLauncher = adminCreated.integration,
 })
 if not createCalled or type(created) ~= "table" or rawget(created, "ok") ~= true
     or not validIntegration(rawget(created, "integration")) then

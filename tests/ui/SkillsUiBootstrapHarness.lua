@@ -8,11 +8,15 @@ local function check(condition, message)
 end
 
 if evidence == nil then
-    evidence = { checks = 0, requires = {}, creates = 0, installs = 0, phase = 1 }
+    evidence = { checks = 0, requires = {}, creates = 0, installs = 0, adminCreates = 0, phase = 1 }
     rawset(_G, "__C11C_BOOTSTRAP_EVIDENCE", evidence)
     evidence.characterInfo = {}
     evidence.progressBar = {}
     evidence.button = {}
+    evidence.entry = {}
+    evidence.window = {}
+    evidence.scoreboard = {}
+    evidence.capability = { CanSeePlayersStats = {} }
     evidence.smallFont = {}
     evidence.sandboxVars = { SurvivorLevelingAdvancement = {} }
     evidence.owner = {
@@ -34,6 +38,19 @@ if evidence == nil then
     evidence.integration = {
         install = function() evidence.installs = evidence.installs + 1; return { ok = true } end,
         status = function() return { ok = true, installed = true } end,
+    }
+    evidence.adminIntegration = {
+        install = function() return { ok = true } end,
+        status = function() return { ok = true, installed = true } end,
+        isAvailable = function() return false end,
+        open = function() return { ok = false, code = "unavailable", detail = "unavailable" } end,
+    }
+    evidence.adminUi = {
+        create = function(dependencies)
+            evidence.adminCreates = evidence.adminCreates + 1
+            evidence.adminDependencies = dependencies
+            return { ok = true, integration = evidence.adminIntegration }
+        end,
     }
     evidence.skillsUi = {
         create = function(dependencies)
@@ -58,6 +75,7 @@ if evidence == nil then
         evidence.requires[path] = (evidence.requires[path] or 0) + 1
         if path == "SurvivorLevelingAdvancement/Bootstrap" then return evidence.owner end
         if path == "SurvivorLevelingAdvancement/UI/Build42SkillsUi" then return evidence.skillsUi end
+        if path == "SurvivorLevelingAdvancement/UI/Build42AdminUi" then return evidence.adminUi end
         if path == "SurvivorLevelingAdvancement/UI/SkillsViewModel" then return evidence.skillsViewModel end
         if path == "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider" then return evidence.settingsFactory end
         if path == "SurvivorLevelingAdvancement/Runtime/ClientOwnerState" then return evidence.clientOwnerState end
@@ -68,16 +86,29 @@ if evidence == nil then
     ISCharacterInfo = evidence.characterInfo
     ISSkillProgressBar = evidence.progressBar
     ISButton = evidence.button
+    ISTextEntryBox = evidence.entry
+    ISCollapsableWindowJoypad = evidence.window
+    ISMiniScoreboardUI = evidence.scoreboard
+    Capability = evidence.capability
     UIFont = { Small = evidence.smallFont }
     SandboxVars = evidence.sandboxVars
     getTimestampMs = function() return 4321 end
+    getPlayerContextMenu = function(slot) return { slot = slot } end
+    isServer = function() return false end
+    isClient = function() return false end
+    isDebugEnabled = function() return true end
+    getPlayerScreenLeft = function(slot) evidence.viewportSlot = slot; return 100 end
+    getPlayerScreenTop = function(slot) evidence.viewportSlot = slot; return 50 end
+    getPlayerScreenWidth = function(slot) evidence.viewportSlot = slot; return 800 end
+    getPlayerScreenHeight = function(slot) evidence.viewportSlot = slot; return 500 end
     getText = function(name) return name end
     getTextManager = function()
         return { MeasureStringX = function(_, _, text) return #text end }
     end
     rawset(_G, key, nil)
 elseif evidence.phase == 1 then
-    check(evidence.creates == 1 and evidence.installs == 1, "first load creates and installs once")
+    check(evidence.creates == 1 and evidence.adminCreates == 1
+        and evidence.installs == 1, "first load creates both integrations and installs composite once")
     check(rawget(_G, key).signature == signature
         and rawget(_G, key).integration == evidence.integration, "exact sentinel payload")
     check(evidence.dependencies.ISCharacterInfo == evidence.characterInfo
@@ -91,6 +122,24 @@ elseif evidence.phase == 1 then
         and evidence.dependencies.clockMillis() == 4321
         and evidence.dependencies.getText("copy") == "copy"
         and evidence.dependencies.measureText("abcd") == 4, "exact UI capabilities")
+    check(evidence.dependencies.adminLauncher == evidence.adminIntegration,
+        "Skills integration receives exact admin launcher")
+    check(evidence.adminDependencies.owner == evidence.owner
+        and evidence.adminDependencies.ISMiniScoreboardUI == evidence.scoreboard
+        and evidence.adminDependencies.ISCollapsableWindowJoypad == evidence.window
+        and evidence.adminDependencies.ISTextEntryBox == evidence.entry
+        and evidence.adminDependencies.ISButton == evidence.button,
+        "admin adapter receives exact owner and UI classes")
+    check(evidence.adminDependencies.canSeePlayersStats == evidence.capability.CanSeePlayersStats
+        and evidence.adminDependencies.getPlayerContextMenu(2).slot == 2
+        and evidence.adminDependencies.isServer() == false
+        and evidence.adminDependencies.isClient() == false
+        and evidence.adminDependencies.isDebugEnabled() == true,
+        "admin adapter receives exact global capabilities")
+    local viewportLeft, viewportTop, viewportWidth, viewportHeight = evidence.adminDependencies.viewport(2)
+    check(viewportLeft == 100 and viewportTop == 50
+        and viewportWidth == 800 and viewportHeight == 500 and evidence.viewportSlot == 2,
+        "admin adapter receives exact slot-local viewport capability")
     check(evidence.modelDependencies.ClientOwnerState == evidence.clientOwnerState
         and evidence.modelDependencies.Allotment == evidence.allotment, "view-model dependencies")
     check(evidence.providerDependencies.readSandboxVars() == evidence.sandboxVars,
@@ -99,10 +148,12 @@ elseif evidence.phase == 1 then
         and rawget(evidence.dependencies, "players") == nil, "no event or player surface")
     evidence.phase = 2
 elseif evidence.phase == 2 then
-    check(evidence.creates == 1 and evidence.installs == 2, "reload reuses integration")
+    check(evidence.creates == 1 and evidence.adminCreates == 1
+        and evidence.installs == 2, "reload reuses composite integration")
     local modulePaths = {
         "SurvivorLevelingAdvancement/Bootstrap",
         "SurvivorLevelingAdvancement/UI/Build42SkillsUi",
+        "SurvivorLevelingAdvancement/UI/Build42AdminUi",
         "SurvivorLevelingAdvancement/UI/SkillsViewModel",
         "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider",
         "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
