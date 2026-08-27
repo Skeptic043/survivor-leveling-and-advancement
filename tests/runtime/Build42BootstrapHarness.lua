@@ -18,6 +18,8 @@ if evidence == nil then
         setClientStateListener = function() return { ok = true } end,
         requestAdvancement = function() return { ok = false } end,
         advancementStatus = function() return { ok = true, pending = false } end,
+        requestAdmin = function() return { ok = false } end,
+        adminStatus = function() return { ok = true, pending = false } end,
     }
     evidence.owner = owner
     evidence.runtimeFactory = {}
@@ -25,6 +27,8 @@ if evidence == nil then
     evidence.advancementSession = {}
     evidence.adminSession = {}
     evidence.advancementTransport = {}
+    evidence.adminTransport = {}
+    evidence.adminBoundary = {}
     local lifecycle = {
         create = function(argument)
             evidence.creates = evidence.creates + 1
@@ -41,6 +45,8 @@ if evidence == nil then
         if path == "SurvivorLevelingAdvancement/Runtime/AdvancementSession" then return evidence.advancementSession end
         if path == "SurvivorLevelingAdvancement/Runtime/AdminSession" then return evidence.adminSession end
         if path == "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport" then return evidence.advancementTransport end
+        if path == "SurvivorLevelingAdvancement/Runtime/Build42AdminTransport" then return evidence.adminTransport end
+        if path == "SurvivorLevelingAdvancement/Adapters/Build42AdminBoundary" then return evidence.adminBoundary end
         return {}
     end
     evidence.perkFactory, evidence.perks, evidence.options, evidence.vars, evidence.math = {}, {}, {}, {}, {}
@@ -59,6 +65,8 @@ elseif evidence.phase == 1 then
     check(evidence.created.modules.AdvancementSession == evidence.advancementSession, "exact advancement session factory")
     check(evidence.created.modules.AdminSession == evidence.adminSession, "exact admin session factory")
     check(evidence.created.modules.Build42AdvancementTransport == evidence.advancementTransport, "exact advancement transport factory")
+    check(evidence.created.modules.Build42AdminTransport == evidence.adminTransport, "exact admin transport factory")
+    check(evidence.created.modules.Build42AdminBoundary == evidence.adminBoundary, "exact admin boundary factory")
     check(evidence.created.globals == _G, "bootstrap passes exact global table")
     local originalAddXp = addXp
     local replacementAddXp = function() end
@@ -67,9 +75,11 @@ elseif evidence.phase == 1 then
     addXp = originalAddXp
     check(evidence.owner.modules == nil and type(rawget(_G, key).owner.status) == "function"
         and type(rawget(_G, key).owner.refreshOwner) == "function"
-        and type(rawget(_G, key).owner.setClientStateListener) == "function", "no dependencies exposed")
+        and type(rawget(_G, key).owner.setClientStateListener) == "function"
+        and type(rawget(_G, key).owner.requestAdmin) == "function"
+        and type(rawget(_G, key).owner.adminStatus) == "function", "no dependencies exposed")
     local required = {
-        "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
+        "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdminTransport", "SurvivorLevelingAdvancement/Adapters/Build42AdminBoundary", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
         "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog", "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter", "SurvivorLevelingAdvancement/Adapters/Build42NormalizationSnapshot", "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider", "SurvivorLevelingAdvancement/Adapters/Build42SandboxMultiplier", "SurvivorLevelingAdvancement/Adapters/Build42XpPositionArithmetic",
         "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/Core/PostMax", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/AccountingMode", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Runtime/AdvancementSession", "SurvivorLevelingAdvancement/Runtime/AdminSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
     }
@@ -81,7 +91,7 @@ elseif evidence.phase == 2 then
     rawset(_G, key, { signature = signature, owner = {
         install = function() error("install boom") end, status = function() end, clientState = function() end,
         refreshOwner = function() end, setClientStateListener = function() end,
-        requestAdvancement = function() end, advancementStatus = function() end,
+        requestAdvancement = function() end, advancementStatus = function() end, requestAdmin = function() end, adminStatus = function() end,
     } })
     evidence.phase = 3
 elseif evidence.phase == 3 then
@@ -89,7 +99,7 @@ elseif evidence.phase == 3 then
     rawset(_G, key, { signature = signature, owner = {
         install = function() return "bad" end, status = function() end, clientState = function() end,
         refreshOwner = function() end, setClientStateListener = function() end,
-        requestAdvancement = function() end, advancementStatus = function() end,
+        requestAdvancement = function() end, advancementStatus = function() end, requestAdmin = function() end, adminStatus = function() end,
     } })
     evidence.phase = 4
 elseif evidence.phase == 4 then
@@ -103,7 +113,7 @@ elseif evidence.phase == 5 then
     rawset(_G, key, { signature = signature, owner = {
         install = function() return { ok = true } end, status = function() end, clientState = function() end,
         refreshOwner = function() end, setClientStateListener = function() end,
-        requestAdvancement = function() end, advancementStatus = function() end, dependencies = {},
+        requestAdvancement = function() end, advancementStatus = function() end, requestAdmin = function() end, adminStatus = function() end, dependencies = {},
     } })
     evidence.phase = 6
 elseif evidence.phase == 6 then

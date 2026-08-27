@@ -46,8 +46,14 @@ local function fixture(server, client, configure)
             }
         end,
     }
+    local adminSession = {
+        inspect = function(player) calls[#calls + 1] = { "admin_inspect", player }; return { ok = true } end,
+        request = function(player, request) calls[#calls + 1] = { "admin_session_request", player, request }; return { ok = true } end,
+    }
     local source = { install = function() calls[#calls + 1] = { "install_source" }; return { ok = true } end }
-    local runtime = { catalog = {}, services = { xpSource = source, ownerSession = session, advancementSession = advancementSession } }
+    local runtime = { catalog = {}, services = {
+        xpSource = source, ownerSession = session, advancementSession = advancementSession, adminSession = adminSession,
+    } }
     local localClient = {
         ready = function(slot, player) calls[#calls + 1] = { "client_ready", slot, player }; return { ok = true } end,
         refresh = function(slot, player) calls[#calls + 1] = { "client_refresh", slot, player }; return { ok = true } end,
@@ -61,6 +67,7 @@ local function fixture(server, client, configure)
     local serverTransport = {
         handle = function(module, command, player, args) calls[#calls + 1] = { "server_handle", module, command, player, args }; return { ok = true, handled = true } end,
         clearPlayer = function() return { ok = true } end,
+        publish = function(player) calls[#calls + 1] = { "owner_publish", player }; return { ok = true } end,
     }
     local advancementServer = {
         handle = function(module, command, player, args) calls[#calls + 1] = { "adv_server_handle", module, command, player, args }; return { ok = true, handled = true } end,
@@ -78,7 +85,28 @@ local function fixture(server, client, configure)
         resetSlot = function(slot) calls[#calls + 1] = { "adv_reset_slot", slot }; return { ok = true } end,
         reset = function() calls[#calls + 1] = { "adv_reset" }; return { ok = true } end,
     }
+    local adminServer = {
+        handle = function(module, command, player, args) calls[#calls + 1] = { "admin_server_handle", module, command, player, args }; return { ok = true, handled = true } end,
+    }
+    local adminClient = {
+        request = function(slot, player, request) calls[#calls + 1] = { "admin_request", slot, player, request }; return { ok = true, requestId = "admin:1" } end,
+        handle = function(module, command, args)
+            calls[#calls + 1] = { "admin_handle", module, command, args }
+            return { ok = true, handled = true, localSlot = 0, result = {
+                ok = true, requestId = "admin:1", operation = "inspect", target = { onlineId = 4, username = "Target" },
+                outcome = "inspected", summary = {
+                    accountingMode = "Tracked", revision = 0, level = 0, xpIntoLevel = 0,
+                    xpForNextLevel = 100, spent = 0, availableAp = 0,
+                },
+            } }
+        end,
+        status = function() return { ok = true, pending = false } end,
+        resetSlot = function(slot) calls[#calls + 1] = { "admin_reset_slot", slot }; return { ok = true } end,
+        reset = function() calls[#calls + 1] = { "admin_reset" }; return { ok = true } end,
+    }
+    local adminBoundary = { authorizeAndResolve = function() return { ok = false } end }
     local factoryCalls, clientCreates, serverCreates, advancementClientCreates, advancementServerCreates = 0, 0, 0, 0, 0
+    local adminClientCreates, adminServerCreates, adminBoundaryCreates = 0, 0, 0
     local validator = function(snapshot)
         local copy = {}
         for key, value in pairs(snapshot) do if key ~= "private" then copy[key] = value end end
@@ -94,6 +122,13 @@ local function fixture(server, client, configure)
             createClient = function(argument) advancementClientCreates = advancementClientCreates + 1; calls[#calls + 1] = { "create_adv_client", argument }; return { ok = true, client = advancementClient } end,
             createServer = function(argument) advancementServerCreates = advancementServerCreates + 1; calls[#calls + 1] = { "create_adv_server", argument }; return { ok = true, server = advancementServer } end,
         },
+        Build42AdminTransport = {
+            createClient = function(argument) adminClientCreates = adminClientCreates + 1; calls[#calls + 1] = { "create_admin_client", argument }; return { ok = true, client = adminClient } end,
+            createServer = function(argument) adminServerCreates = adminServerCreates + 1; calls[#calls + 1] = { "create_admin_server", argument }; return { ok = true, server = adminServer } end,
+        },
+        Build42AdminBoundary = {
+            create = function(argument) adminBoundaryCreates = adminBoundaryCreates + 1; calls[#calls + 1] = { "create_admin_boundary", argument }; return { ok = true, boundary = adminBoundary } end,
+        },
         ClientOwnerState = { create = function() end, validate = validator },
     }
     local globals = {
@@ -102,13 +137,19 @@ local function fixture(server, client, configure)
         isClient = function() calls[#calls + 1] = { "isClient" }; return client end,
         sendClientCommand = function() end,
         sendServerCommand = function() end,
+        Capability = { CanSeePlayersStats = "inspect", CanModifyPlayerStatsInThePlayerStatsUI = "mutate" },
+        getPlayerByOnlineID = function() end,
+        writeLog = function(name, line) calls[#calls + 1] = { "write_log", name, line } end,
     }
-    if configure ~= nil then configure({ modules = modules, globals = globals, localClient = localClient, session = session, advancementSession = advancementSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer }) end
+    if configure ~= nil then configure({ modules = modules, globals = globals, localClient = localClient, session = session, advancementSession = advancementSession, adminSession = adminSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
     local created = Build42Lifecycle.create({ modules = modules, globals = globals })
     return created, { calls = calls, events = events, modules = modules, globals = globals, session = session, source = source, runtime = runtime, localClient = localClient, serverTransport = serverTransport,
         advancementSession = advancementSession, advancementClient = advancementClient, advancementServer = advancementServer,
+        adminSession = adminSession, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary,
         factoryCalls = function() return factoryCalls end, clientCreates = function() return clientCreates end, serverCreates = function() return serverCreates end,
-        advancementClientCreates = function() return advancementClientCreates end, advancementServerCreates = function() return advancementServerCreates end, validator = validator }
+        advancementClientCreates = function() return advancementClientCreates end, advancementServerCreates = function() return advancementServerCreates end,
+        adminClientCreates = function() return adminClientCreates end, adminServerCreates = function() return adminServerCreates end,
+        adminBoundaryCreates = function() return adminBoundaryCreates end, validator = validator }
 end
 
 do
@@ -118,7 +159,8 @@ do
         install = true, status = true, clientState = true,
         refreshOwner = true, setClientStateListener = true,
         requestAdvancement = true, advancementStatus = true,
-    }, 7, "exact owner API")
+        requestAdmin = true, adminStatus = true,
+    }, 9, "exact owner API")
     eq(f.clientCreates(), 0, "server creates no client transport")
     eq(f.factoryCalls(), 0, "server construction is inert")
     eq(f.events.OnServerStarted.adds(), 0, "server construction registers no event")
@@ -301,8 +343,9 @@ do
     f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", { ok = true })
     eq(f.calls[#f.calls][1], "client_handle", "client response delegated")
     f.events.OnDisconnect.fire()
-    eq(f.calls[#f.calls - 1][1], "client_reset", "disconnect resets owner client")
-    eq(f.calls[#f.calls][1], "adv_reset", "disconnect resets advancement client")
+    eq(f.calls[#f.calls - 2][1], "client_reset", "disconnect resets owner client")
+    eq(f.calls[#f.calls - 1][1], "adv_reset", "disconnect resets advancement client")
+    eq(f.calls[#f.calls][1], "admin_reset", "disconnect resets admin client")
     local view, count = created.owner.clientState(0), 0
     for key in pairs(view) do count = count + 1; yes(key == "ok" or key == "present", "client state allowlist") end
     eq(count, 2, "client state delegates only its public view")
@@ -407,6 +450,24 @@ do
     created.owner.install(); f.events.OnServerStarted.fire()
     f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "advancementRequest", {}, {})
     eq(created.owner.status().failure, nil, "valid untrusted request rejection does not poison server")
+
+    created, f = fixture(true, false, function(values)
+        values.serverTransport.handle = function()
+            return { ok = false, code = "invalid_request", detail = "request", committed = false }
+        end
+    end)
+    created.owner.install(); f.events.OnServerStarted.fire()
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", {}, {})
+    eq(created.owner.status().failure.code, "invalid_request", "owner committed rejection is retained")
+
+    created, f = fixture(true, false, function(values)
+        values.advancementServer.handle = function()
+            return { ok = false, code = "invalid_request", detail = "request", committed = false }
+        end
+    end)
+    created.owner.install(); f.events.OnServerStarted.fire()
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "advancementRequest", {}, {})
+    eq(created.owner.status().failure.code, "invalid_request", "advancement committed rejection is retained")
 end
 
 do
@@ -757,8 +818,9 @@ do
     f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "advancementResult", {})
     eq(f.calls[#f.calls][1], "adv_handle", "captured advancement response handler runs")
     f.events.OnDisconnect.fire()
-    eq(f.calls[#f.calls - 1][1], "client_reset", "captured owner reset runs")
-    eq(f.calls[#f.calls][1], "adv_reset", "captured advancement reset runs")
+    eq(f.calls[#f.calls - 2][1], "client_reset", "captured owner reset runs")
+    eq(f.calls[#f.calls - 1][1], "adv_reset", "captured advancement reset runs")
+    eq(f.calls[#f.calls][1], "admin_reset", "captured admin reset runs")
     eq(created.owner.status().failure, nil, "captured client endpoint callables remain valid")
 end
 
@@ -863,6 +925,186 @@ do
     local unbound = created.owner.refreshOwner(0)
     eq(unbound.code, "not_bound", "valid unbound refresh is returned")
     eq(created.owner.status().failure, nil, "valid unbound refresh does not poison lifecycle")
+end
+
+do
+    local created, f = fixture(true, false)
+    yes(created.owner.install().ok, "admin server installs existing events")
+    f.events.OnServerStarted.fire()
+    eq(f.adminBoundaryCreates(), 1, "one admin boundary after startup")
+    eq(f.adminServerCreates(), 1, "one admin server after boundary")
+    eq(f.adminClientCreates(), 0, "server creates no admin client")
+    eq(f.calls[7][1], "create_admin_boundary", "admin boundary follows existing server endpoints")
+    eq(f.calls[8][1], "create_admin_server", "admin server follows boundary")
+    local boundary = f.calls[7][2]
+    eq(boundary.Capability, f.globals.Capability, "boundary gets captured capability")
+    eq(boundary.getPlayerByOnlineID, f.globals.getPlayerByOnlineID, "boundary gets captured lookup")
+    local server = f.calls[8][2]
+    eq(server.adminBoundary, f.adminBoundary, "admin server gets exact boundary")
+    eq(server.adminSession, f.adminSession, "admin server gets composed admin session")
+    eq(server.ownerPublisher, f.serverTransport, "admin server gets exact owner publisher")
+    eq(server.sendServerCommand, f.globals.sendServerCommand, "admin server gets captured sender")
+    local actor, args = {}, {}
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "adminRequest", actor, args)
+    eq(f.calls[#f.calls][1], "admin_server_handle", "admin command exact-dispatched")
+    eq(f.calls[#f.calls][4], actor, "admin dispatch preserves callback actor")
+    eq(f.calls[#f.calls][5], args, "admin dispatch preserves callback args")
+    local before = #f.calls
+    f.events.OnClientCommand.fire("Other", "adminRequest", actor, args)
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "other", actor, args)
+    eq(#f.calls, before, "foreign and unknown admin traffic ignored")
+    eq(created.owner.requestAdmin(0, {}).code, "admin_unavailable", "server admin request unavailable")
+    eq(created.owner.adminStatus(0).code, "admin_unavailable", "server admin status unavailable")
+end
+
+do
+    local created, f = fixture(true, false, function(values)
+        values.adminServer.handle = function()
+            return { ok = false, code = "invalid_request", detail = "request", committed = false }
+        end
+    end)
+    created.owner.install(); f.events.OnServerStarted.fire()
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "adminRequest", {}, {})
+    eq(created.owner.status().failure, nil, "ordinary admin request rejection is contained")
+
+    created, f = fixture(true, false, function(values)
+        values.adminServer.handle = function() return { ok = true, handled = true, private = true } end
+    end)
+    created.owner.install(); f.events.OnServerStarted.fire()
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "adminRequest", {}, {})
+    eq(created.owner.status().failure.code, "admin_server_handle_invalid", "malformed admin endpoint retained")
+end
+
+do
+    local audit, writerCalls = nil, {}
+    local created, f = fixture(true, false, function(values)
+        values.modules.Build42AdminTransport.createServer = function(argument)
+            audit = argument.audit
+            return { ok = true, server = values.adminServer }
+        end
+        values.globals.writeLog = function(name, line) writerCalls[#writerCalls + 1] = { name, line } end
+    end)
+    created.owner.install(); f.events.OnServerStarted.fire()
+    local actor = { getUsername = function() return "Jos" .. string.char(195) .. string.char(169) end }
+    local target = { onlineId = 77, username = "T" .. string.char(195) .. string.char(169) .. "st" }
+    yes(audit.record(actor, target, "awardSurvivorXp", "committed").ok, "audit accepts exact committed call")
+    eq(#writerCalls, 1, "audit writes once")
+    eq(writerCalls[1][1], "admin", "audit uses admin logger")
+    eq(writerCalls[1][2], "SLA admin actor=" .. actor:getUsername() .. " operation=awardSurvivorXp target="
+        .. target.username .. " onlineId=77", "audit line is exact and bounded")
+    no(audit.record({ getUsername = function() return "bad\nname" end }, target, "awardSurvivorXp", "committed").ok,
+        "audit rejects actor C0")
+    no(audit.record({ getUsername = function() return "bad" .. string.char(127) end }, target, "awardSurvivorXp", "committed").ok,
+        "audit rejects actor DEL")
+    no(audit.record(actor, { onlineId = 77, username = "bad\nname" }, "awardSurvivorXp", "committed").ok,
+        "audit rejects target C0")
+    no(audit.record(actor, { onlineId = 77, username = "bad" .. string.char(127) }, "awardSurvivorXp", "committed").ok,
+        "audit rejects target DEL")
+    no(audit.record(actor, target, "inspect", "committed").ok, "audit rejects nonmutation")
+    no(audit.record(actor, target, "awardSurvivorXp", "other").ok, "audit rejects noncommitted outcome")
+    no(audit.record(actor, target, "awardSurvivorXp", "committed", { amount = 125, summary = {} }).ok,
+        "audit rejects payload argument")
+    eq(#writerCalls, 1, "rejected audit calls do not log or leak payload")
+    local failedAudit = nil
+    created, f = fixture(true, false, function(values)
+        values.modules.Build42AdminTransport.createServer = function(argument)
+            failedAudit = argument.audit
+            return { ok = true, server = values.adminServer }
+        end
+        values.globals.writeLog = function() error("writer boom") end
+    end)
+    created.owner.install(); f.events.OnServerStarted.fire()
+    no(failedAudit.record(actor, target, "awardSurvivorLevels", "committed").ok, "captured audit writer failure is bounded")
+end
+
+do
+    local created, f = fixture(false, true)
+    eq(f.adminClientCreates(), 1, "multiplayer creates one admin client")
+    yes(created.owner.install().ok, "admin client installs existing events")
+    local players = { {}, {}, {}, {} }
+    for slot = 0, 3 do
+        f.events.OnCreatePlayer.fire(slot, players[slot + 1])
+        local result = created.owner.requestAdmin(slot, { operation = "inspect", target = { onlineId = slot, username = "Target" } })
+        yes(result.ok, "admin request delegates slot " .. slot)
+        eq(f.calls[#f.calls][1], "admin_request", "admin request invoked once " .. slot)
+        eq(f.calls[#f.calls][2], slot, "admin request keeps slot " .. slot)
+        eq(f.calls[#f.calls][3], players[slot + 1], "admin request keeps actor identity " .. slot)
+    end
+    local before = #f.calls
+    f.events.OnServerCommand.fire("Other", "adminResult", {})
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "other", {})
+    eq(#f.calls, before, "foreign admin results ignored")
+    local notices = {}
+    created.owner.setClientStateListener(function(slot, kind) notices[#notices + 1] = { slot, kind } end)
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "adminResult", {})
+    eq(f.calls[#f.calls][1], "admin_handle", "admin result exact-dispatched")
+    eq(notices[#notices][1], 0, "admin terminal keeps transport slot")
+    eq(notices[#notices][2], "admin_terminal", "admin terminal notifies listener")
+end
+
+do
+    local statusSource = {
+        ok = true, pending = false, result = {
+            ok = true, requestId = "admin:3", operation = "awardSurvivorXp", target = { onlineId = 8, username = "Target" },
+            outcome = "rejected", code = "stale_revision", detail = "revision",
+            summary = { accountingMode = "Tracked", revision = 9, level = 5, xpIntoLevel = 2, xpForNextLevel = 100, spent = 2, availableAp = 3 },
+        },
+    }
+    local created, f = fixture(false, true, function(values)
+        values.adminClient.status = function() return statusSource end
+        values.adminClient.request = function() return { ok = false, code = "invalid_request", detail = "request" } end
+    end)
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    eq(created.owner.requestAdmin(0, {}).code, "invalid_request", "valid admin client rejection is returned")
+    eq(created.owner.status().failure, nil, "valid admin rejection does not poison lifecycle")
+    local view = created.owner.adminStatus(0)
+    eq(view.result.code, "stale_revision", "admin status delegates terminal")
+    no(view.result == statusSource.result, "admin terminal status is detached")
+    view.result.target.username = "mutated"
+    eq(created.owner.adminStatus(0).result.target.username, "Target", "admin status detachment is stable")
+end
+
+do
+    local resetOwner, resetAdvancement, resetAdmin = 0, 0, 0
+    local created, f = fixture(false, true, function(values)
+        values.localClient.reset = function() resetOwner = resetOwner + 1; error("owner reset") end
+        values.advancementClient.reset = function() resetAdvancement = resetAdvancement + 1; return { ok = true } end
+        values.adminClient.reset = function() resetAdmin = resetAdmin + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.events.OnCreatePlayer.fire(1, {})
+    f.events.OnDisconnect.fire()
+    eq(resetOwner, 1, "disconnect attempts owner reset before failures")
+    eq(resetAdvancement, 1, "disconnect continues advancement reset")
+    eq(resetAdmin, 1, "disconnect continues admin reset")
+    eq(created.owner.requestAdmin(1, {}).code, "player_not_ready", "disconnect clears admin player route")
+
+    created, f = fixture(false, false)
+    eq(created.owner.requestAdmin(0, {}).code, "admin_unavailable", "SP admin request unavailable")
+    eq(created.owner.adminStatus(0).code, "admin_unavailable", "SP admin status unavailable")
+    eq(f.adminClientCreates(), 0, "SP creates no admin client")
+end
+
+do
+    local advancementResets, adminResets, readyCalls = 0, 0, 0
+    local created, f = fixture(false, true, function(values)
+        values.advancementClient.resetSlot = function() advancementResets = advancementResets + 1; error("advancement reset") end
+        values.adminClient.resetSlot = function() adminResets = adminResets + 1; return { ok = true } end
+        values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
+    end)
+    created.owner.install(); f.events.OnCreatePlayer.fire(2, {})
+    eq(advancementResets, 1, "failed advancement reset is attempted once")
+    eq(adminResets, 1, "admin reset still follows failed advancement reset")
+    eq(readyCalls, 0, "failed request reset blocks owner ready")
+    eq(created.owner.status().failure.code, "advancement_slot_reset_invalid", "first slot reset failure retained")
+
+    created, f = fixture(false, true, function(values)
+        values.adminClient.request = function()
+            return { ok = false, code = "send_failed", detail = "sendClientCommand", committed = true }
+        end
+    end)
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    eq(created.owner.requestAdmin(0, {}).code, "admin_request_invalid", "committed client request is malformed")
+    eq(created.owner.status().failure.code, "admin_request_invalid", "committed client request is retained")
 end
 
 local bootstrapEvidence = rawget(_G, "__C10T_BOOTSTRAP_EVIDENCE")

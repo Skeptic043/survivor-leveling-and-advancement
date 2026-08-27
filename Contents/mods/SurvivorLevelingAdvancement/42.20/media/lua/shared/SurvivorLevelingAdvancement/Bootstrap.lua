@@ -20,6 +20,8 @@ local function validSentinel(value)
         setClientStateListener = true,
         requestAdvancement = true,
         advancementStatus = true,
+        requestAdmin = true,
+        adminStatus = true,
     }
     for key in pairs(owner) do if type(key) ~= "string" or not ownerAllowed[key] then return false end end
     return type(rawget(owner, "install")) == "function"
@@ -29,6 +31,8 @@ local function validSentinel(value)
         and type(rawget(owner, "setClientStateListener")) == "function"
         and type(rawget(owner, "requestAdvancement")) == "function"
         and type(rawget(owner, "advancementStatus")) == "function"
+        and type(rawget(owner, "requestAdmin")) == "function"
+        and type(rawget(owner, "adminStatus")) == "function"
 end
 
 local function installOwner(owner)
@@ -53,6 +57,8 @@ local modules = {
     Build42RuntimeFactory = require "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory",
     Build42OwnerTransport = require "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport",
     Build42AdvancementTransport = require "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport",
+    Build42AdminTransport = require "SurvivorLevelingAdvancement/Runtime/Build42AdminTransport",
+    Build42AdminBoundary = require "SurvivorLevelingAdvancement/Adapters/Build42AdminBoundary",
     ClientOwnerState = require "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
     Build42PerkCatalog = require "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog",
     VanillaProgressionAdapter = require "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter",
