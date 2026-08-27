@@ -27,7 +27,7 @@ end
 local function makeNamespace(allotmentMode, overrides)
     local namespace = {
         SurvivorXpMultiplier = 1.25,
-        FitnessStrengthContribution = 0.75,
+        FitnessStrengthContributionPercent = 75,
         AutomaticCurveNormalization = true,
         AllotmentMode = allotmentMode,
         GlobalAdvancementLimit = 9,
@@ -120,7 +120,9 @@ expectNil(readWithNamespace(throwingNamespace), 'throwing namespace should fail 
 
 local invalidScalars = {
     { field = 'SurvivorXpMultiplier', value = -1 },
-    { field = 'FitnessStrengthContribution', value = 0 },
+    { field = 'SurvivorXpMultiplier', value = 100.0001 },
+    { field = 'FitnessStrengthContributionPercent', value = -0.0001 },
+    { field = 'FitnessStrengthContributionPercent', value = 100.0001 },
     { field = 'AutomaticCurveNormalization', value = 1 },
     { field = 'AllotmentMode', value = 4 },
     { field = 'GlobalAdvancementLimit', value = -1 },
@@ -149,5 +151,17 @@ local boundary = creation.provider.read()
 expectEqual(boundary.perSkillOverrides['Boundary.Zero'], 0, 'zero boundary')
 expectEqual(boundary.perSkillOverrides['Boundary.Ten'], 10, 'ten boundary')
 expectEqual(boundary.perSkillOverrides['Boundary.Default'], nil, 'default boundary')
+
+currentSandboxVars = { SurvivorLevelingAdvancement = makeNamespace(1, {}) }
+currentSandboxVars.SurvivorLevelingAdvancement.SurvivorXpMultiplier = 0
+expectEqual(creation.provider.read().survivorMultiplier, 0, 'zero multiplier is accepted')
+currentSandboxVars.SurvivorLevelingAdvancement.SurvivorXpMultiplier = 100
+expectEqual(creation.provider.read().survivorMultiplier, 100, 'one hundred multiplier is accepted')
+currentSandboxVars.SurvivorLevelingAdvancement.FitnessStrengthContributionPercent = 0
+expectEqual(creation.provider.read().fitnessStrengthNormalization, 0, 'zero percent resolves to zero normalization')
+currentSandboxVars.SurvivorLevelingAdvancement.FitnessStrengthContributionPercent = 6.7
+expectEqual(creation.provider.read().fitnessStrengthNormalization, 0.067, 'percentage conversion divides exactly once')
+currentSandboxVars.SurvivorLevelingAdvancement.FitnessStrengthContributionPercent = 100
+expectEqual(creation.provider.read().fitnessStrengthNormalization, 1, 'one hundred percent resolves to ordinary normalization')
 
 return assertions

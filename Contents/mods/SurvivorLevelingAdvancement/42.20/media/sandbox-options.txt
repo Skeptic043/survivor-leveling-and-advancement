@@ -4,20 +4,20 @@ option SurvivorLevelingAdvancement.SurvivorXpMultiplier
 {
     type = double,
     min = 0,
-    max = 10,
+    max = 100,
     default = 1,
     page = SLA,
     translation = SLA_SurvivorXpMultiplier,
 }
 
-option SurvivorLevelingAdvancement.FitnessStrengthContribution
+option SurvivorLevelingAdvancement.FitnessStrengthContributionPercent
 {
     type = double,
-    min = 0.001,
-    max = 1,
-    default = 0.067230769,
+    min = 0,
+    max = 100,
+    default = 6.7230769,
     page = SLA,
-    translation = SLA_FitnessStrengthContribution,
+    translation = SLA_FitnessStrengthContributionPercent,
 }
 
 option SurvivorLevelingAdvancement.AutomaticCurveNormalization

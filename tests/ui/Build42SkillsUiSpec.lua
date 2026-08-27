@@ -66,10 +66,11 @@ local function snapshot()
     }
 end
 
-local function settings(mode)
+local function settings(mode, fitnessStrengthNormalization)
     return {
         survivorMultiplier = 1,
-        fitnessStrengthNormalization = 0.067,
+        fitnessStrengthNormalization = fitnessStrengthNormalization == nil
+            and 0.067 or fitnessStrengthNormalization,
         automaticCurveNormalization = true,
         allotmentMode = mode or "Global",
         globalLimit = 6,
@@ -111,6 +112,7 @@ local function makeEnvironment(options)
         listener = nil,
         prerenderGeometry = {},
         mode = options.mode or "Global",
+        fitnessStrengthNormalization = options.fitnessStrengthNormalization,
         pending = { false, false, false, false },
         reason = options.reason,
         malformedSettings = false,
@@ -273,7 +275,7 @@ local function makeEnvironment(options)
             evidence.settingsReads = evidence.settingsReads + 1
             if evidence.settingsThrows then error("settings boom") end
             if evidence.malformedSettings then return nil end
-            local value = settings(evidence.mode)
+            local value = settings(evidence.mode, evidence.fitnessStrengthNormalization)
             evidence.lastRawSettings = value
             return value
         end,
@@ -1417,6 +1419,30 @@ for index = 1, #modes do
     equal(lastDraw(modeView.statusDraws, "right"), nil, modes[index] .. " header makes no right draw")
     equal(modeView.width, 420, modes[index] .. " width uses max control edge plus captured gutter")
 end
+
+local zeroNormalizationEnvironment = makeEnvironment({ fitnessStrengthNormalization = 0 })
+expect(zeroNormalizationEnvironment.integration.install().ok,
+    "zero-normalization integration installs")
+local zeroNormalizationBar = makeBar(zeroNormalizationEnvironment, "Axe")
+local zeroNormalizationView = makeView(zeroNormalizationEnvironment, 0, { zeroNormalizationBar })
+zeroNormalizationView:prerender()
+equal(zeroNormalizationEnvironment.settingsReads, 1,
+    "zero normalization is read once")
+equal(zeroNormalizationEnvironment.modelBuilds, 1,
+    "zero normalization reaches the Skills model")
+expect(zeroNormalizationBar.children[1].enabled,
+    "zero normalization preserves valid Skills controls")
+
+local negativeNormalizationEnvironment = makeEnvironment({ fitnessStrengthNormalization = -0.01 })
+expect(negativeNormalizationEnvironment.integration.install().ok,
+    "negative-normalization integration installs")
+local negativeNormalizationBar = makeBar(negativeNormalizationEnvironment, "Axe")
+local negativeNormalizationView = makeView(negativeNormalizationEnvironment, 0, { negativeNormalizationBar })
+negativeNormalizationView:prerender()
+equal(negativeNormalizationEnvironment.modelBuilds, 0,
+    "negative normalization fails before the Skills model")
+expect(not negativeNormalizationBar.children[1].enabled,
+    "negative normalization disables SLA presentation")
 
 local reasons = {
     "pending",

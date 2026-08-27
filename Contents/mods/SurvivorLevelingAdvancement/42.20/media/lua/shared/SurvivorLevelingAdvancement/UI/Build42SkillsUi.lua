@@ -193,7 +193,7 @@ local function projectAllotment(settings)
         or not finite(rawget(settings, "survivorMultiplier"))
         or rawget(settings, "survivorMultiplier") < 0
         or not finite(rawget(settings, "fitnessStrengthNormalization"))
-        or rawget(settings, "fitnessStrengthNormalization") <= 0
+        or rawget(settings, "fitnessStrengthNormalization") < 0
         or type(rawget(settings, "automaticCurveNormalization")) ~= "boolean"
         or not nonnegativeInteger(rawget(settings, "globalLimit"))
         or not nonnegativeInteger(rawget(settings, "perSkillDefault")) then return nil end

@@ -35,14 +35,17 @@ local function readSettings(readSandboxVars)
     end
 
     local survivorMultiplier = namespace.SurvivorXpMultiplier
-    if not isFiniteNumber(survivorMultiplier) or survivorMultiplier < 0 then
+    if not isFiniteNumber(survivorMultiplier) or survivorMultiplier < 0 or survivorMultiplier > 100 then
         return nil
     end
 
-    local fitnessStrengthNormalization = namespace.FitnessStrengthContribution
-    if not isFiniteNumber(fitnessStrengthNormalization) or fitnessStrengthNormalization <= 0 then
+    local fitnessStrengthContributionPercent = namespace.FitnessStrengthContributionPercent
+    if not isFiniteNumber(fitnessStrengthContributionPercent)
+        or fitnessStrengthContributionPercent < 0
+        or fitnessStrengthContributionPercent > 100 then
         return nil
     end
+    local fitnessStrengthNormalization = fitnessStrengthContributionPercent / 100
 
     local automaticCurveNormalization = namespace.AutomaticCurveNormalization
     if type(automaticCurveNormalization) ~= 'boolean' then

@@ -319,7 +319,7 @@ do
     equal(env.service.process(env.player, legacy, settings()).code, "invalid_award", "legacy baseAward envelope field rejected")
     equal(env.service.process(env.player, award(1, -1, 1, 0), settings()).code, "invalid_award", "positive base negative movement")
     local badSettings = settings()
-    badSettings.normalization = 0
+    badSettings.normalization = -1
     equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "invalid normalization")
     badSettings = settings(1, 1, true, 1, 2)
     equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "invalid postmax rate")
@@ -396,6 +396,25 @@ do
     expect(deepEqual(env.store.state.perks, frozenPerks), "Free award preserves frozen perks byte-for-byte")
     expect(deepEqual(env.store.state.orphanedPerks, frozenOrphans), "Free award preserves frozen orphans byte-for-byte")
     equal(env.resolver.resolveCount, 0, "Free award does not resolve an adapter")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    local env = makeEnvironment({ state = state, position = 10 })
+    local result = env.service.process(env.player, award(10, 10, 0, 10), freeSettings(0, 100))
+    expect(result.ok, "zero contribution award succeeds")
+    equal(result.survivorXp, 0, "zero contribution grants no Survivor XP")
+    equal(result.naturalEligibleBase, 0, "zero contribution has no eligible Survivor base")
+    equal(result.stateWritten, false, "zero contribution does not write Survivor state")
+end
+do
+    local state = freshState()
+    state.perks.Aiming = perkRecord(10, 10)
+    local env = makeEnvironment({ state = state, observed = 10, position = 20, level = 2 })
+    local result = env.service.process(env.player, award(10, 10, 10, 20), settings(0, 100))
+    expect(result.ok, "tracked zero contribution award succeeds")
+    equal(result.survivorXp, 0, "tracked zero contribution grants no Survivor XP")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 20, "tracked zero contribution keeps natural progression")
 end
 do
     local cases = {

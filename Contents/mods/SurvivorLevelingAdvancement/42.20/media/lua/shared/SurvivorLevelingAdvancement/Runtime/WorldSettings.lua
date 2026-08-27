@@ -115,7 +115,7 @@ local function readRaw(provider)
     if not isFiniteNumber(survivorMultiplier)
         or survivorMultiplier < 0
         or not isFiniteNumber(fitnessStrengthNormalization)
-        or fitnessStrengthNormalization <= 0
+        or fitnessStrengthNormalization < 0
         or type(automaticCurveNormalization) ~= "boolean"
         or (allotmentMode ~= "Global" and allotmentMode ~= "PerSkill" and allotmentMode ~= "Free")
         or not isNonnegativeInteger(globalLimit)

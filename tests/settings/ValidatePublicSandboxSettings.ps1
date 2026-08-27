@@ -28,8 +28,8 @@ $blocks = @([regex]::Matches($text, '(?ms)^option\s+([^\s{]+)\s*\{(.*?)^\}'))
 Assert ($blocks.Count -eq 41) 'exactly six main and 35 per-skill options are required'
 
 $main = @{
-    'SurvivorXpMultiplier' = @('double','0','10','1','SLA')
-    'FitnessStrengthContribution' = @('double','0.001','1','0.067230769','SLA')
+    'SurvivorXpMultiplier' = @('double','0','100','1','SLA')
+    'FitnessStrengthContributionPercent' = @('double','0','100','6.7230769','SLA')
     'AutomaticCurveNormalization' = @('boolean','','','true','SLA')
     'AllotmentMode' = @('enum','','','1','SLA')
     'GlobalAdvancementLimit' = @('integer','0','100','3','SLA')
@@ -39,7 +39,7 @@ $seen = @()
 foreach ($b in $blocks) {
     $name = $b.Groups[1].Value
     $body = $b.Groups[2].Value
-    if ($name -match '^SurvivorLevelingAdvancement\.(SurvivorXpMultiplier|FitnessStrengthContribution|AutomaticCurveNormalization|AllotmentMode|GlobalAdvancementLimit|PerSkillDefaultLimit)$') {
+    if ($name -match '^SurvivorLevelingAdvancement\.(SurvivorXpMultiplier|FitnessStrengthContributionPercent|AutomaticCurveNormalization|AllotmentMode|GlobalAdvancementLimit|PerSkillDefaultLimit)$') {
         $key = $Matches[1]; $seen += $key; $expected = $main[$key]
         Assert ((Field $body 'type') -eq $expected[0]) "$key type"
         if ($expected[1]) { Assert ((Field $body 'min') -eq $expected[1] -and (Field $body 'max') -eq $expected[2]) "$key range" }
@@ -85,7 +85,9 @@ Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_PerSkil
 Assert ($translations.Sandbox_SLA_PerSkillLimit_option1 -and $translations.Sandbox_SLA_PerSkillLimit_option12) 'shared enum translation coverage'
 Assert ($translations.Sandbox_SLA_tooltip -eq 'Control Survivor XP pacing and how many skill advancements may be active at once.') 'main page tooltip wording'
 Assert ($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip -eq 'Multiplies Survivor XP gained from trainable skill XP. This does not change skill XP.') 'XP multiplier tooltip wording'
-Assert ($translations.Sandbox_SLA_FitnessStrengthContribution_tooltip -eq 'Scales Survivor XP from Fitness and Strength before the Survivor XP multiplier. The default is about 6.7%%.') 'Fitness and Strength tooltip wording and escaping'
+Assert ($translations.Sandbox_SLA_FitnessStrengthContributionPercent -eq 'Fitness & Strength Survivor XP contribution percentage') 'Fitness and Strength percentage label'
+Assert ($translations.Sandbox_SLA_FitnessStrengthContributionPercent_tooltip -eq 'Sets Survivor XP from Fitness and Strength as a percentage of ordinary skill contribution before the Survivor XP multiplier. 6.7 means 6.7%%.') 'Fitness and Strength percentage tooltip wording and escaping'
+Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_FitnessStrengthContribution') 'stale raw Fitness and Strength option translation is absent'
 Assert ((@([regex]::Matches($jsonText, '%')).Count -eq 2)) 'only the escaped Fitness and Strength literal percent is present'
 Assert ($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip -eq 'Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.') 'custom skill normalization tooltip wording'
 Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes Advancement Slots and accounting for natural or lost skill XP.') 'allotment tooltip wording'

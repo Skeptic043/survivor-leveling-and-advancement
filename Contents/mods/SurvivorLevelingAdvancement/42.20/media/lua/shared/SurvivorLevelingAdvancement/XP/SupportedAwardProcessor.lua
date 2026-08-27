@@ -111,7 +111,7 @@ local function validateSettings(settings)
     if settings.accountingMode ~= "Tracked" and settings.accountingMode ~= "Free" then
         return failure("invalid_settings", "accountingMode")
     end
-    if not isFinite(settings.normalization) or settings.normalization <= 0 then
+    if not isFinite(settings.normalization) or settings.normalization < 0 then
         return failure("invalid_settings", "normalization")
     end
     if not isFinite(settings.survivorMultiplier) or settings.survivorMultiplier < 0 then
@@ -305,6 +305,7 @@ end
 
 local function computeAward(deps, survivorCreditBase, settings, ratio, multiplier)
     if ratio == 0 or survivorCreditBase <= 0 then return { ok = true, award = zeroAward() } end
+    if settings.normalization == 0 then return { ok = true, award = zeroAward() } end
     local computed = deps.SurvivorEconomy.computeAward(
         survivorCreditBase,
         settings.normalization,

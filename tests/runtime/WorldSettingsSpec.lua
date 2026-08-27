@@ -174,6 +174,9 @@ malformed = rawSettings()
 malformed.fitnessStrengthNormalization = math.huge
 expectClosed(malformed)
 malformed = rawSettings()
+malformed.fitnessStrengthNormalization = -0.1
+expectClosed(malformed)
+malformed = rawSettings()
 malformed.automaticCurveNormalization = "true"
 expectClosed(malformed)
 malformed = rawSettings()
@@ -219,6 +222,9 @@ local invalidNormalization = WorldSettings.create({ provider = { read = function
 expectEqual(invalidNormalization.ok, false)
 expectEqual(invalidNormalization.code, "invalid_normalization")
 expectEqual(invalidNormalization.detail, "normalizationByPerk must be a safe finite map")
+local zeroCatalogNormalization = WorldSettings.create({ provider = { read = function() return rawSettings() end }, normalizationByPerk = { Carving = 0 } })
+expectEqual(zeroCatalogNormalization.ok, false)
+expectEqual(zeroCatalogNormalization.code, "invalid_normalization")
 local invalidDependencies = WorldSettings.create(nil)
 expectEqual(invalidDependencies.ok, false)
 expectEqual(invalidDependencies.code, "invalid_dependencies")
@@ -232,5 +238,12 @@ local punctuated = WorldSettings.create({
 })
 expect(punctuated.ok)
 expectEqual(punctuated.awardSettings.resolve(nil, "42:mod.skill-name").settings.normalization, 8)
+
+current = rawSettings()
+current.fitnessStrengthNormalization = 0
+award = resolver.awardSettings.resolve(opaquePlayer, "Fitness")
+expect(award.ok)
+expectEqual(award.settings.normalization, 0)
+expectEqual(resolver.awardSettings.resolve(opaquePlayer, "Strength").settings.normalization, 0)
 
 return assertionCount
