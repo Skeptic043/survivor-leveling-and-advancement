@@ -94,6 +94,7 @@ if evidence == nil then
     SandboxVars = evidence.sandboxVars
     getTimestampMs = function() return 4321 end
     getPlayerContextMenu = function(slot) return { slot = slot } end
+    getSpecificPlayer = function(slot) return { slot = slot } end
     isServer = function() return false end
     isClient = function() return false end
     isDebugEnabled = function() return true end
@@ -132,6 +133,7 @@ elseif evidence.phase == 1 then
         "admin adapter receives exact owner and UI classes")
     check(evidence.adminDependencies.canSeePlayersStats == evidence.capability.CanSeePlayersStats
         and evidence.adminDependencies.getPlayerContextMenu(2).slot == 2
+        and evidence.adminDependencies.getSpecificPlayer(2).slot == 2
         and evidence.adminDependencies.isServer() == false
         and evidence.adminDependencies.isClient() == false
         and evidence.adminDependencies.isDebugEnabled() == true,
