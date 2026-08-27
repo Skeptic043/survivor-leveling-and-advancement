@@ -23,11 +23,17 @@ local function event()
     }
 end
 
+local function playerWithOnlineId(value)
+    local player = { onlineId = value }
+    function player:getOnlineID() return self.onlineId end
+    return player
+end
+
 local function fixture(server, client, configure)
     local calls = {}
     local debugCalls = 0
     local specificPlayers, specificPlayerCalls = {}, {}
-    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
+    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnMiniScoreboardUpdate = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
     local session = {
         ready = function(player) calls[#calls + 1] = { "ready", player }; return { ok = true, snapshot = { marker = player, ready = true, revision = 0 } } end,
         snapshot = function(player) calls[#calls + 1] = { "snapshot", player }; return { ok = true, snapshot = { marker = player } } end,
@@ -206,6 +212,8 @@ do
     yes(created.owner.install().ok, "server install idempotent")
     eq(f.events.OnServerStarted.adds(), 1, "one server start callback")
     eq(f.events.OnClientCommand.adds(), 1, "one client-command callback")
+    eq(f.events.OnCreatePlayer.adds(), 0, "server event set has no create-player callback")
+    eq(f.events.OnMiniScoreboardUpdate.adds(), 0, "server event set has no post-ack callback")
     f.events.OnServerStarted.fire()
     eq(f.factoryCalls(), 1, "server factory once")
     eq(f.serverCreates(), 1, "server transport after source")
@@ -311,7 +319,7 @@ do
         values.localClient.reset = function() error("disconnect boom") end
     end)
     yes(created.owner.install().ok, "callback client installs")
-    f.events.OnCreatePlayer.fire(0, {})
+    f.events.OnCreatePlayer.fire(0, playerWithOnlineId(10))
     eq(created.owner.status().failure.code, "owner_ready_invalid", "client ready throw retained")
     f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", {})
     eq(created.owner.status().failure.code, "owner_client_handle_invalid", "client handle malformed retained")
@@ -356,6 +364,24 @@ do
 end
 
 do
+    local readyCalls = 0
+    local created, f = fixture(false, true, function(values)
+        values.specificPlayers[0] = playerWithOnlineId(11)
+        values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
+    end)
+    yes(created.owner.install().ok, "client ownership hooks install")
+    eq(readyCalls, 1, "late-install readiness precedes ownership test")
+    local capturedPostAckEvent = f.events.OnMiniScoreboardUpdate
+    f.globals.Events.OnMiniScoreboardUpdate = event()
+    capturedPostAckEvent.fire()
+    eq(readyCalls, 1, "replaced post-ack event leaves original callback inert")
+    yes(created.owner.status().failure ~= nil, "post-ack ownership loss retains a failure")
+    eq(created.owner.status().failure.code, "event_ownership_lost",
+        "post-ack event replacement is retained")
+    no(created.owner.install().ok, "post-ack ownership loss prevents reinstall")
+end
+
+do
     local created, f = fixture(true, false)
     f.source.install = function() return { ok = false, code = "é", detail = "unsafe" } end
     yes(created.owner.install().ok, "unicode failure hooks install")
@@ -376,7 +402,13 @@ do
     yes(created.ok, "client creates")
     eq(f.clientCreates(), 1, "client transport created at construction")
     yes(created.owner.install().ok, "client installs")
-    f.events.OnCreatePlayer.fire(2, { player = true })
+    eq(f.events.OnCreatePlayer.adds(), 1, "client owns one create-player callback")
+    eq(f.events.OnMiniScoreboardUpdate.adds(), 1, "client owns one post-ack callback")
+    eq(f.events.OnServerCommand.adds(), 1, "client owns one server-command callback")
+    eq(f.events.OnDisconnect.adds(), 1, "client owns one disconnect callback")
+    eq(f.events.OnServerStarted.adds(), 0, "client does not own server startup")
+    eq(f.events.OnGameStart.adds(), 0, "client does not own single-player startup")
+    f.events.OnCreatePlayer.fire(2, playerWithOnlineId(12))
     eq(f.calls[#f.calls][1], "client_ready", "client player uses supplied player")
     f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", { ok = true })
     eq(f.calls[#f.calls][1], "client_handle", "client response delegated")
@@ -390,97 +422,121 @@ do
 end
 
 do
-    local slotOne, slotThree = {}, {}
+    local created = fixture(false, true, function(values)
+        values.events.OnMiniScoreboardUpdate = nil
+    end)
+    no(created.ok, "client construction requires exact post-ack event")
+    eq(created.code, "invalid_dependencies", "missing post-ack event fails closed")
+end
+
+do
+    local player = playerWithOnlineId(-1)
+    local readyCalls, advancementResets, adminResets = 0, 0, 0
+    local created, f = fixture(false, true, function(values)
+        values.specificPlayers[0] = player
+        values.localClient.ready = function(slot, value)
+            readyCalls = readyCalls + 1
+            eq(slot, 0, "post-ack ready keeps local slot")
+            eq(value, player, "post-ack ready keeps exact player")
+            return { ok = true }
+        end
+        values.advancementClient.resetSlot = function() advancementResets = advancementResets + 1; return { ok = true } end
+        values.adminClient.resetSlot = function() adminResets = adminResets + 1; return { ok = true } end
+    end)
+    yes(created.owner.install().ok, "unassigned client installs")
+    eq(#f.specificPlayerCalls, 4, "late-install scan checks exactly four slots")
+    eq(readyCalls, 0, "unassigned install scan does not send readiness")
+    eq(advancementResets, 0, "unassigned install scan does not reset advancement")
+    eq(adminResets, 0, "unassigned install scan does not reset admin")
+    f.events.OnCreatePlayer.fire(0, player)
+    eq(readyCalls, 0, "unassigned create-player does not send readiness")
+    eq(advancementResets, 0, "unassigned create-player does not reset advancement")
+    f.events.OnMiniScoreboardUpdate.fire({ remote = true })
+    eq(readyCalls, 0, "remote-first acknowledgment defers unassigned local player")
+    eq(created.owner.status().failure, nil, "minus one defer retains no failure")
+    player.onlineId = 41
+    f.events.OnMiniScoreboardUpdate.fire({ remote = true })
+    eq(readyCalls, 1, "assigned post-ack player sends readiness once")
+    eq(advancementResets, 1, "eligible identity resets advancement once")
+    eq(adminResets, 1, "eligible identity resets admin once")
+    f.events.OnMiniScoreboardUpdate.fire({ remote = true })
+    eq(readyCalls, 1, "repeated remote updates do not resend readiness")
+    eq(#f.specificPlayerCalls, 16, "each acknowledgment inspects only four local slots")
+    for scan = 0, 3 do
+        for slot = 0, 3 do
+            eq(f.specificPlayerCalls[scan * 4 + slot + 1], slot,
+                "bounded local scan order " .. scan .. ":" .. slot)
+        end
+    end
+end
+
+do
+    local slotZero, slotOne = playerWithOnlineId(-1), playerWithOnlineId(61)
     local ready = {}
     local created, f = fixture(false, true, function(values)
-        values.specificPlayers[1], values.specificPlayers[3] = slotOne, slotThree
+        values.specificPlayers[0] = slotZero
         values.localClient.ready = function(slot, player)
             ready[#ready + 1] = { slot, player }
             return { ok = true }
         end
     end)
-    yes(created.owner.install().ok, "client adoption installs")
-    eq(#f.specificPlayerCalls, 4, "client adoption checks exactly four slots")
-    for slot = 0, 3 do eq(f.specificPlayerCalls[slot + 1], slot, "client adoption slot order " .. slot) end
-    eq(#ready, 2, "client adoption ignores nil slots")
-    eq(ready[1][1], 1, "client adoption retains nonzero slot")
-    eq(ready[1][2], slotOne, "client adoption preserves slot-one player")
-    eq(ready[2][1], 3, "client adoption reaches slot three")
-    created.owner.requestAdvancement(1, "Strength")
-    eq(f.calls[#f.calls][3], slotOne, "adopted nonzero player serves later request")
+    yes(created.owner.install().ok, "split-screen acknowledgment fixture installs")
+    slotZero.onlineId = 60
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(#ready, 1, "first local slot acknowledges independently")
+    eq(ready[1][1], 0, "first acknowledgment keeps slot zero")
+    f.specificPlayers[1] = slotOne
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(#ready, 2, "later split-screen slot remains eligible")
+    eq(ready[2][1], 1, "second acknowledgment keeps slot one")
+    eq(ready[2][2], slotOne, "second acknowledgment keeps exact split-screen player")
 end
 
 do
-    local player, readyCalls, resolverCalls = {}, 0, 0
-    local created, f = fixture(false, true, function(values)
-        values.globals.getSpecificPlayer = function(slot)
-            resolverCalls = resolverCalls + 1
-            if slot == 2 then
-                values.events.OnCreatePlayer.fire(2, player)
-                return player
-            end
-            return nil
-        end
-        values.localClient.ready = function(slot, value)
-            readyCalls = readyCalls + 1
-            eq(slot, 2, "overlap preserves exact slot")
-            eq(value, player, "overlap preserves exact player")
-            return { ok = true }
-        end
-    end)
-    yes(created.owner.install().ok, "event-adoption overlap installs")
-    eq(readyCalls, 1, "event-adoption overlap readies exact slot and object once")
-    eq(resolverCalls, 4, "overlap adoption remains bounded")
-end
-
-do
-    local shared, eventPlayer, adoptedPlayer = {}, {}, {}
+    local first = playerWithOnlineId(70)
+    local replacement = playerWithOnlineId(71)
     local ready = {}
-    local created = fixture(false, true, function(values)
-        values.globals.getSpecificPlayer = function(slot)
-            if slot == 0 or slot == 1 then return shared end
-            if slot == 2 then
-                values.events.OnCreatePlayer.fire(2, eventPlayer)
-                return adoptedPlayer
-            end
-            return nil
-        end
+    local created, f = fixture(false, true, function(values)
         values.localClient.ready = function(slot, player)
             ready[#ready + 1] = { slot, player }
             return { ok = true }
         end
     end)
     created.owner.install()
-    eq(#ready, 4, "dedupe is limited to an exact slot-object pair")
-    eq(ready[1][1], 0, "same object is retained in first adopted slot")
-    eq(ready[2][1], 1, "same object in another slot is readied")
-    eq(ready[3][2], eventPlayer, "overlap event preserves its player")
-    eq(ready[4][1], 2, "different object in same slot is readied")
+    f.events.OnCreatePlayer.fire(2, first)
+    first.onlineId = 72
+    f.specificPlayers[2] = first
+    f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnCreatePlayer.fire(2, replacement)
+    first.onlineId = 70
+    f.events.OnCreatePlayer.fire(2, first)
+    eq(#ready, 3, "changed player or online ID creates a new exact identity")
+    eq(ready[1][2], first, "first identity uses original player")
+    eq(ready[2][2], first, "online-ID change preserves exact player")
+    eq(ready[3][2], replacement, "player change preserves replacement identity")
+    f.events.OnDisconnect.fire()
+    f.events.OnCreatePlayer.fire(2, first)
+    eq(#ready, 4, "disconnect clears every readiness identity for reconnect")
 end
 
 do
-    local player, readyCalls = {}, 0
-    local created = fixture(false, true, function(values)
-        values.globals.getSpecificPlayer = function(slot)
-            if slot == 2 then
-                values.events.OnCreatePlayer.fire(2, player)
-                return player
-            end
-            return nil
-        end
+    local slotOne, slotThree = playerWithOnlineId(81), playerWithOnlineId(83)
+    local ready = {}
+    local created, f = fixture(false, true, function(values)
+        values.specificPlayers[1], values.specificPlayers[3] = slotOne, slotThree
         values.localClient.ready = function()
-            readyCalls = readyCalls + 1
-            error("ready failed")
+            ready[#ready + 1] = true
+            return { ok = true }
         end
     end)
-    yes(created.owner.install().ok, "failing event-adoption overlap keeps completed installation")
-    eq(readyCalls, 1, "failed event readiness is not retried by adoption")
-    eq(created.owner.status().failure.code, "owner_ready_invalid", "failed overlap readiness remains bounded")
+    yes(created.owner.install().ok, "late install with assigned IDs succeeds")
+    eq(#ready, 2, "late install adopts each assigned local player once")
+    eq(#f.specificPlayerCalls, 4, "late install remains one bounded four-slot scan")
 end
 
 do
-    local calls, retained = {}, {}
-    local created = fixture(false, true, function(values)
+    local calls, retained = {}, playerWithOnlineId(93)
+    local created, f = fixture(false, true, function(values)
         values.globals.getSpecificPlayer = function(slot)
             calls[#calls + 1] = slot
             if slot == 1 then error("resolver boom") end
@@ -490,14 +546,76 @@ do
     end)
     yes(created.owner.install().ok, "throwing adoption resolver does not break installation")
     eq(#calls, 4, "throwing adoption resolver remains bounded to four slots")
+    yes(created.owner.status().failure ~= nil, "throwing adoption resolver retains a failure")
     eq(created.owner.status().failure.code, "player_resolver_threw", "throwing adoption resolver is retained")
     yes(created.owner.requestAdvancement(3, "Strength").ok, "later bounded slot still adopts after resolver throw")
+end
+
+do
+    local readyCalls = 0
+    local javaLike = setmetatable({}, {
+        __index = function(_, key)
+            if key == "getOnlineID" then return function() return 101 end end
+        end,
+    })
+    local created, f = fixture(false, true, function(values)
+        values.localClient.ready = function(slot, player)
+            readyCalls = readyCalls + 1
+            eq(slot, 1, "Java-backed method route keeps slot")
+            eq(player, javaLike, "Java-backed method route keeps exact player")
+            return { ok = true }
+        end
+    end)
+    created.owner.install(); f.events.OnCreatePlayer.fire(1, javaLike)
+    eq(readyCalls, 1, "online ID lookup does not assume a plain Lua table")
+
+    local invalidPlayers = {
+        { player = {}, code = "player_online_id_missing" },
+        { player = { getOnlineID = function() error("online ID boom") end }, code = "player_online_id_threw" },
+        { player = playerWithOnlineId("101"), code = "player_online_id_invalid" },
+        { player = playerWithOnlineId(-2), code = "player_online_id_invalid" },
+        { player = playerWithOnlineId(1.5), code = "player_online_id_invalid" },
+        { player = playerWithOnlineId(math.huge), code = "player_online_id_invalid" },
+    }
+    for index = 1, #invalidPlayers do
+        local item = invalidPlayers[index]
+        created, f = fixture(false, true)
+        created.owner.install(); f.events.OnCreatePlayer.fire(0, item.player)
+        yes(created.owner.status().failure ~= nil,
+            "invalid online ID capability retains a failure " .. index)
+        eq(created.owner.status().failure.code, item.code,
+            "invalid online ID capability is bounded " .. index)
+        eq(created.owner.requestAdvancement(0, "Strength").code, "player_not_ready",
+            "invalid online ID cannot retain a ready player " .. index)
+    end
+end
+
+do
+    local player, readyCalls = playerWithOnlineId(111), 0
+    local created, f = fixture(false, true, function(values)
+        values.specificPlayers[2] = player
+        values.localClient.ready = function()
+            readyCalls = readyCalls + 1
+            error("ready failed")
+        end
+    end)
+    yes(created.owner.install().ok, "failed late-install readiness keeps completed installation")
+    eq(readyCalls, 1, "failed eligible identity is attempted once")
+    f.events.OnMiniScoreboardUpdate.fire()
+    f.events.OnCreatePlayer.fire(2, player)
+    eq(readyCalls, 1, "failed readiness attempt is not retried by later gates")
+    yes(created.owner.status().failure ~= nil, "failed readiness retains a failure")
+    eq(created.owner.status().failure.code, "owner_ready_invalid", "failed readiness remains bounded")
 end
 
 do
     local created, f = fixture(false, false)
     local player = {}
     yes(created.owner.install().ok, "SP installs")
+    eq(f.events.OnGameStart.adds(), 1, "SP owns one game-start callback")
+    eq(f.events.OnCreatePlayer.adds(), 1, "SP owns one create-player callback")
+    eq(f.events.OnMiniScoreboardUpdate.adds(), 0, "SP event set has no post-ack callback")
+    eq(f.events.OnDisconnect.adds(), 0, "SP event set has no disconnect callback")
     f.events.OnCreatePlayer.fire(1, player)
     eq(f.factoryCalls(), 0, "SP player before startup retains without factory")
     f.events.OnGameStart.fire()
@@ -575,9 +693,11 @@ do
     no(created.owner.install().ok, "partial event registration fails")
     no(created.owner.install().ok, "partial event registration is never retried")
     eq(f.events.OnCreatePlayer.adds(), 1, "first partial hook remains singular")
+    eq(f.events.OnMiniScoreboardUpdate.adds(), 1, "second partial hook remains singular")
     eq(f.events.OnServerCommand.adds(), 0, "throwing partial hook is not counted")
     eq(#f.specificPlayerCalls, 0, "partial client installation never starts adoption")
     f.events.OnCreatePlayer.fire(0, {})
+    f.events.OnMiniScoreboardUpdate.fire()
     eq(readyCalls, 0, "callback registered before a later Add failure remains inert")
 end
 
@@ -663,7 +783,10 @@ do
     eq(f.calls[4][2].ownerClient, f.localClient, "advancement client receives exact owner client")
     created.owner.install()
     eq(created.owner.requestAdvancement(0, "Strength").code, "player_not_ready", "client request requires retained player")
-    local players = { {}, {}, {}, {} }
+    local players = {
+        playerWithOnlineId(200), playerWithOnlineId(201),
+        playerWithOnlineId(202), playerWithOnlineId(203),
+    }
     for slot = 0, 3 do
         f.events.OnCreatePlayer.fire(slot, players[slot + 1])
         local requested = created.owner.requestAdvancement(slot, "Strength")
@@ -671,7 +794,7 @@ do
         eq(f.calls[#f.calls][2], slot, "request slot " .. slot)
         eq(f.calls[#f.calls][3], players[slot + 1], "request player identity " .. slot)
     end
-    local replacement = {}
+    local replacement = playerWithOnlineId(204)
     f.events.OnCreatePlayer.fire(2, replacement)
     created.owner.requestAdvancement(2, "Fitness")
     eq(f.calls[#f.calls][3], replacement, "replacement player becomes exact request identity")
@@ -689,7 +812,7 @@ do
         values.localClient.reset = function() ownerResetCalls = ownerResetCalls + 1; error("owner reset") end
         values.advancementClient.reset = function() advancementResetCalls = advancementResetCalls + 1; return { ok = true } end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(1, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(1, playerWithOnlineId(210))
     f.events.OnDisconnect.fire()
     eq(ownerResetCalls, 1, "disconnect attempts owner reset")
     eq(advancementResetCalls, 1, "disconnect attempts advancement reset after owner failure")
@@ -698,7 +821,7 @@ do
 end
 
 do
-    local player, readyCalls = {}, 0
+    local player, readyCalls = playerWithOnlineId(220), 0
     local created, f = fixture(false, true, function(values)
         values.localClient.ready = function()
             readyCalls = readyCalls + 1
@@ -720,7 +843,7 @@ do
         values.localClient.reset = function() ownerResetCalls = ownerResetCalls + 1; return { ok = true } end
         values.advancementClient.reset = function() advancementResetCalls = advancementResetCalls + 1; return { ok = true } end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(230))
     f.globals.Events = {}
     f.events.OnDisconnect.fire()
     eq(ownerResetCalls, 1, "ownership loss still resets owner client")
@@ -781,7 +904,7 @@ do
     end)
     local rejectedRequest = created.owner.requestAdvancement(0, "Strength")
     eq(rejectedRequest.code, "player_not_ready", "unready precedes transport request")
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(240))
     rejectedRequest = created.owner.requestAdvancement(0, "Strength")
     eq(rejectedRequest.code, "invalid_perk", "valid client request rejection is returned")
     eq(created.owner.status().failure, nil, "valid client request rejection does not poison lifecycle")
@@ -805,7 +928,7 @@ do
             return outcomes[index]
         end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(250))
     eq(created.owner.requestAdvancement(0, "Strength").code, "request_pending", "pending client request returned")
     local sendFailure = created.owner.requestAdvancement(0, "Strength")
     eq(sendFailure.code, "send_failed", "client send failure returned")
@@ -984,7 +1107,7 @@ end
 
 do
     local created, f = fixture(false, true)
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(260))
     f.localClient.handle = function() error("mutated owner handle") end
     f.localClient.reset = function() error("mutated owner reset") end
     f.advancementClient.request = function() error("mutated request") end
@@ -1022,7 +1145,7 @@ do
         notices[#notices + 1] = { slot, kind }
     end).ok, "client listener installs")
     yes(created.owner.install().ok, "client refresh hooks install")
-    local player = {}
+    local player = playerWithOnlineId(270)
     f.events.OnCreatePlayer.fire(2, player)
     local before = #f.calls
     for index = 1, 200 do
@@ -1101,7 +1224,7 @@ do
             return { ok = false, code = "not_bound", detail = "player route" }
         end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(280))
     local unbound = created.owner.refreshOwner(0)
     eq(unbound.code, "not_bound", "valid unbound refresh is returned")
     eq(created.owner.status().failure, nil, "valid unbound refresh does not poison lifecycle")
@@ -1210,7 +1333,10 @@ do
     local created, f = fixture(false, true)
     eq(f.adminClientCreates(), 1, "multiplayer creates one admin client")
     yes(created.owner.install().ok, "admin client installs existing events")
-    local players = { {}, {}, {}, {} }
+    local players = {
+        playerWithOnlineId(300), playerWithOnlineId(301),
+        playerWithOnlineId(302), playerWithOnlineId(303),
+    }
     for slot = 0, 3 do
         f.events.OnCreatePlayer.fire(slot, players[slot + 1])
         local request = { operation = "inspect", target = { username = "Target" } }
@@ -1245,7 +1371,7 @@ do
         values.adminClient.status = function() return statusSource end
         values.adminClient.request = function() return { ok = false, code = "invalid_request", detail = "request" } end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(310))
     eq(created.owner.requestAdmin(0, {}).code, "invalid_request", "valid admin client rejection is returned")
     eq(created.owner.status().failure, nil, "valid admin rejection does not poison lifecycle")
     local view = created.owner.adminStatus(0)
@@ -1264,7 +1390,7 @@ do
     local created, f = fixture(false, true, function(values)
         values.adminClient.status = function() return statusSource end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(320))
     local pending = created.owner.adminStatus(0)
     exactKeys(pending, {
         ok = true, pending = true, requestId = true, operation = true, target = true,
@@ -1339,7 +1465,7 @@ do
         values.advancementClient.reset = function() resetAdvancement = resetAdvancement + 1; return { ok = true } end
         values.adminClient.reset = function() resetAdmin = resetAdmin + 1; return { ok = true } end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(1, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(1, playerWithOnlineId(330))
     f.events.OnDisconnect.fire()
     eq(resetOwner, 1, "disconnect attempts owner reset before failures")
     eq(resetAdvancement, 1, "disconnect continues advancement reset")
@@ -1857,7 +1983,7 @@ do
         values.adminClient.resetSlot = function() adminResets = adminResets + 1; return { ok = true } end
         values.localClient.ready = function() readyCalls = readyCalls + 1; return { ok = true } end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(2, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(2, playerWithOnlineId(340))
     eq(advancementResets, 1, "failed advancement reset is attempted once")
     eq(adminResets, 1, "admin reset still follows failed advancement reset")
     eq(readyCalls, 0, "failed request reset blocks owner ready")
@@ -1868,7 +1994,7 @@ do
             return { ok = false, code = "send_failed", detail = "sendClientCommand", committed = true }
         end
     end)
-    created.owner.install(); f.events.OnCreatePlayer.fire(0, {})
+    created.owner.install(); f.events.OnCreatePlayer.fire(0, playerWithOnlineId(350))
     eq(created.owner.requestAdmin(0, {}).code, "admin_request_invalid", "committed client request is malformed")
     eq(created.owner.status().failure.code, "admin_request_invalid", "committed client request is retained")
 end

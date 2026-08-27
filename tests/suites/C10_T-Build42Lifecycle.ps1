@@ -6,9 +6,23 @@ if (-not [regex]::IsMatch($lifecycleSource, $cleanupPattern)) {
     throw 'C10-X guard: startupFailure must clear all four pending-player slots before retaining failure'
 }
 
-$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\).*?^\s*elseif started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
+$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\).*?^\s*elseif started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnMiniScoreboardUpdate = function\(\)\s*\r?\n\s*if not installed or not ownEvents\(\) then return end\s*\r?\n\s*inspectLocalPlayers\(\)\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
 if (-not [regex]::IsMatch($lifecycleSource, $createPlayerPattern)) {
-    throw 'C10-X guard: OnCreatePlayer may enqueue only before a startup attempt'
+    throw 'C10-X guard: OnCreatePlayer and the finite post-ack callback must retain their exact boundaries'
+}
+
+$clientEventsPattern = 'mode == "client" and \{ "OnCreatePlayer", "OnMiniScoreboardUpdate", "OnServerCommand", "OnDisconnect" \}'
+if (-not [regex]::IsMatch($lifecycleSource, $clientEventsPattern)) {
+    throw 'C15-B guard: multiplayer must own the exact four-event set in order'
+}
+
+$postAckMentions = [regex]::Matches($lifecycleSource, 'OnMiniScoreboardUpdate')
+if ($postAckMentions.Count -ne 2) {
+    throw 'C15-B guard: post-ack event must have one captured identity and one callback'
+}
+
+if ([regex]::IsMatch($lifecycleSource, 'OnTick|EveryTenMinutes|EveryOneMinute|getOnlinePlayers|scoreboard')) {
+    throw 'C15-B guard: readiness must not add polling, online-player enumeration, or scoreboard-row dependencies'
 }
 
 $pendingWrites = [regex]::Matches($lifecycleSource, 'pendingPlayers\[[^\]\r\n]+\]\s*=')
