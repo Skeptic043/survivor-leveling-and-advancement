@@ -5,9 +5,7 @@ local MAX_SAFE_INTEGER = 9007199254740991
 local MUTATION_OPERATIONS = {
     awardSurvivorXp = true,
     awardSurvivorLevels = true,
-    advancePerkNormally = true,
-    resetAccounting = true,
-    setAccounting = true,
+    clearAdvancementSlots = true,
 }
 
 local function fail(code)
@@ -169,9 +167,7 @@ function Build42AdminBoundary.create(dependencies)
         inspect = inspectCapability,
         awardSurvivorXp = mutationCapability,
         awardSurvivorLevels = mutationCapability,
-        advancePerkNormally = mutationCapability,
-        resetAccounting = mutationCapability,
-        setAccounting = mutationCapability,
+        clearAdvancementSlots = mutationCapability,
     }
 
     local boundary = {}

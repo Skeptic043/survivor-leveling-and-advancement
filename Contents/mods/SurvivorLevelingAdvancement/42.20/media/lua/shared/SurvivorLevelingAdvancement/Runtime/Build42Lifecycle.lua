@@ -221,7 +221,8 @@ local function detachAdminTerminal(value)
         return nil
     end
     local operation = rawget(value, "operation")
-    if operation ~= "inspect" and operation ~= "awardSurvivorXp" and operation ~= "awardSurvivorLevels" then
+    if operation ~= "inspect" and operation ~= "awardSurvivorXp"
+        and operation ~= "awardSurvivorLevels" and operation ~= "clearAdvancementSlots" then
         return nil
     end
     local target
@@ -250,7 +251,10 @@ local function detachAdminTerminal(value)
         local summary = detachAdminSummary(rawget(value, "summary"))
         if not exactTable(value, fields) or summary == nil then return nil end
         if outcome == "applied" then
-            if not safeInteger(rawget(value, "levelsGained")) or rawget(value, "apGained") ~= rawget(value, "levelsGained") then return nil end
+            if not safeInteger(rawget(value, "levelsGained"))
+                or rawget(value, "apGained") ~= rawget(value, "levelsGained")
+                or (operation == "clearAdvancementSlots"
+                    and rawget(value, "levelsGained") ~= 0) then return nil end
             result.levelsGained, result.apGained = rawget(value, "levelsGained"), rawget(value, "apGained")
         elseif outcome == "rejected" then
             if rawget(value, "code") ~= "stale_revision" or not safeText(rawget(value, "detail"), 160, false) then return nil end
@@ -282,7 +286,8 @@ local function detachAdminStatus(value)
         else
             target = detachAdminTarget(rawget(value, "target"))
         end
-        if target ~= nil and (operation == "inspect" or operation == "awardSurvivorXp" or operation == "awardSurvivorLevels") then
+        if target ~= nil and (operation == "inspect" or operation == "awardSurvivorXp"
+            or operation == "awardSurvivorLevels" or operation == "clearAdvancementSlots") then
             return { ok = true, pending = true, requestId = rawget(value, "requestId"), operation = operation, target = target }
         end
     end
@@ -321,6 +326,10 @@ local function localAdminRequest(value)
             return { kind = operation, expectedRevision = expectedRevision, count = count }
         end
     end
+    if operation == "clearAdvancementSlots"
+        and exactTable(value, { operation = true, expectedRevision = true }) then
+        return { kind = operation, expectedRevision = expectedRevision }
+    end
     return nil
 end
 
@@ -329,7 +338,8 @@ local function detachLocalAdminTerminal(value)
         or type(rawget(value, "ok")) ~= "boolean" then return nil end
     local operation = rawget(value, "operation")
     if operation ~= "inspect" and operation ~= "awardSurvivorXp"
-        and operation ~= "awardSurvivorLevels" then return nil end
+        and operation ~= "awardSurvivorLevels"
+        and operation ~= "clearAdvancementSlots" then return nil end
     local terminal = { ok = rawget(value, "ok"), operation = operation }
     if terminal.ok then
         local outcome = rawget(value, "outcome")
@@ -345,7 +355,8 @@ local function detachLocalAdminTerminal(value)
         if not exactTable(value, fields) or summary == nil then return nil end
         if outcome == "applied" then
             local levelsGained, apGained = rawget(value, "levelsGained"), rawget(value, "apGained")
-            if not safeInteger(levelsGained) or apGained ~= levelsGained then return nil end
+            if not safeInteger(levelsGained) or apGained ~= levelsGained
+                or (operation == "clearAdvancementSlots" and levelsGained ~= 0) then return nil end
             terminal.levelsGained, terminal.apGained = levelsGained, apGained
         elseif outcome == "rejected" then
             if rawget(value, "code") ~= "stale_revision"
@@ -409,17 +420,18 @@ local function localAdminSessionTerminal(operation, request, value)
     local operand
     if kind == "awardSurvivorXp" then fields.amount, operand = true, "amount"
     elseif kind == "awardSurvivorLevels" then fields.count, operand = true, "count"
-    else return nil end
+    elseif kind ~= "clearAdvancementSlots" then return nil end
     local summary = detachAdminSummary(rawget(value, "summary"))
     local levelsGained, apGained = rawget(value, "levelsGained"), rawget(value, "apGained")
     if not exactTable(value, fields) or rawget(value, "ok") ~= true
         or rawget(value, "applied") ~= true or rawget(value, "kind") ~= kind
-        or rawget(value, operand) ~= rawget(request, operand) or summary == nil
+        or (operand ~= nil and rawget(value, operand) ~= rawget(request, operand)) or summary == nil
         or rawget(request, "expectedRevision") >= MAX_SAFE_INTEGER
         or summary.revision ~= rawget(request, "expectedRevision") + 1
         or not safeInteger(levelsGained) or apGained ~= levelsGained
         or levelsGained > summary.level
-        or (kind == "awardSurvivorLevels" and levelsGained ~= rawget(request, "count")) then return nil end
+        or (kind == "awardSurvivorLevels" and levelsGained ~= rawget(request, "count"))
+        or (kind == "clearAdvancementSlots" and levelsGained ~= 0) then return nil end
     return {
         ok = true, operation = operation, outcome = "applied",
         levelsGained = levelsGained, apGained = apGained, summary = summary,
@@ -598,7 +610,8 @@ function Build42Lifecycle.create(dependencies)
             end)
             local target = detachAdminTarget(targetRef)
             if select("#", ...) ~= 0 or not usernameCalled or not safeUsername(username) or target == nil
-                or (operation ~= "awardSurvivorXp" and operation ~= "awardSurvivorLevels")
+                or (operation ~= "awardSurvivorXp" and operation ~= "awardSurvivorLevels"
+                    and operation ~= "clearAdvancementSlots")
                 or outcome ~= "committed" then
                 return failure("audit_invalid", "record")
             end

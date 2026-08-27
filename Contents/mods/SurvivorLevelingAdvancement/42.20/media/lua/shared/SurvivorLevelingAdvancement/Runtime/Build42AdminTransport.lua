@@ -34,6 +34,13 @@ local LEVEL_REQUEST_FIELDS = {
     expectedRevision = true,
     count = true,
 }
+local CLEAR_REQUEST_FIELDS = {
+    protocolVersion = true,
+    requestId = true,
+    operation = true,
+    target = true,
+    expectedRevision = true,
+}
 local USERNAME_TARGET_FIELDS = { username = true }
 local TARGET_FIELDS = { onlineId = true, username = true }
 local SUMMARY_FIELDS = {
@@ -64,6 +71,14 @@ local LEVEL_APPLIED_FIELDS = {
     apGained = true,
     summary = true,
 }
+local CLEAR_APPLIED_FIELDS = {
+    ok = true,
+    applied = true,
+    kind = true,
+    levelsGained = true,
+    apGained = true,
+    summary = true,
+}
 local REJECTION_RESULT_FIELDS = {
     ok = true,
     applied = true,
@@ -90,6 +105,11 @@ local LEVEL_LOGICAL_REQUEST_FIELDS = {
     target = true,
     expectedRevision = true,
     count = true,
+}
+local CLEAR_LOGICAL_REQUEST_FIELDS = {
+    operation = true,
+    target = true,
+    expectedRevision = true,
 }
 local INSPECTION_RESPONSE_FIELDS = {
     protocolVersion = true,
@@ -284,6 +304,8 @@ local function validateRequestEnvelope(value)
         fields = XP_REQUEST_FIELDS
     elseif operation == "awardSurvivorLevels" then
         fields = LEVEL_REQUEST_FIELDS
+    elseif operation == "clearAdvancementSlots" then
+        fields = CLEAR_REQUEST_FIELDS
     else
         return nil
     end
@@ -306,6 +328,8 @@ local function validateRequestEnvelope(value)
             or not positiveSafeInteger(rawget(value, "count")) then
             return nil
         end
+    elseif operation == "clearAdvancementSlots" then
+        if not safeInteger(rawget(value, "expectedRevision")) then return nil end
     end
 
     return {
@@ -386,8 +410,12 @@ local function validGains(levelsGained, apGained, summary)
 end
 
 local function validateAppliedResult(result, request)
-    local fields = request.operation == "awardSurvivorXp"
-        and XP_APPLIED_FIELDS or LEVEL_APPLIED_FIELDS
+    local fields = LEVEL_APPLIED_FIELDS
+    if request.operation == "awardSurvivorXp" then
+        fields = XP_APPLIED_FIELDS
+    elseif request.operation == "clearAdvancementSlots" then
+        fields = CLEAR_APPLIED_FIELDS
+    end
     if not exactPlainTable(result, fields)
         or rawget(result, "ok") ~= true
         or rawget(result, "applied") ~= true
@@ -397,12 +425,14 @@ local function validateAppliedResult(result, request)
 
     if request.operation == "awardSurvivorXp" then
         if rawget(result, "amount") ~= request.amount then return nil end
-    else
+    elseif request.operation == "awardSurvivorLevels" then
         if rawget(result, "count") ~= request.count
             or rawget(result, "levelsGained") ~= request.count
             or rawget(result, "apGained") ~= request.count then
             return nil
         end
+    elseif rawget(result, "levelsGained") ~= 0 or rawget(result, "apGained") ~= 0 then
+        return nil
     end
 
     local summary = copySummary(rawget(result, "summary"))
@@ -546,7 +576,7 @@ function Build42AdminTransport.createServer(dependencies)
         }
         if request.operation == "awardSurvivorXp" then
             sessionRequest.amount = request.amount
-        else
+        elseif request.operation == "awardSurvivorLevels" then
             sessionRequest.count = request.count
         end
 
@@ -636,6 +666,8 @@ local function validateLogicalRequest(value)
         fields = XP_LOGICAL_REQUEST_FIELDS
     elseif operation == "awardSurvivorLevels" then
         fields = LEVEL_LOGICAL_REQUEST_FIELDS
+    elseif operation == "clearAdvancementSlots" then
+        fields = CLEAR_LOGICAL_REQUEST_FIELDS
     else
         return nil
     end
@@ -658,6 +690,8 @@ local function validateLogicalRequest(value)
             or not positiveSafeInteger(rawget(value, "count")) then
             return nil
         end
+    elseif operation == "clearAdvancementSlots" then
+        if not safeInteger(rawget(value, "expectedRevision")) then return nil end
     end
 
     return {
@@ -676,7 +710,8 @@ local function copyResponseBase(value, target)
     end
     local operation = rawget(value, "operation")
     if operation ~= "inspect" and operation ~= "awardSurvivorXp"
-        and operation ~= "awardSurvivorLevels" then
+        and operation ~= "awardSurvivorLevels"
+        and operation ~= "clearAdvancementSlots" then
         return nil
     end
     if target == nil then return nil end
@@ -705,12 +740,15 @@ local function validateResponseEnvelope(value)
 
     if rawget(value, "ok") == true and rawget(value, "outcome") == "applied"
         and exactPlainTable(value, APPLIED_RESPONSE_FIELDS)
-        and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels") then
+        and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
+            or operation == "clearAdvancementSlots") then
         local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
         local levelsGained = rawget(value, "levelsGained")
         local apGained = rawget(value, "apGained")
         local summary = copySummary(rawget(value, "summary"))
-        if base == nil or summary == nil or not validGains(levelsGained, apGained, summary) then
+        if base == nil or summary == nil or not validGains(levelsGained, apGained, summary)
+            or (operation == "clearAdvancementSlots"
+                and (levelsGained ~= 0 or apGained ~= 0)) then
             return nil
         end
         base.ok = true
@@ -723,7 +761,8 @@ local function validateResponseEnvelope(value)
 
     if rawget(value, "ok") == true and rawget(value, "outcome") == "rejected"
         and exactPlainTable(value, REJECTION_RESPONSE_FIELDS)
-        and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels")
+        and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
+            or operation == "clearAdvancementSlots")
         and rawget(value, "code") == "stale_revision"
         and safeDetail(rawget(value, "detail")) then
         local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
@@ -748,7 +787,8 @@ local function validateResponseEnvelope(value)
         local target
         if operation == "inspect" then
             target = copyUsernameTarget(rawget(value, "target"))
-        elseif operation == "awardSurvivorXp" or operation == "awardSurvivorLevels" then
+        elseif operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
+            or operation == "clearAdvancementSlots" then
             target = copyTarget(rawget(value, "target"))
         end
         local base = copyResponseBase(value, target)
@@ -782,8 +822,11 @@ local function responseMatchesRoute(terminal, route)
             or terminal.summary.revision ~= route.expectedRevision + 1 then
             return false
         end
-        return terminal.operation ~= "awardSurvivorLevels"
-            or (terminal.levelsGained == route.count and terminal.apGained == route.count)
+        if terminal.operation == "awardSurvivorLevels" then
+            return terminal.levelsGained == route.count and terminal.apGained == route.count
+        end
+        return terminal.operation ~= "clearAdvancementSlots"
+            or (terminal.levelsGained == 0 and terminal.apGained == 0)
     end
     if terminal.outcome == "rejected" then
         return terminal.summary.revision ~= route.expectedRevision
@@ -867,6 +910,8 @@ function Build42AdminTransport.createClient(dependencies)
         elseif logical.operation == "awardSurvivorLevels" then
             envelope.expectedRevision = logical.expectedRevision
             envelope.count = logical.count
+        elseif logical.operation == "clearAdvancementSlots" then
+            envelope.expectedRevision = logical.expectedRevision
         end
         pendingBySlot[localSlot] = {
             requestId = requestId,

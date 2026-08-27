@@ -294,9 +294,7 @@ local operations = {
     { name = "inspect", capability = SEE, mutation = false },
     { name = "awardSurvivorXp", capability = MODIFY, mutation = true },
     { name = "awardSurvivorLevels", capability = MODIFY, mutation = true },
-    { name = "advancePerkNormally", capability = MODIFY, mutation = true },
-    { name = "resetAccounting", capability = MODIFY, mutation = true },
-    { name = "setAccounting", capability = MODIFY, mutation = true },
+    { name = "clearAdvancementSlots", capability = MODIFY, mutation = true },
 }
 
 local publicSurfaceFixture = makeBoundary(makeTarget(42, "Target", makeRole({}, 1)))
@@ -376,6 +374,9 @@ assertEqual(0, modifyOnlyFixture.lookupCalls, "inspect denial precedes lookup")
 local invalidOperations = {
     "Inspect",
     "awardXP",
+    "advancePerkNormally",
+    "resetAccounting",
+    "setAccounting",
     "",
     false,
     1,
@@ -602,7 +603,7 @@ for index = 1, #hierarchyCases do
     local fixture = makeBoundary(target)
     local result = fixture.boundary.authorizeAndResolve(
         makeActor(actorRole),
-        "setAccounting",
+        "clearAdvancementSlots",
         { onlineId = 8, username = "Target" }
     )
     if item.succeeds then
@@ -650,7 +651,7 @@ for index = 1, #malformedHierarchyCases do
     local fixture = makeBoundary(target)
     local result = fixture.boundary.authorizeAndResolve(
         makeActor(item.actorRole),
-        "setAccounting",
+        "clearAdvancementSlots",
         { onlineId = 8, username = "Target" }
     )
     assertFailure(result, "unauthorized", "malformed hierarchy " .. tostring(index))

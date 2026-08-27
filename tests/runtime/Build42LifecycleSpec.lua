@@ -57,19 +57,21 @@ local function fixture(server, client, configure)
         end,
         request = function(player, request)
             calls[#calls + 1] = { "admin_session_request", player, request }
+            local gain = request.kind == "awardSurvivorLevels" and request.count
+                or (request.kind == "clearAdvancementSlots" and 0 or 1)
             local result = {
                 ok = true, applied = true, kind = request.kind,
-                levelsGained = request.kind == "awardSurvivorLevels" and request.count or 1,
-                apGained = request.kind == "awardSurvivorLevels" and request.count or 1,
+                levelsGained = gain,
+                apGained = gain,
                 summary = {
                     accountingMode = "Tracked", revision = request.expectedRevision + 1,
-                    level = request.kind == "awardSurvivorLevels" and request.count or 1,
+                    level = gain,
                     xpIntoLevel = 0, xpForNextLevel = 100, spent = 0,
-                    availableAp = request.kind == "awardSurvivorLevels" and request.count or 1,
+                    availableAp = gain,
                 },
             }
             if request.kind == "awardSurvivorXp" then result.amount = request.amount
-            else result.count = request.count end
+            elseif request.kind == "awardSurvivorLevels" then result.count = request.count end
             return result
         end,
     }
@@ -1026,6 +1028,11 @@ do
     eq(writerCalls[1][1], "admin", "audit uses admin logger")
     eq(writerCalls[1][2], "SLA admin actor=" .. actor:getUsername() .. " operation=awardSurvivorXp target="
         .. target.username .. " onlineId=77", "audit line is exact and bounded")
+    yes(audit.record(actor, target, "clearAdvancementSlots", "committed").ok,
+        "audit accepts clear slots mutation")
+    eq(writerCalls[2][2], "SLA admin actor=" .. actor:getUsername()
+        .. " operation=clearAdvancementSlots target=" .. target.username .. " onlineId=77",
+        "clear slots audit line is exact")
     no(audit.record({ getUsername = function() return "bad\nname" end }, target, "awardSurvivorXp", "committed").ok,
         "audit rejects actor C0")
     no(audit.record({ getUsername = function() return "bad" .. string.char(127) end }, target, "awardSurvivorXp", "committed").ok,
@@ -1038,7 +1045,7 @@ do
     no(audit.record(actor, target, "awardSurvivorXp", "other").ok, "audit rejects noncommitted outcome")
     no(audit.record(actor, target, "awardSurvivorXp", "committed", { amount = 125, summary = {} }).ok,
         "audit rejects payload argument")
-    eq(#writerCalls, 1, "rejected audit calls do not log or leak payload")
+    eq(#writerCalls, 2, "rejected audit calls do not log or leak payload")
     local failedAudit = nil
     created, f = fixture(true, false, function(values)
         values.modules.Build42AdminTransport.createServer = function(argument)
@@ -1159,6 +1166,22 @@ do
     local committedMutation = created.owner.adminStatus(0)
     yes(committedMutation.result.committed,
         "committed mutation failure remains valid")
+
+    statusSource = {
+        ok = true, pending = false, result = {
+            ok = true, requestId = "admin:clear", operation = "clearAdvancementSlots",
+            target = { onlineId = 44, username = username }, outcome = "applied",
+            levelsGained = 0, apGained = 0,
+            summary = { accountingMode = "Tracked", revision = 2, level = 1,
+                xpIntoLevel = 0, xpForNextLevel = 100, spent = 0, availableAp = 1 },
+        },
+    }
+    local clearTerminal = created.owner.adminStatus(0)
+    eq(clearTerminal.result.operation, "clearAdvancementSlots", "MP clear terminal accepted")
+    eq(clearTerminal.result.levelsGained, 0, "MP clear terminal preserves zero gains")
+    statusSource.result.levelsGained, statusSource.result.apGained = 1, 1
+    eq(created.owner.adminStatus(0).code, "admin_status_invalid",
+        "MP clear terminal rejects nonzero gains")
 end
 
 do
@@ -1317,6 +1340,12 @@ do
         { operation = "awardSurvivorLevels", expectedRevision = 0, count = 1.5 },
         { operation = "awardSurvivorLevels", expectedRevision = 0, count = 9007199254740992 },
         { operation = "awardSurvivorLevels", expectedRevision = 0, count = 1, onlineId = 3 },
+        { operation = "clearAdvancementSlots" },
+        { operation = "clearAdvancementSlots", expectedRevision = -1 },
+        { operation = "clearAdvancementSlots", expectedRevision = 0, count = 1 },
+        { operation = "advancePerkNormally", expectedRevision = 0 },
+        { operation = "resetAccounting", expectedRevision = 0 },
+        { operation = "setAccounting", expectedRevision = 0 },
         setmetatable({ operation = "inspect" }, {}),
     }
     eq(created.owner.requestAdmin(0, nil).code, "invalid_request", "SP admin rejects nil request")
@@ -1370,6 +1399,60 @@ do
     eq(created.owner.adminStatus(2).result.summary.level, 2, "stored SP inspect terminal remains detached")
     eq(notices[#notices][1], 2, "SP inspect terminal notice preserves slot")
     eq(notices[#notices][2], "admin_terminal", "SP inspect terminal notice kind")
+end
+
+do
+    local player, acceptedSnapshot = {}, nil
+    local requestCalls, snapshotCalls, acceptCalls = 0, 0, 0
+    local notices = {}
+    local created, f = fixture(false, false, function(values)
+        values.adminSession.request = function(target, request)
+            requestCalls = requestCalls + 1
+            eq(target, player, "SP clear receives exact retained player")
+            exactKeys(request, { kind = true, expectedRevision = true }, 2,
+                "converted clear request")
+            eq(request.kind, "clearAdvancementSlots", "converted clear kind")
+            eq(request.expectedRevision, 9, "converted clear revision")
+            return {
+                ok = true, applied = true, kind = request.kind,
+                levelsGained = 0, apGained = 0,
+                summary = { accountingMode = "Tracked", revision = 10, level = 8,
+                    xpIntoLevel = 20, xpForNextLevel = 200, spent = 2, availableAp = 6 },
+            }
+        end
+        values.session.snapshot = function(target)
+            snapshotCalls = snapshotCalls + 1
+            eq(target, player, "post-clear snapshot receives exact player")
+            return { ok = true, snapshot = { marker = "clear" } }
+        end
+        values.localClient.acceptLocal = function(slot, snapshot)
+            if snapshot.marker == "clear" then
+                acceptCalls = acceptCalls + 1
+                eq(slot, 3, "post-clear acceptance preserves slot")
+                acceptedSnapshot = snapshot
+            end
+            return { ok = true, accepted = true }
+        end
+    end)
+    created.owner.setClientStateListener(function(slot, kind)
+        notices[#notices + 1] = { slot, kind }
+    end)
+    created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(3, player)
+    local terminal = created.owner.requestAdmin(3, {
+        operation = "clearAdvancementSlots", expectedRevision = 9,
+    })
+    yes(terminal.ok, "SP clear mutation succeeds")
+    eq(terminal.operation, "clearAdvancementSlots", "SP clear terminal operation")
+    eq(terminal.outcome, "applied", "SP clear terminal applied")
+    eq(terminal.levelsGained, 0, "SP clear reports zero level gain")
+    eq(terminal.apGained, 0, "SP clear reports zero AP gain")
+    eq(requestCalls, 1, "SP clear session called once")
+    eq(snapshotCalls, 1, "SP clear projects owner snapshot once")
+    eq(acceptCalls, 1, "SP clear accepts owner snapshot once")
+    eq(acceptedSnapshot.marker, "clear", "SP clear accepts exact projected snapshot")
+    eq(notices[#notices - 1][2], "owner_snapshot",
+        "SP clear owner snapshot notice precedes terminal")
+    eq(notices[#notices][2], "admin_terminal", "SP clear emits terminal notice")
 end
 
 do

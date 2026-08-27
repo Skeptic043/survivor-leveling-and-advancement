@@ -92,6 +92,16 @@ local function levelRequest()
     }
 end
 
+local function clearRequest()
+    return {
+        protocolVersion = 1,
+        requestId = "admin:clear-1",
+        operation = "clearAdvancementSlots",
+        target = target(),
+        expectedRevision = 7,
+    }
+end
+
 local function makeHarness(options)
     options = options or {}
     local events = {}
@@ -146,6 +156,16 @@ local function makeHarness(options)
                 levelsGained = 1,
                 apGained = 1,
                 summary = summary({ revision = 8, level = 6, availableAp = 4 }),
+            }
+        end
+        if request.kind == "clearAdvancementSlots" then
+            return {
+                ok = true,
+                applied = true,
+                kind = "clearAdvancementSlots",
+                levelsGained = 0,
+                apGained = 0,
+                summary = summary({ revision = 8 }),
             }
         end
         return {
@@ -283,6 +303,11 @@ do
     local unknown = inspectRequest()
     unknown.operation = "setAccountingMode"
     malformed[#malformed + 1] = unknown
+    for _, operation in ipairs({ "advancePerkNormally", "resetAccounting", "setAccounting" }) do
+        local inactive = clearRequest()
+        inactive.operation = operation
+        malformed[#malformed + 1] = inactive
+    end
     local inspectOperand = inspectRequest()
     inspectOperand.amount = 1
     malformed[#malformed + 1] = inspectOperand
@@ -322,6 +347,15 @@ do
     local levelFraction = levelRequest()
     levelFraction.count = 1.5
     malformed[#malformed + 1] = levelFraction
+    local clearMissingRevision = clearRequest()
+    clearMissingRevision.expectedRevision = nil
+    malformed[#malformed + 1] = clearMissingRevision
+    local clearFractionRevision = clearRequest()
+    clearFractionRevision.expectedRevision = 1.5
+    malformed[#malformed + 1] = clearFractionRevision
+    local clearExtra = clearRequest()
+    clearExtra.count = 1
+    malformed[#malformed + 1] = clearExtra
     local requestMeta = inspectRequest()
     setmetatable(requestMeta, {})
     malformed[#malformed + 1] = requestMeta
@@ -519,6 +553,77 @@ do
         apGained = 2,
         summary = response.summary,
     }, "levels applied response")
+end
+
+do
+    local harness = makeHarness()
+    harness.server.handle("SurvivorLevelingAdvancement", "adminRequest", harness.actor, clearRequest())
+    equal(eventNames(harness.events), "boundary,request,audit,publish,send", "clear applied order")
+    exact(harness.events[1].selector, { onlineId = 41, username = "ClientTarget" },
+        "clear uses canonical selector")
+    exact(harness.events[2].request, {
+        kind = "clearAdvancementSlots",
+        expectedRevision = 7,
+    }, "exact clear session request")
+    equal(harness.events[3].operation, "clearAdvancementSlots", "clear audit operation")
+    local response = harness.events[5].envelope
+    exact(response, {
+        protocolVersion = 1,
+        requestId = "admin:clear-1",
+        operation = "clearAdvancementSlots",
+        target = response.target,
+        ok = true,
+        outcome = "applied",
+        levelsGained = 0,
+        apGained = 0,
+        summary = response.summary,
+    }, "clear zero-gain response")
+end
+
+do
+    local revision, applications = 7, 0
+    local harness = makeHarness()
+    function harness.session.request(receivedTarget, request)
+        harness.events[#harness.events + 1] = { name = "request", target = receivedTarget, request = request }
+        if request.expectedRevision ~= revision then
+            return {
+                ok = true, applied = false, kind = request.kind,
+                code = "stale_revision", detail = "expected revision is stale",
+                summary = summary({ revision = revision }),
+            }
+        end
+        applications, revision = applications + 1, revision + 1
+        return {
+            ok = true, applied = true, kind = request.kind,
+            levelsGained = 0, apGained = 0, summary = summary({ revision = revision }),
+        }
+    end
+    local recreated = Build42AdminTransport.createServer({
+        adminBoundary = harness.boundary,
+        adminSession = harness.session,
+        ownerPublisher = harness.publisher,
+        audit = harness.audit,
+        sendServerCommand = function(actor, module, command, envelope)
+            harness.events[#harness.events + 1] = { name = "send", envelope = envelope }
+        end,
+    })
+    local request = clearRequest()
+    recreated.server.handle("SurvivorLevelingAdvancement", "adminRequest", harness.actor, request)
+    recreated.server.handle("SurvivorLevelingAdvancement", "adminRequest", harness.actor, request)
+    equal(applications, 1, "clear replay applies once")
+    equal(eventNames(harness.events),
+        "boundary,request,audit,publish,send,boundary,request,send",
+        "clear replay becomes stale")
+    equal(harness.events[8].envelope.outcome, "rejected", "clear replay stale response")
+end
+
+do
+    local harness = makeHarness({ auditThrow = true })
+    harness.server.handle("SurvivorLevelingAdvancement", "adminRequest", harness.actor, clearRequest())
+    equal(eventNames(harness.events), "boundary,request,audit,publish,send",
+        "clear audit failure still publishes")
+    equal(harness.events[5].envelope.code, "audit_failed", "clear follow-up failure bounded")
+    equal(harness.events[5].envelope.committed, true, "clear follow-up failure committed")
 end
 
 do
@@ -790,6 +895,14 @@ local function adminLogicalLevels(onlineId, username, revision, count)
     }
 end
 
+local function adminLogicalClear(onlineId, username, revision)
+    return {
+        operation = "clearAdvancementSlots",
+        target = target(onlineId, username),
+        expectedRevision = revision or 7,
+    }
+end
+
 local function makeClientHarness(options)
     options = options or {}
     local events = {}
@@ -841,7 +954,8 @@ local function adminResponse(route, outcome, overrides)
     elseif outcome == "applied" then
         response.ok = true
         response.outcome = "applied"
-        response.levelsGained = route.operation == "awardSurvivorLevels" and 2 or 1
+        response.levelsGained = route.operation == "clearAdvancementSlots" and 0
+            or (route.operation == "awardSurvivorLevels" and 2 or 1)
         response.apGained = response.levelsGained
         response.summary = summary({ revision = 8, level = 6, availableAp = 4 })
     elseif outcome == "rejected" then
@@ -896,12 +1010,14 @@ do
     local inspect = harness.client.request(0, harness.actor0, adminLogicalInspect(nonAscii))
     local xp = harness.client.request(1, harness.actor1, adminLogicalXp(42, "XpTarget"))
     local levels = harness.client.request(2, harness.actor0, adminLogicalLevels(43, "LevelTarget"))
-    check(inspect.ok and xp.ok and levels.ok, "all logical requests send")
-    equal(#harness.events, 3, "three exact sends")
+    local clear = harness.client.request(3, harness.actor1, adminLogicalClear(44, "ClearTarget"))
+    check(inspect.ok and xp.ok and levels.ok and clear.ok, "all logical requests send")
+    equal(#harness.events, 4, "four exact sends")
     check(harness.events[1].actor == harness.actor0, "inspect uses supplied actor")
     check(harness.events[2].actor == harness.actor1, "XP uses supplied actor")
     check(harness.events[3].actor == harness.actor0, "levels uses supplied actor")
-    for index = 1, 3 do
+    check(harness.events[4].actor == harness.actor1, "clear uses supplied actor")
+    for index = 1, 4 do
         equal(harness.events[index].module, "SurvivorLevelingAdvancement", "request module " .. index)
         equal(harness.events[index].command, "adminRequest", "request command " .. index)
         equal(harness.events[index].envelope.protocolVersion, 1, "request protocol " .. index)
@@ -920,6 +1036,10 @@ do
         protocolVersion = 1, requestId = levels.requestId, operation = "awardSurvivorLevels",
         target = harness.events[3].envelope.target, expectedRevision = 7, count = 2,
     }, "exact levels envelope")
+    exact(harness.events[4].envelope, {
+        protocolVersion = 1, requestId = clear.requestId, operation = "clearAdvancementSlots",
+        target = harness.events[4].envelope.target, expectedRevision = 7,
+    }, "exact clear envelope")
     local pending = harness.client.status(0)
     pending.target.username = "MutatedPendingTarget"
     equal(harness.client.status(0).target.username, nonAscii, "pending target detached")
@@ -938,6 +1058,12 @@ do
         function() return harness.client.request(0, harness.actor0, { operation = "awardSurvivorXp", target = usernameTarget(), expectedRevision = 7, amount = 1 }) end,
         function() return harness.client.request(0, harness.actor0, adminLogicalXp(41, "T", 7, math.huge)) end,
         function() return harness.client.request(0, harness.actor0, adminLogicalLevels(41, "T", 7, 1.5)) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "clearAdvancementSlots", target = target(), expectedRevision = -1 }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "clearAdvancementSlots", target = target() }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "clearAdvancementSlots", target = target(), expectedRevision = 7, count = 1 }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "advancePerkNormally", target = target(), expectedRevision = 7 }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "resetAccounting", target = target(), expectedRevision = 7 }) end,
+        function() return harness.client.request(0, harness.actor0, { operation = "setAccounting", target = target(), expectedRevision = 7 }) end,
     }
     for index = 1, #invalid do
         exact(invalid[index](), { ok = false, code = "invalid_request", detail = "request" },
@@ -950,6 +1076,26 @@ do
         ok = false, code = "pending_request", detail = "slot",
     }, "pending collision sends nothing")
     equal(#harness.events, 1, "collision did not send")
+end
+
+
+do
+    local harness = makeClientHarness()
+    harness.client.request(3, harness.actor1, adminLogicalClear(44, "ClearTarget"))
+    local route = pendingRoute(harness.client, 3)
+    local invalid = adminResponse(route, "applied", { levelsGained = 1, apGained = 1 })
+    exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult", invalid), {
+        ok = false, code = "invalid_response", detail = "response",
+    }, "clear rejects nonzero gain response")
+    check(harness.client.status(3).pending, "invalid clear response retains route")
+    local handled = harness.client.handle(
+        "SurvivorLevelingAdvancement", "adminResult", adminResponse(route, "applied")
+    )
+    equal(handled.localSlot, 3, "clear response correlates to exact slot")
+    local terminal = harness.client.status(3).result
+    equal(terminal.operation, "clearAdvancementSlots", "clear terminal operation")
+    equal(terminal.levelsGained, 0, "clear terminal zero levels")
+    equal(terminal.apGained, 0, "clear terminal zero AP")
 end
 
 do
