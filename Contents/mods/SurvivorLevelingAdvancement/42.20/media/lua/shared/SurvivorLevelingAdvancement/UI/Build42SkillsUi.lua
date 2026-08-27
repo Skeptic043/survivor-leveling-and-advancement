@@ -2,6 +2,7 @@ local Build42SkillsUi = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
 local REFRESH_MILLIS = 1000
+local STATUS_LEFT_MARGIN = 4
 local TARGET_R, TARGET_G, TARGET_B = 0.35, 0.72, 1.00
 local POSITION_R, POSITION_G, POSITION_B = 0.12, 0.32, 0.65
 local RECOVERY_R, RECOVERY_G, RECOVERY_B = 0.95, 0.25, 0.25
@@ -1091,7 +1092,7 @@ function Build42SkillsUi.create(dependencies)
                 firstRowRight = firstRowRight + gapWidth + rightWidth
             end
             state.contentLeft = contentLeft
-            state.statusLeft = contentLeft
+            state.statusLeft = STATUS_LEFT_MARGIN
             state.statusFirstY = y
             state.statusSecondY = y + rowHeight
             requiredRight = math.max(requiredRight, firstRowRight, contentLeft + secondWidth)
@@ -1161,13 +1162,13 @@ function Build42SkillsUi.create(dependencies)
             local firstY = state.baseY + state.statusFirstY
             local secondY = state.baseY + state.statusSecondY
             local leftOk = viewX ~= nil and callable(drawLeft)
-                and pcall(drawLeft, parent, state.statusLeftText, viewX + state.statusLeft,
+                and pcall(drawLeft, parent, state.statusLeftText, state.statusLeft,
                     firstY, 1, 1, 1, 1, smallFont)
             local rightOk = state.statusRightText == nil or (viewX ~= nil and callable(drawRight)
                 and pcall(drawRight, parent, state.statusRightText, viewX + state.statusRight,
                     firstY, 1, 1, 1, 1, smallFont))
             local secondOk = viewX ~= nil and callable(drawLeft)
-                and pcall(drawLeft, parent, state.statusSecondText, viewX + state.statusLeft,
+                and pcall(drawLeft, parent, state.statusSecondText, state.statusLeft,
                     secondY, 1, 1, 1, 1, smallFont)
             if not leftOk or not rightOk or not secondOk then
                 disableView(state)

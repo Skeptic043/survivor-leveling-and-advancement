@@ -1006,6 +1006,10 @@ equal(environment.refresh[1], readsBeforeStable[1], "render stability sends no r
 equal(environment.stateReads[1], readsBeforeStable[2], "render stability reads no owner state")
 equal(environment.settingsReads, readsBeforeStable[3], "render stability reads no settings")
 equal(environment.buttonCreates, buttonsBeforeRepeatedRender, "repeated renders create no duplicate buttons")
+equal(lastDrawText(view.statusDraws, "AP: 3").x, 4,
+    "repeated renders keep the first left label at the fixed window margin")
+equal(lastDrawText(view.statusDraws, "Survivor XP: 10 / 100").x, 4,
+    "repeated renders keep the second left label at the fixed window margin")
 equal(view.width - (axe.x + axe.width), 100, "expanded bar preserves measured vanilla right gutter")
 equal(view.parent.width, view.x + view.width, "view width propagates absolutely to parent")
 equal(view.outer.width, view.parent.x + view.parent.width, "width propagates through every ancestor")
@@ -1016,11 +1020,11 @@ local globalLeft = lastDrawText(view.statusDraws, "AP: 3")
 local globalRight = lastDraw(view.statusDraws, "right")
 local survivorXp = lastDrawText(view.statusDraws, "Survivor XP: 10 / 100")
 equal(globalLeft.text, "AP: 3", "Global status binds compact AP left")
-equal(globalLeft.x, 30, "Global AP binds to captured content-left edge")
+equal(globalLeft.x, 4, "Global AP binds four logical pixels from containing window left edge")
 equal(globalRight.text, "Advancement Slots: 2/6", "Global status binds slots right")
 equal(globalRight.x, axe.x + axe.width, "Global slots bind to required content-right edge")
 expect(survivorXp ~= nil, "second row binds exact cached Survivor XP")
-equal(survivorXp.x, 30, "Survivor XP binds to the captured content-left edge")
+equal(survivorXp.x, 4, "Survivor XP binds four logical pixels from containing window left edge")
 equal(survivorXp.y, 38, "Survivor XP uses the second native-height row")
 
 local narrowEnvironment = makeEnvironment()
@@ -1351,7 +1355,7 @@ local adminRight = lastDraw(adminView.statusDraws, "right")
 local adminXp = lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100")
 expect(adminRight ~= nil and adminRight.x == adminBar.x + adminBar.width,
     "first-row Global label keeps its content-right alignment")
-expect(adminXp ~= nil and adminXp.x == 30 and adminButton.x > adminXp.x,
+expect(adminXp ~= nil and adminXp.x == 4 and adminButton.x > adminXp.x,
     "second-row Survivor XP and Admin keep separate left and right alignment")
 equal(adminButton.y, 38, "Admin uses the second native-height row")
 local visibleApX = lastDrawText(adminView.statusDraws, "AP: 3").x

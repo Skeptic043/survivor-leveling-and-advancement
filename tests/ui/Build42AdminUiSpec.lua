@@ -406,6 +406,14 @@ expect(state.xpEntry.initialised and state.levelsEntry.initialised
     and state.awardXpButton.initialised and state.awardLevelsButton.initialised
     and state.clearSlotsButton.initialised and state.refreshButton.initialised,
     "all SLA entries and buttons initialise exactly once")
+equal(state.clearSlotsButton.x, 16, "clear button stays inside the left panel margin")
+equal(state.clearSlotsButton.width, 154, "clear button uses the compact equal bottom width")
+equal(state.refreshButton.x, 190, "refresh button starts after the native bottom-row gap")
+equal(state.refreshButton.width, 154, "refresh button matches the clear button width")
+equal(state.refreshButton.x - (state.clearSlotsButton.x + state.clearSlotsButton.width), 20,
+    "bottom buttons keep a twenty-pixel visible gap")
+equal(state.refreshButton.x + state.refreshButton.width, window.width - 16,
+    "refresh button stays inside the right panel margin")
 expect(not state.awardXpButton.enabled and not state.awardLevelsButton.enabled,
     "mutations disable while inspection waits")
 expect(not state.clearSlotsButton.visible and not state.clearSlotsButton.enabled,
@@ -441,6 +449,13 @@ mp.status = {
     },
 }
 window:prerender()
+for repeatRender = 1, 20 do window:prerender() end
+equal(state.clearSlotsButton.x, 16, "repeated panel renders keep clear button position")
+equal(state.refreshButton.x, 190, "repeated panel renders keep refresh button position")
+equal(state.clearSlotsButton.width, state.refreshButton.width,
+    "repeated panel renders keep bottom button widths equal")
+equal(state.refreshButton.x - (state.clearSlotsButton.x + state.clearSlotsButton.width), 20,
+    "repeated panel renders keep the bottom button gap")
 equal(state.target.onlineId, 77, "successful inspect retains canonical online ID")
 equal(state.target.username, "Alpha", "successful inspect retains canonical username")
 expect(state.target ~= canonical, "canonical target retained detached")

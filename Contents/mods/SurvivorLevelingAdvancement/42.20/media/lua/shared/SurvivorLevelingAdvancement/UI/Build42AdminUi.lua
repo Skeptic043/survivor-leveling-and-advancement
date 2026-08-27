@@ -599,7 +599,7 @@ function Build42AdminUi.create(dependencies)
             localized("IGUI_SLA_Admin_AwardLevels"), "LEVELS")
         local clearSlots = makeButton(state, 16, 274, 154,
             localized("IGUI_SLA_Admin_ClearSlots"), "CLEAR")
-        local refresh = makeButton(state, 182, 274, 160, localized("IGUI_SLA_Admin_Refresh"), "REFRESH")
+        local refresh = makeButton(state, 190, 274, 154, localized("IGUI_SLA_Admin_Refresh"), "REFRESH")
         if xpEntry == nil or levelsEntry == nil or awardXp == nil
             or awardLevels == nil or clearSlots == nil or refresh == nil
             or not callable(clearSlots.setVisible) then return false end
