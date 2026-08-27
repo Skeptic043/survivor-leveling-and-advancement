@@ -86,6 +86,7 @@ local function makeEnvironment(options)
         priorRender = 0,
         priorOverlay = 0,
         priorTooltip = 0,
+        priorRemoveTooltip = 0,
         priorActivate = 0,
         priorMouseUp = 0,
         refresh = { 0, 0, 0, 0 },
@@ -161,6 +162,12 @@ local function makeEnvironment(options)
         self.message = "Vanilla tooltip"
     end
 
+    function ProgressBar.removeTooltip(self)
+        evidence.priorRemoveTooltip = evidence.priorRemoveTooltip + 1
+        if evidence.removeTooltipThrows then error("remove tooltip boom") end
+        self.message = nil
+    end
+
     function ProgressBar.activate(self)
         evidence.priorActivate = evidence.priorActivate + 1
     end
@@ -187,6 +194,10 @@ local function makeEnvironment(options)
         function button:setEnable(value) self.enabled = value end
         function button:setVisible(value) self.visible = value end
         function button:setTooltip(value) self.tooltip = value end
+        function button:isMouseOver()
+            evidence.buttonHoverReads = (evidence.buttonHoverReads or 0) + 1
+            return self.mouseOver == true
+        end
         function button:setBorderRGBA(r, g, b, a) self.border = { r, g, b, a } end
         function button:getWidth() return self.width end
         function button:getHeight() return self.height end
@@ -674,6 +685,16 @@ local extraOwnerMember = createWithOwner(ownerWithExtraMember)
 equal(extraOwnerMember.ok, false, "owner extra member fails closed")
 equal(extraOwnerMember.code, "invalid_dependencies", "extra owner member failure code")
 
+local missingRemovalDependencies = {}
+for key, value in pairs(environment.dependencies) do missingRemovalDependencies[key] = value end
+local missingRemovalProgressBar = {}
+for key, value in pairs(environment.ProgressBar) do missingRemovalProgressBar[key] = value end
+missingRemovalProgressBar.removeTooltip = nil
+missingRemovalDependencies.ISSkillProgressBar = missingRemovalProgressBar
+local missingRemoval = Build42SkillsUi.create(missingRemovalDependencies)
+equal(missingRemoval.ok, false, "missing vanilla tooltip removal fails closed")
+equal(missingRemoval.code, "invalid_dependencies", "missing vanilla tooltip removal failure code")
+
 expect(exact(environment.integration.status(), { ok = true, installed = true })
     and environment.integration.status().installed == false, "creation is inert")
 equal(environment.listenerSets, 0, "creation installs no listener")
@@ -683,6 +704,7 @@ equal(environment.adminRequests, 0, "creation does not call admin request")
 equal(environment.adminStatusReads, 0, "creation does not read admin status")
 equal(total(environment.stateReads), 0, "creation reads no state")
 equal(total(environment.refresh), 0, "creation sends no refresh")
+local vanillaRemoveTooltip = environment.ProgressBar.removeTooltip
 local installed = environment.integration.install()
 expect(exact(installed, { ok = true }) and installed.ok, "install succeeds exactly")
 equal(environment.listenerSets, 1, "one lifecycle listener")
@@ -690,6 +712,9 @@ expect(environment.integration.install().ok, "repeat install idempotent")
 equal(environment.listenerSets, 1, "repeat install does not replace listener")
 expect(exact(environment.integration.status(), { ok = true, installed = true }), "status surface exact")
 local installedMouseUp = environment.ProgressBar.onMouseUp
+local installedRemoveTooltip = environment.ProgressBar.removeTooltip
+expect(installedRemoveTooltip == vanillaRemoveTooltip,
+    "vanilla tooltip-removal ownership remains unpatched")
 
 local player = { identity = "exact-player" }
 local axe = makeBar(environment, "Axe", { player = player })
@@ -976,6 +1001,125 @@ expect(redOnlyBar.draws[2].r == 0.45 and redOnlyBar.draws[2].g == 0.08
 redOnlyBar:updateTooltip()
 expect(string.find(redOnlyBar.message, "50 lost skill XP left", 1, true) ~= nil,
     "red-only recovery retains its recovery tooltip")
+
+local cleanupEnvironment = makeEnvironment()
+expect(cleanupEnvironment.integration.install().ok, "tooltip cleanup integration installs")
+local cleanupBar = makeBar(cleanupEnvironment, "Axe")
+local cleanupView = makeView(cleanupEnvironment, 0, { cleanupBar })
+cleanupView:prerender()
+local cleanupButton = cleanupBar.children[1]
+local cleanupTooltip = cleanupButton.tooltip
+cleanupBar.message = "Vanilla level ten tooltip"
+cleanupButton.mouseOver = true
+cleanupBar:renderPerkRect()
+equal(cleanupEnvironment.priorRemoveTooltip, 1,
+    "exact hovered SLA button removes the stale vanilla tooltip once")
+equal(cleanupBar.message, nil, "hovered SLA button clears only the parent bar tooltip")
+cleanupBar:renderPerkRect()
+equal(cleanupEnvironment.priorRemoveTooltip, 1,
+    "hovered SLA button does not repeat removal after the stale tooltip is cleared")
+equal(cleanupButton.tooltip, cleanupTooltip, "tooltip cleanup preserves the button tooltip")
+cleanupButton:click()
+equal(cleanupEnvironment.requests[1], 1, "tooltip cleanup preserves button activation")
+
+local disabledCleanupEnvironment = makeEnvironment({ reason = "insufficient_ap" })
+expect(disabledCleanupEnvironment.integration.install().ok, "disabled tooltip cleanup integration installs")
+local disabledCleanupBar = makeBar(disabledCleanupEnvironment, "Axe")
+local disabledCleanupView = makeView(disabledCleanupEnvironment, 0, { disabledCleanupBar })
+disabledCleanupView:prerender()
+local disabledCleanupButton = disabledCleanupBar.children[1]
+expect(not disabledCleanupButton.enabled, "disabled tooltip cleanup button stays disabled")
+disabledCleanupBar.message = "Vanilla level ten tooltip"
+disabledCleanupButton.mouseOver = true
+disabledCleanupBar:renderPerkRect()
+equal(disabledCleanupEnvironment.priorRemoveTooltip, 1,
+    "disabled hovered SLA button removes the stale vanilla tooltip once")
+equal(disabledCleanupBar.message, nil, "disabled hovered SLA button clears the parent bar tooltip")
+
+local freeCleanupEnvironment = makeEnvironment({ mode = "Free" })
+expect(freeCleanupEnvironment.integration.install().ok, "Free tooltip cleanup integration installs")
+local freeCleanupBar = makeBar(freeCleanupEnvironment, "Axe")
+local freeCleanupView = makeView(freeCleanupEnvironment, 0, { freeCleanupBar })
+freeCleanupView:prerender()
+freeCleanupBar.message = "Vanilla level ten tooltip"
+freeCleanupBar.children[1].mouseOver = true
+freeCleanupBar:renderPerkRect()
+equal(freeCleanupEnvironment.priorRemoveTooltip, 1,
+    "Free mode hovered SLA button removes the stale vanilla tooltip once")
+equal(freeCleanupBar.message, nil, "Free mode cleanup does not need an SLA overlay")
+
+local noCleanupEnvironment = makeEnvironment()
+expect(noCleanupEnvironment.integration.install().ok, "non-hover tooltip cleanup integration installs")
+local noCleanupBar = makeBar(noCleanupEnvironment, "Axe", { mouseX = 35 })
+local noCleanupView = makeView(noCleanupEnvironment, 0, { noCleanupBar })
+noCleanupView:prerender()
+local unrelatedChild = { isMouseOver = function() return true end }
+noCleanupBar.children[#noCleanupBar.children + 1] = unrelatedChild
+noCleanupBar.message = "Vanilla level ten tooltip"
+noCleanupBar:renderPerkRect()
+equal(noCleanupEnvironment.priorRemoveTooltip, 0,
+    "only the exact SLA button hover removes a tooltip")
+equal(noCleanupBar.message, "Vanilla level ten tooltip",
+    "non-hovered SLA button retains the vanilla tooltip")
+noCleanupBar:updateTooltip()
+expect(string.find(noCleanupBar.message, "Vanilla tooltip", 1, true) == 1,
+    "non-hover cleanup keeps vanilla cell tooltip composition")
+expect(string.find(noCleanupBar.message, "100 natural skill XP left", 1, true) ~= nil,
+    "non-hover cleanup keeps SLA cell tooltip composition")
+
+local missingHoverEnvironment = makeEnvironment()
+expect(missingHoverEnvironment.integration.install().ok, "missing-hover cleanup integration installs")
+local missingHoverBar = makeBar(missingHoverEnvironment, "Axe")
+local missingHoverView = makeView(missingHoverEnvironment, 0, { missingHoverBar })
+missingHoverView:prerender()
+local missingHoverButton = missingHoverBar.children[1]
+missingHoverButton.isMouseOver = nil
+missingHoverBar.message = "Vanilla level ten tooltip"
+expect(pcall(function() missingHoverBar:renderPerkRect() end),
+    "missing button hover capability is contained")
+expect(not missingHoverButton.enabled, "missing button hover capability disables SLA view")
+equal(missingHoverEnvironment.priorRemoveTooltip, 0,
+    "missing button hover capability cannot remove a tooltip")
+missingHoverBar.message = "Vanilla tooltip after failure"
+missingHoverBar:renderPerkRect()
+equal(missingHoverEnvironment.priorRemoveTooltip, 0,
+    "missing button hover capability does not retry tooltip mutation")
+equal(missingHoverBar.message, "Vanilla tooltip after failure",
+    "disabled failure boundary preserves later vanilla tooltip state")
+
+local throwingHoverEnvironment = makeEnvironment()
+expect(throwingHoverEnvironment.integration.install().ok, "throwing-hover cleanup integration installs")
+local throwingHoverBar = makeBar(throwingHoverEnvironment, "Axe")
+local throwingHoverView = makeView(throwingHoverEnvironment, 0, { throwingHoverBar })
+throwingHoverView:prerender()
+local throwingHoverButton = throwingHoverBar.children[1]
+throwingHoverButton.isMouseOver = function() error("hover boom") end
+expect(pcall(function() throwingHoverBar:renderPerkRect() end),
+    "throwing button hover capability is contained")
+expect(not throwingHoverButton.enabled, "throwing button hover capability disables SLA view")
+equal(throwingHoverEnvironment.priorRemoveTooltip, 0,
+    "throwing button hover capability cannot remove a tooltip")
+
+local throwingRemovalEnvironment = makeEnvironment()
+expect(throwingRemovalEnvironment.integration.install().ok, "throwing-removal cleanup integration installs")
+local throwingRemovalBar = makeBar(throwingRemovalEnvironment, "Axe")
+local throwingRemovalView = makeView(throwingRemovalEnvironment, 0, { throwingRemovalBar })
+throwingRemovalView:prerender()
+local throwingRemovalButton = throwingRemovalBar.children[1]
+throwingRemovalButton.mouseOver = true
+throwingRemovalEnvironment.removeTooltipThrows = true
+throwingRemovalBar.message = "Vanilla level ten tooltip"
+expect(pcall(function() throwingRemovalBar:renderPerkRect() end),
+    "throwing tooltip removal capability is contained")
+expect(not throwingRemovalButton.enabled, "throwing tooltip removal capability disables SLA view")
+equal(throwingRemovalEnvironment.priorRemoveTooltip, 1,
+    "throwing tooltip removal capability is called once")
+throwingRemovalBar.message = "Vanilla tooltip after removal failure"
+throwingRemovalBar:renderPerkRect()
+equal(throwingRemovalEnvironment.priorRemoveTooltip, 1,
+    "throwing tooltip removal capability does not retry mutation")
+equal(throwingRemovalBar.message, "Vanilla tooltip after removal failure",
+    "disabled removal failure boundary preserves later vanilla tooltip state")
 
 local formatCases = {
     { targetPosition = 100, expected = "0 natural skill XP left", label = "zero" },

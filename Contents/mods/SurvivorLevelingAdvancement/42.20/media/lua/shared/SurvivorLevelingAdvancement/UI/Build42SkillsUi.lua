@@ -376,6 +376,7 @@ function Build42SkillsUi.create(dependencies)
     local priorRender = method(characterInfo, "render")
     local priorRenderPerkRect = method(progressBar, "renderPerkRect")
     local priorUpdateTooltip = method(progressBar, "updateTooltip")
+    local priorRemoveTooltip = method(progressBar, "removeTooltip")
     local priorActivate = method(progressBar, "activate")
     local buttonNew = method(buttonClass, "new")
     local clientState = validOwner(owner) and rawget(owner, "clientState") or nil
@@ -400,7 +401,7 @@ function Build42SkillsUi.create(dependencies)
 
     if type(characterInfo) ~= "table" or type(progressBar) ~= "table" or type(buttonClass) ~= "table"
         or not priorPrerender or not priorRender or not priorRenderPerkRect
-        or not priorUpdateTooltip or not priorActivate or not buttonNew
+        or not priorUpdateTooltip or not priorRemoveTooltip or not priorActivate or not buttonNew
         or not clientState or not refreshOwner or not setClientStateListener
         or not requestAdvancement or not advancementStatus
         or not callable(buildView) or not callable(readSettings)
@@ -1188,11 +1189,21 @@ function Build42SkillsUi.create(dependencies)
 
     local function onOverlay(bar)
         local barState = bars[bar]
-        if barState == nil or not barState.supported or not barState.overlayValid
-            or not barState.tracked or barState.row == nil then return end
+        if barState == nil or not barState.supported then return true end
+        local state = barState.state
+        if state == nil or state.disabled then return true end
+        local button = barState.button
+        local isMouseOver = type(button) == "table" and button.isMouseOver or nil
+        if not callable(isMouseOver) then return false end
+        local hoveredCalled, hovered = pcall(isMouseOver, button)
+        if not hoveredCalled or type(hovered) ~= "boolean" then return false end
+        local vanillaTooltip = rawget(bar, "message")
+        if hovered and type(vanillaTooltip) == "string" and vanillaTooltip ~= ""
+            and not pcall(priorRemoveTooltip, bar) then return false end
+        if not barState.overlayValid or not barState.tracked or barState.row == nil then return true end
         local drawBorder = bar.drawRectBorder
         local drawRect = bar.drawRect
-        if not callable(drawBorder) or not callable(drawRect) then return end
+        if not callable(drawBorder) or not callable(drawRect) then return true end
         local stride = barState.baseWidth / 10
         local cell = barState.height
         for _, target in ipairs(barState.row.activeTargets) do
@@ -1203,7 +1214,7 @@ function Build42SkillsUi.create(dependencies)
             end
         end
         local natural, high = barState.row.naturalPosition, barState.row.highWaterPosition
-        if natural == nil then return end
+        if natural == nil then return true end
         local highX = curvePosition(barState, high)
         if #barState.row.activeTargets > 0 and highX ~= nil then
             pcall(drawRect, bar, highX - 1, 0, 2, cell, 0.85,
@@ -1218,6 +1229,7 @@ function Build42SkillsUi.create(dependencies)
                     RECOVERY_POSITION_R, RECOVERY_POSITION_G, RECOVERY_POSITION_B)
             end
         end
+        return true
     end
 
     local function onTooltip(bar)
@@ -1261,11 +1273,11 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.renderPerkRect = function(bar, ...)
         local ok, a, b, c = pcall(priorRenderPerkRect, bar, ...)
-        local addonOk = pcall(onOverlay, bar)
-        if not addonOk and bars[bar] ~= nil then
+        local addonCalled, addonResult = pcall(onOverlay, bar)
+        if (not addonCalled or addonResult ~= true) and bars[bar] ~= nil then
             bars[bar].overlayValid = false
             local state = bars[bar].state
-            if state ~= nil then applyCache(state) end
+            if state ~= nil then disableView(state) end
         end
         if not ok then error(a, 0) end
         return a, b, c
