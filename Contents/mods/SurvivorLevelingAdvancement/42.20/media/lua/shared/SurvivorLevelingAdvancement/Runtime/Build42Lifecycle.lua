@@ -494,6 +494,11 @@ function Build42Lifecycle.create(dependencies)
         return failure("invalid_dependencies", "modules and globals are required")
     end
     local modules, globals = rawget(dependencies, "modules"), rawget(dependencies, "globals")
+    local authoritativeMode = rawget(dependencies, "mode")
+    if authoritativeMode ~= nil and authoritativeMode ~= "server"
+        and authoritativeMode ~= "client" and authoritativeMode ~= "single_player" then
+        return failure("mode_invalid", "authoritative mode is invalid")
+    end
     local runtimeFactory, ownerFactory = rawget(modules, "Build42RuntimeFactory"), rawget(modules, "Build42OwnerTransport")
     local advancementFactory, clientState = rawget(modules, "Build42AdvancementTransport"), rawget(modules, "ClientOwnerState")
     local adminFactory, adminBoundaryFactory = rawget(modules, "Build42AdminTransport"), rawget(modules, "Build42AdminBoundary")
@@ -520,20 +525,27 @@ function Build42Lifecycle.create(dependencies)
     local getPlayerFromUsername = rawget(globals, "getPlayerFromUsername")
     local writeLog = rawget(globals, "writeLog")
     local isServer, isClient = rawget(globals, "isServer"), rawget(globals, "isClient")
-    if not callable(isServer) or not callable(isClient) then return failure("invalid_dependencies", "mode globals are required") end
-    local serverCalled, serverMode = pcall(isServer)
-    local clientCalled, clientMode = pcall(isClient)
-    if not serverCalled or not clientCalled or type(serverMode) ~= "boolean" or type(clientMode) ~= "boolean" then
-        return failure("mode_invalid", "isServer and isClient must return booleans")
+    local getSpecificPlayer = rawget(globals, "getSpecificPlayer")
+    local mode = authoritativeMode
+    if mode == nil then
+        if not callable(isServer) or not callable(isClient) then return failure("invalid_dependencies", "mode globals are required") end
+        local serverCalled, serverMode = pcall(isServer)
+        local clientCalled, clientMode = pcall(isClient)
+        if not serverCalled or not clientCalled or type(serverMode) ~= "boolean" or type(clientMode) ~= "boolean" then
+            return failure("mode_invalid", "isServer and isClient must return booleans")
+        end
+        if serverMode and clientMode then return failure("mode_invalid", "server and client cannot both be true") end
+        mode = serverMode and "server" or clientMode and "client" or "single_player"
     end
-    if serverMode and clientMode then return failure("mode_invalid", "server and client cannot both be true") end
-    local mode = serverMode and "server" or clientMode and "client" or "single_player"
     local isDebugEnabled = rawget(globals, "isDebugEnabled")
     if mode == "single_player" and not callable(isDebugEnabled) then
         return failure("invalid_dependencies", "single-player debug capability is required")
     end
     local sendCommand = mode == "server" and rawget(globals, "sendServerCommand") or rawget(globals, "sendClientCommand")
     if not callable(sendCommand) then return failure("invalid_dependencies", "mode command sender is required") end
+    if mode == "client" and not callable(getSpecificPlayer) then
+        return failure("invalid_dependencies", "getSpecificPlayer is required")
+    end
 
     local ownerClient, advancementClient, adminClient
     if mode ~= "server" then
@@ -557,10 +569,12 @@ function Build42Lifecycle.create(dependencies)
     if events == nil then return failure("invalid_dependencies", "required lifecycle events are required") end
 
     local installed, installAttempted, startupAttempted, started = false, false, false, false
+    local adoptionAttempted = false
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
     local ownerSessionReady, ownerSessionSnapshot, advancementRequest
     local adminSessionInspect, adminSessionRequest
-    local pendingPlayers, readyPlayers, singlePlayerResults, singlePlayerAdminResults = {}, {}, {}, {}
+    local pendingPlayers, readyPlayers, readyAttempts = {}, {}, {}
+    local singlePlayerResults, singlePlayerAdminResults = {}, {}
     local owner, readySingle = {}, nil
     local clientStateListener = nil
 
@@ -714,6 +728,8 @@ function Build42Lifecycle.create(dependencies)
     end
 
     local function readyMultiplayer(localSlot, player)
+        if rawequal(readyAttempts[localSlot], player) then return { ok = true } end
+        readyAttempts[localSlot] = player
         readyPlayers[localSlot] = nil
         local firstFailure = nil
         if trusted(advancementClient.resetSlot, "advancement_slot_reset_invalid", "advancementClient.resetSlot", localSlot) == nil then
@@ -729,6 +745,24 @@ function Build42Lifecycle.create(dependencies)
         if trusted(ownerClient.ready, "owner_ready_invalid", "ownerClient.ready", localSlot, player) == nil then return retainedFailure end
         readyPlayers[localSlot] = player
         return { ok = true }
+    end
+
+    local function adoptExistingPlayers()
+        if adoptionAttempted then return end
+        adoptionAttempted = true
+        local firstFailure = nil
+        for slot = 0, 3 do
+            local called, player = pcall(getSpecificPlayer, slot)
+            if not called then
+                firstFailure = firstFailure or failure("player_resolver_threw", "getSpecificPlayer")
+            elseif player ~= nil then
+                local ready = readyMultiplayer(slot, player)
+                if type(ready) ~= "table" or rawget(ready, "ok") ~= true then
+                    firstFailure = firstFailure or bounded(ready, "player_adoption_failed", "getSpecificPlayer")
+                end
+            end
+        end
+        if firstFailure ~= nil then retainedFailure = firstFailure end
     end
 
     local function serverDispatch(endpoint, code, detail, allowCommittedFalse, module, command, player, args)
@@ -907,10 +941,10 @@ function Build42Lifecycle.create(dependencies)
     end
 
     local callbacks = {}
-    callbacks.OnServerStarted = function() if ownEvents() then startup() end end
-    callbacks.OnGameStart = function() if ownEvents() then startup() end end
+    callbacks.OnServerStarted = function() if installed and ownEvents() then startup() end end
+    callbacks.OnGameStart = function() if installed and ownEvents() then startup() end end
     callbacks.OnClientCommand = function(module, command, player, args)
-        if not ownEvents() or not started or module ~= MODULE then return end
+        if not installed or not ownEvents() or not started or module ~= MODULE then return end
         if command == "ownerReady" or command == "ownerRefresh" then
             serverDispatch(ownerServerHandle, "owner_server_handle_invalid", "ownerServer.handle", false, module, command, player, args)
         elseif command == "advancementRequest" then
@@ -920,13 +954,13 @@ function Build42Lifecycle.create(dependencies)
         end
     end
     callbacks.OnCreatePlayer = function(localSlot, player)
-        if not ownEvents() or not validSlot(localSlot) or player == nil then return end
+        if not installed or not ownEvents() or not validSlot(localSlot) or player == nil then return end
         if mode == "client" then readyMultiplayer(localSlot, player)
         elseif started then readySingle(localSlot, player)
         elseif not startupAttempted then pendingPlayers[localSlot] = player end
     end
     callbacks.OnServerCommand = function(module, command, args)
-        if not ownEvents() or module ~= MODULE then return end
+        if not installed or not ownEvents() or module ~= MODULE then return end
         if command == "ownerSnapshot" then
             local called, result = pcall(ownerClient.handle, module, command, args)
             local handled, localSlot, accepted = false, nil, nil
@@ -957,8 +991,9 @@ function Build42Lifecycle.create(dependencies)
         end
     end
     callbacks.OnDisconnect = function()
+        if not installed then return end
         local ownsEvents = ownEvents()
-        for slot = 0, 3 do readyPlayers[slot] = nil end
+        for slot = 0, 3 do readyPlayers[slot], readyAttempts[slot] = nil, nil end
         local firstFailure = not ownsEvents and retainedFailure or nil
         local called, result = pcall(ownerClient.reset)
         if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
@@ -986,6 +1021,7 @@ function Build42Lifecycle.create(dependencies)
             if not pcall(rawget(events[name], "Add"), callbacks[name]) then return retain(nil, "event_register_threw", name) end
         end
         installed = true
+        if mode == "client" then adoptExistingPlayers() end
         return { ok = true }
     end
 
