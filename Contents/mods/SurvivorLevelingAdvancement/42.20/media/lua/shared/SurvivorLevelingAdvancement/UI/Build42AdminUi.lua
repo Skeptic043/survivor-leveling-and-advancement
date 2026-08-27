@@ -1,8 +1,10 @@
 local Build42AdminUi = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
-local PANEL_WIDTH = 360
+local PANEL_WIDTH = 400
 local PANEL_HEIGHT = 318
+local PANEL_MARGIN = 16
+local PANEL_GAP = 20
 
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }
@@ -151,6 +153,17 @@ end
 local function parsePositiveInteger(value)
     local parsed = parsePositiveNumber(value)
     return positiveInteger(parsed) and parsed or nil
+end
+
+local function formatSurvivorXp(value)
+    if not finite(value) or value < 0 then return nil end
+    local rounded = value
+    if value <= MAX_SAFE_INTEGER / 10 then
+        rounded = math.floor(value * 10 + 0.5) / 10
+    end
+    local called, formatted = pcall(string.format,
+        rounded == math.floor(rounded) and "%.0f" or "%.1f", rounded)
+    return called and type(formatted) == "string" and formatted or nil
 end
 
 function Build42AdminUi.create(dependencies)
@@ -584,7 +597,11 @@ function Build42AdminUi.create(dependencies)
         local summary = state.summary
         if summary ~= nil then
             drawLine(localized("IGUI_SLA_Admin_Level", summary.level), 16, 58)
-            drawLine(localized("IGUI_SLA_Admin_Xp", summary.xpIntoLevel, summary.xpForNextLevel), 16, 78)
+            local current = formatSurvivorXp(summary.xpIntoLevel)
+            local required = formatSurvivorXp(summary.xpForNextLevel)
+            if current ~= nil and required ~= nil then
+                drawLine(localized("IGUI_SLA_Admin_Xp", current, required), 16, 78)
+            end
             drawLine(localized("IGUI_SLA_Admin_Ap", summary.availableAp), 16, 98)
         end
         drawLine(state.message, 16, 122)
@@ -609,14 +626,18 @@ function Build42AdminUi.create(dependencies)
 
     local function buildChildren(state)
         windowCreateChildren(state.window)
-        local xpEntry = makeControl(entryClass, entryNew, "", 16, 170, 154, 24)
-        local levelsEntry = makeControl(entryClass, entryNew, "", 16, 230, 154, 24)
-        local awardXp = makeButton(state, 182, 170, 160, localized("IGUI_SLA_Admin_AwardXp"), "XP")
-        local awardLevels = makeButton(state, 182, 230, 160,
+        local grid = state.grid
+        if type(grid) ~= "table" then return false end
+        local xpEntry = makeControl(entryClass, entryNew, "", grid.left, 170, grid.width, 24)
+        local levelsEntry = makeControl(entryClass, entryNew, "", grid.left, 230, grid.width, 24)
+        local awardXp = makeButton(state, grid.right, 170, grid.width,
+            localized("IGUI_SLA_Admin_AwardXp"), "XP")
+        local awardLevels = makeButton(state, grid.right, 230, grid.width,
             localized("IGUI_SLA_Admin_AwardLevels"), "LEVELS")
-        local clearSlots = makeButton(state, 16, 274, 154,
+        local clearSlots = makeButton(state, grid.left, 274, grid.width,
             localized("IGUI_SLA_Admin_ClearSlots"), "CLEAR")
-        local refresh = makeButton(state, 190, 274, 154, localized("IGUI_SLA_Admin_Refresh"), "REFRESH")
+        local refresh = makeButton(state, grid.right, 274, grid.width,
+            localized("IGUI_SLA_Admin_Refresh"), "REFRESH")
         if xpEntry == nil or levelsEntry == nil or awardXp == nil
             or awardLevels == nil or clearSlots == nil or refresh == nil
             or not callable(clearSlots.setVisible) then return false end
@@ -690,9 +711,16 @@ function Build42AdminUi.create(dependencies)
             access = launcherAvailable(slot),
             message = localized("IGUI_SLA_Admin_Waiting"),
             window = window,
+            grid = {
+                left = PANEL_MARGIN,
+                width = (width - PANEL_MARGIN * 2 - PANEL_GAP) / 2,
+                right = PANEL_MARGIN + (width - PANEL_MARGIN * 2 - PANEL_GAP) / 2 + PANEL_GAP,
+            },
             closed = false,
         }
-        if state.message == nil then return nil, failure("translation_failed", "admin copy") end
+        if state.message == nil or state.grid.width <= 0 then
+            return nil, failure("translation_failed", "admin copy")
+        end
         window.createChildren = function()
             if not buildChildren(state) then error("admin child construction") end
         end

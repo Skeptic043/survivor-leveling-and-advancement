@@ -54,13 +54,13 @@ local function getText(key, ...)
     return value
 end
 
-local function summary(revision, level, spent, xp, accountingMode)
+local function summary(revision, level, spent, xp, accountingMode, xpForNextLevel)
     return {
         accountingMode = accountingMode or "Tracked",
         revision = revision,
         level = level,
         xpIntoLevel = xp or 25,
-        xpForNextLevel = 100,
+        xpForNextLevel = xpForNextLevel or 100,
         spent = spent,
         availableAp = level - spent,
     }
@@ -509,9 +509,9 @@ local window = mp.windows[1]
 local state = rawget(window, "__slaAdminState")
 expect(state ~= nil, "panel owns bounded controller state")
 equal(mp.viewportSlot, 2, "viewport capability preserves exact local slot")
-equal(window.x, 470, "panel centers inside nonzero split-screen X origin")
+equal(window.x, 450, "panel centers inside nonzero split-screen X origin")
 equal(window.y, 141, "panel centers inside nonzero split-screen Y origin")
-equal(window.width, 360, "panel uses compact width inside local viewport")
+equal(window.width, 400, "panel uses compact width inside local viewport")
 equal(window.height, 318, "panel uses compact height inside local viewport")
 equal(window.instantiates, 1, "window instantiates exactly once before UI-manager add")
 equal(table.concat(window.phaseOrder, ","), "initialise,instantiate,manager,visible",
@@ -523,10 +523,22 @@ expect(state.xpEntry.initialised and state.levelsEntry.initialised
     and state.awardXpButton.initialised and state.awardLevelsButton.initialised
     and state.clearSlotsButton.initialised and state.refreshButton.initialised,
     "all SLA entries and buttons initialise exactly once")
+equal(state.xpEntry.x, 16, "XP entry aligns to the left panel margin")
+equal(state.levelsEntry.x, 16, "levels entry aligns to the left panel margin")
+equal(state.awardXpButton.x, 210, "XP award aligns to the right grid column")
+equal(state.awardLevelsButton.x, 210, "levels award aligns to the right grid column")
 equal(state.clearSlotsButton.x, 16, "clear button stays inside the left panel margin")
-equal(state.clearSlotsButton.width, 154, "clear button uses the compact equal bottom width")
-equal(state.refreshButton.x, 190, "refresh button starts after the native bottom-row gap")
-equal(state.refreshButton.width, 154, "refresh button matches the clear button width")
+equal(state.clearSlotsButton.width, 174, "clear button uses the shared grid width")
+equal(state.refreshButton.x, 210, "refresh button starts at the right grid column")
+equal(state.refreshButton.width, 174, "refresh button matches the shared grid width")
+equal(state.xpEntry.width, state.awardXpButton.width,
+    "first award row uses equal grid columns")
+equal(state.levelsEntry.width, state.awardLevelsButton.width,
+    "second award row uses equal grid columns")
+equal(state.awardXpButton.x - (state.xpEntry.x + state.xpEntry.width), 20,
+    "first award row keeps the shared grid gap")
+equal(state.awardLevelsButton.x - (state.levelsEntry.x + state.levelsEntry.width), 20,
+    "second award row keeps the shared grid gap")
 equal(state.refreshButton.x - (state.clearSlotsButton.x + state.clearSlotsButton.width), 20,
     "bottom buttons keep a twenty-pixel visible gap")
 equal(state.refreshButton.x + state.refreshButton.width, window.width - 16,
@@ -568,7 +580,7 @@ mp.status = {
 window:prerender()
 for repeatRender = 1, 20 do window:prerender() end
 equal(state.clearSlotsButton.x, 16, "repeated panel renders keep clear button position")
-equal(state.refreshButton.x, 190, "repeated panel renders keep refresh button position")
+equal(state.refreshButton.x, 210, "repeated panel renders keep refresh button position")
 equal(state.clearSlotsButton.width, state.refreshButton.width,
     "repeated panel renders keep bottom button widths equal")
 equal(state.refreshButton.x - (state.clearSlotsButton.x + state.clearSlotsButton.width), 20,
@@ -585,6 +597,32 @@ expect(containsDraw(window, "Survivor Level: 5"), "panel draws Survivor Level")
 expect(containsDraw(window, "Survivor XP: 25 / 100"), "panel draws exact XP progress")
 expect(containsDraw(window, "Available AP: 3"), "panel draws available AP")
 expect(containsDraw(window, "Target: Alpha"), "MP panel draws canonical target username")
+
+state.summary = summary(7, 5, 2, 25.44, "Tracked", 100.04)
+window:prerender()
+expect(containsDraw(window, "Survivor XP: 25.4 / 100"),
+    "panel rounds ordinary fractional Survivor XP to one decimal place")
+equal(state.summary.xpIntoLevel, 25.44,
+    "panel presentation leaves the exact current summary value unchanged")
+equal(state.summary.xpForNextLevel, 100.04,
+    "panel presentation leaves the exact required summary value unchanged")
+state.summary = summary(7, 5, 2, 25.05, "Tracked", 100.05)
+window:prerender()
+expect(containsDraw(window, "Survivor XP: 25.1 / 100.1"),
+    "panel rounds Survivor XP half-up at one decimal place")
+state.summary = summary(7, 5, 2, 9007199254740990, "Tracked", 9007199254740991)
+window:prerender()
+local largeXpText = nil
+for drawIndex = #window.draws, 1, -1 do
+    local text = window.draws[drawIndex].text
+    if string.find(text, "Survivor XP: ", 1, true) == 1 then
+        largeXpText = text
+        break
+    end
+end
+expect(largeXpText ~= nil and string.find(largeXpText, ".", 1, true) == nil,
+    "panel presents safe large Survivor XP without a decimal suffix")
+state.summary = summary(7, 5, 2)
 
 state.xpEntry:setText("12.5")
 state.awardXpButton:click()

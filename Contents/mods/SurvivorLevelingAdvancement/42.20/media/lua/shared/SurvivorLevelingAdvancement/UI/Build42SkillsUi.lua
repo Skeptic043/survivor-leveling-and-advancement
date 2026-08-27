@@ -431,6 +431,13 @@ function Build42SkillsUi.create(dependencies)
         return value
     end
 
+    local function isVisible(view)
+        local called, reader = pcall(function() return view and view.isVisible end)
+        if not called or not callable(reader) then return false end
+        local visibleCalled, visible = pcall(reader, view)
+        return visibleCalled and visible == true
+    end
+
     local function readNumber(target, name)
         local fn = type(target) == "table" and target[name] or nil
         if not callable(fn) then return nil end
@@ -451,6 +458,7 @@ function Build42SkillsUi.create(dependencies)
         local slot = type(target) == "table" and rawget(target, "playerNum") or nil
         if not validSlot(slot) then return nil end
         state = {
+            view = target,
             slot = slot,
             dirty = true,
             observed = false,
@@ -495,9 +503,11 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local restoreLayout
+    local restoreAdminVisibility
 
     local function disableView(state)
         if state == nil then return end
+        if restoreAdminVisibility ~= nil then pcall(restoreAdminVisibility, state) end
         if restoreLayout ~= nil then
             for view, candidate in pairs(views) do
                 if candidate == state then
@@ -705,6 +715,17 @@ function Build42SkillsUi.create(dependencies)
         return formatted
     end
 
+    local function formatSurvivorXp(value)
+        if not finite(value) or value < 0 then return nil end
+        local rounded = value
+        if value <= MAX_SAFE_INTEGER / 10 then
+            rounded = math.floor(value * 10 + 0.5) / 10
+        end
+        local called, formatted = pcall(string.format,
+            rounded == math.floor(rounded) and "%.0f" or "%.1f", rounded)
+        return called and type(formatted) == "string" and formatted or nil
+    end
+
     local function containsHorizontal(value, left, right, finalRegion)
         return finite(value) and finite(left) and finite(right) and right >= left
             and value >= left and (value < right or (finalRegion and value == right))
@@ -771,8 +792,10 @@ function Build42SkillsUi.create(dependencies)
 
     local function headerTexts(cache)
         local left = localized("IGUI_SLA_StatusAP", cache.survivor.availableAp)
-        local second = localized("IGUI_SLA_StatusSurvivorXp",
-            math.floor(cache.survivor.xpIntoLevel), math.floor(cache.survivor.xpForNextLevel))
+        local current = formatSurvivorXp(cache.survivor.xpIntoLevel)
+        local required = formatSurvivorXp(cache.survivor.xpForNextLevel)
+        local second = current ~= nil and required ~= nil
+            and localized("IGUI_SLA_StatusSurvivorXp", current, required) or nil
         if left == nil or second == nil then return nil, nil, nil end
         if cache.allotment.mode ~= "Global" then return left, nil, second end
         local right = localized("IGUI_SLA_StatusActive", cache.allotment.activeCount, cache.allotment.limit)
@@ -791,14 +814,90 @@ function Build42SkillsUi.create(dependencies)
             and pcall(setEnable, button, visible)
     end
 
-    local function updateAdminAvailability(state)
-        if adminLauncher == nil then return setAdminButtonState(state, false) end
+    local function updateAdminAvailability(view, state)
+        if adminLauncher == nil or state.adminVisibilityFailed or not isVisible(view) then
+            return setAdminButtonState(state, false)
+        end
         local called, available = pcall(adminAvailable, state.slot)
         return setAdminButtonState(state, called and available == true)
     end
 
+    local function installAdminVisibility(view, state)
+        if adminLauncher == nil then return true end
+        if state.adminVisibilityFailed then
+            setAdminButtonState(state, false)
+            return false
+        end
+        if state.adminVisibilityWrapper ~= nil then
+            local called, current = pcall(function() return view.setVisible end)
+            if called and current == state.adminVisibilityWrapper then return true end
+            state.adminVisibilityFailed = true
+            setAdminButtonState(state, false)
+            return false
+        end
+        local priorRaw = rawget(view, "setVisible")
+        local called, prior = pcall(function() return view.setVisible end)
+        if not called or not callable(prior) then
+            state.adminVisibilityFailed = true
+            setAdminButtonState(state, false)
+            return false
+        end
+        local wrapper
+        wrapper = function(target, ...)
+            local ok, a, b, c = pcall(prior, target, ...)
+            if not ok then
+                setAdminButtonState(state, false)
+                disableView(state)
+                error(a, 0)
+            end
+            local updated, applied = pcall(updateAdminAvailability, view, state)
+            if not updated or not applied then setAdminButtonState(state, false) end
+            return a, b, c
+        end
+        local wrote = pcall(rawset, view, "setVisible", wrapper)
+        if not wrote then
+            state.adminVisibilityFailed = true
+            setAdminButtonState(state, false)
+            return false
+        end
+        local installed, current = pcall(function() return view.setVisible end)
+        if not installed or current ~= wrapper then
+            state.adminVisibilityFailed = true
+            setAdminButtonState(state, false)
+            return false
+        end
+        state.adminVisibilityPrior = priorRaw
+        state.adminVisibilityWrapper = wrapper
+        local updated, applied = pcall(updateAdminAvailability, view, state)
+        if not updated or not applied then setAdminButtonState(state, false) end
+        return true
+    end
+
+    restoreAdminVisibility = function(state)
+        if state == nil or state.adminVisibilityWrapper == nil then return true end
+        local view = state.view
+        if type(view) ~= "table" or rawget(view, "setVisible") ~= state.adminVisibilityWrapper then
+            state.adminVisibilityFailed = true
+            setAdminButtonState(state, false)
+            return false
+        end
+        local restored = pcall(rawset, view, "setVisible", state.adminVisibilityPrior)
+        if not restored or rawget(view, "setVisible") ~= state.adminVisibilityPrior then
+            state.adminVisibilityFailed = true
+            setAdminButtonState(state, false)
+            return false
+        end
+        state.adminVisibilityWrapper = nil
+        state.adminVisibilityPrior = nil
+        return true
+    end
+
     local function activateAdmin(state)
         if state == nil or state.disabled then return end
+        if not isVisible(state.view) then
+            setAdminButtonState(state, false)
+            return
+        end
         local called, available = pcall(adminAvailable, state.slot)
         if not called or available ~= true then
             setAdminButtonState(state, false)
@@ -986,7 +1085,7 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local function prepareHeader(view, state)
-        if not updateAdminAvailability(state) then return false end
+        if not updateAdminAvailability(view, state) then return false end
         local _, buttonY, buttonHeight = firstButtonGeometry(view)
         if buttonY == nil or buttonHeight == nil then return false end
         local viewportInset = buttonY + buttonHeight
@@ -1247,6 +1346,7 @@ function Build42SkillsUi.create(dependencies)
     wrappers.prerender = function(view, ...)
         local state = viewFor(view)
         if state ~= nil and not state.disabled then
+            installAdminVisibility(view, state)
             local prepared, result = pcall(prepareHeader, view, state)
             if not prepared or not result then disableView(state) end
         end
@@ -1259,6 +1359,7 @@ function Build42SkillsUi.create(dependencies)
     wrappers.render = function(view, ...)
         local state = viewFor(view)
         if state ~= nil and not state.disabled then
+            installAdminVisibility(view, state)
             local headerCalled, headerPrepared = pcall(prepareHeader, view, state)
             local geometryCalled, geometryPrepared = pcall(prepareGeometry, view, state)
             if not headerCalled or not headerPrepared or not geometryCalled or not geometryPrepared then

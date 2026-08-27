@@ -581,6 +581,8 @@ local function makeView(environment, slot, bars, delayed)
         vanillaScrollHeight = 500,
         scrollHeight = 500,
         yScroll = 0,
+        visible = true,
+        visibleTransitions = 0,
         sorted = { category },
         buttonList = { categoryButton },
         statusDraws = parent.statusDraws,
@@ -595,6 +597,12 @@ local function makeView(environment, slot, bars, delayed)
     function view:getYScroll() return self.yScroll end
     function view:setYScroll(value) self.yScroll = value end
     function view:getScrollHeight() return self.scrollHeight end
+    function view:isVisible() return self.visible ~= false end
+    function view:setVisible(value)
+        self.visibleTransitions = self.visibleTransitions + 1
+        self.visible = value
+        if self.throwSetVisible then error("vanilla setVisible") end
+    end
     function view:setWidthAndParentWidth(value)
         self:setWidth(value)
         local child, current = self, self.parent
@@ -836,12 +844,55 @@ local fractionalBar = makeBar(fractionalEnvironment, "Axe")
 local fractionalView = makeView(fractionalEnvironment, 0, { fractionalBar }, false)
 fractionalView:prerender()
 fractionalView:render()
-expect(lastDrawText(fractionalView.statusDraws, "Survivor XP: 105 / 1200") ~= nil,
-    "Survivor XP display floors fractional values")
+expect(lastDrawText(fractionalView.statusDraws, "Survivor XP: 105.4 / 1200") ~= nil,
+    "Survivor XP display rounds fractional values to one decimal place")
 equal(fractionalEnvironment.lastModelView.survivor.xpIntoLevel, 105.40056410233345,
     "Survivor XP cache retains exact current value")
 equal(fractionalEnvironment.lastModelView.survivor.xpForNextLevel, 1200,
     "Survivor XP cache retains exact required value")
+
+local survivorXpDisplayCases = {
+    { current = 10, required = 100, display = "Survivor XP: 10 / 100" },
+    { current = 10.04, required = 100, display = "Survivor XP: 10 / 100" },
+    { current = 10.05, required = 100, display = "Survivor XP: 10.1 / 100" },
+    {
+        current = 9007199254740990,
+        required = 9007199254740991,
+        large = true,
+    },
+}
+for index = 1, #survivorXpDisplayCases do
+    local displayCase = survivorXpDisplayCases[index]
+    local displayEnvironment = makeEnvironment({
+        xpIntoLevel = displayCase.current,
+        xpForNextLevel = displayCase.required,
+    })
+    expect(displayEnvironment.integration.install().ok,
+        "Survivor XP display case installs " .. tostring(index))
+    local displayBar = makeBar(displayEnvironment, "Axe")
+    local displayView = makeView(displayEnvironment, 0, { displayBar }, false)
+    displayView:prerender()
+    displayView:render()
+    if displayCase.large then
+        local largeText = nil
+        for drawIndex = #displayView.statusDraws, 1, -1 do
+            local text = displayView.statusDraws[drawIndex].text
+            if string.find(text, "Survivor XP: ", 1, true) == 1 then
+                largeText = text
+                break
+            end
+        end
+        expect(largeText ~= nil and string.find(largeText, ".", 1, true) == nil,
+            "safe large Survivor XP has no decimal suffix: " .. tostring(largeText))
+    else
+        expect(lastDrawText(displayView.statusDraws, displayCase.display) ~= nil,
+            "Survivor XP display case uses the compact shared presentation " .. tostring(index))
+    end
+    equal(displayEnvironment.lastModelView.survivor.xpIntoLevel, displayCase.current,
+        "Survivor XP display leaves the exact current snapshot unchanged " .. tostring(index))
+    equal(displayEnvironment.lastModelView.survivor.xpForNextLevel, displayCase.required,
+        "Survivor XP display leaves the exact required snapshot unchanged " .. tostring(index))
+end
 
 local slotBar = makeBar(environment, "Cooking", { x = 120 })
 local slotView = makeView(environment, 1, { slotBar }, false)
@@ -1601,16 +1652,42 @@ equal(adminButton.y, 38, "Admin uses the second native-height row")
 local stableAdminX = adminButton.x
 adminView:render()
 equal(adminButton.x, stableAdminX, "repeated render keeps Admin right-margin placement stable")
+local visibleTransitionsBeforeTabs = adminView.visibleTransitions
+local buttonCreatesBeforeTabs = adminEnvironment.buttonCreates
+adminView:setVisible(false)
+expect(not adminButton.visible and not adminButton.enabled,
+    "Admin hides at the exact Skills visibility transition")
+equal(#adminView.parent.children, 1, "leaving Skills creates no additional Admin button")
+adminButton:click()
+equal(#adminEnvironment.adminOpens, 0, "stale hidden Admin click cannot open the panel")
+adminView:setVisible(true)
+expect(adminButton.visible and adminButton.enabled,
+    "Admin returns at the exact Skills visibility transition")
+for _, tabName in ipairs({ "Info", "Health", "Protection", "Temperature", "Custom" }) do
+    adminView:setVisible(false)
+    expect(not adminButton.visible and not adminButton.enabled,
+        "Admin hides while " .. tabName .. " is the active non-Skills tab")
+    adminButton:click()
+    adminView:setVisible(true)
+    expect(adminButton.visible and adminButton.enabled,
+        "Admin returns from " .. tabName .. " without changing authorization")
+end
+equal(adminView.visibleTransitions, visibleTransitionsBeforeTabs + 12,
+    "owned visibility wrapper chains every vanilla tab transition exactly once")
+equal(adminEnvironment.buttonCreates, buttonCreatesBeforeTabs,
+    "tab transitions create no duplicate UI controls")
+equal(#adminEnvironment.adminOpens, 0, "tab switching opens no admin panel")
 local visibleApX = lastDrawText(adminView.statusDraws, "AP: 3").x
 local visibleXpX = adminXp.x
 adminButton:click()
 equal(#adminEnvironment.adminOpens, 1, "admin launcher activates once")
 equal(adminEnvironment.adminOpens[1], 2, "admin launcher activation preserves exact slot")
 adminEnvironment.adminAvailable = false
-adminView:prerender()
-adminView:render()
+adminView:setVisible(false)
+adminView:setVisible(true)
 expect(not adminButton.visible and not adminButton.enabled,
-    "launcher disappears and disables on the next visible prerender")
+    "launcher disappears and disables on an authorized visibility transition")
+adminView:render()
 equal(lastDrawText(adminView.statusDraws, "AP: 3").x, visibleApX,
     "first-row label does not move when Admin disappears")
 equal(lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100").x, visibleXpX,
@@ -1623,6 +1700,46 @@ adminEnvironment.adminInstalled = false
 local lostAdminHook = adminEnvironment.integration.install()
 equal(lostAdminHook.ok, false, "lost admin hook ownership fails composite closed")
 equal(lostAdminHook.code, "hook_ownership_lost", "lost admin ownership code")
+
+local throwingVisibilityEnvironment = makeEnvironment({ adminLauncher = true })
+expect(throwingVisibilityEnvironment.integration.install().ok,
+    "throwing visibility integration installs")
+local throwingVisibilityBar = makeBar(throwingVisibilityEnvironment, "Axe")
+local throwingVisibilityView = makeView(throwingVisibilityEnvironment, 0, { throwingVisibilityBar })
+local vanillaSetVisible = rawget(throwingVisibilityView, "setVisible")
+throwingVisibilityView:prerender()
+throwingVisibilityView:render()
+local throwingVisibilityButton = throwingVisibilityView.parent.children[1]
+local ownedSetVisible = rawget(throwingVisibilityView, "setVisible")
+expect(ownedSetVisible ~= vanillaSetVisible, "Skills UI owns the exact per-view visibility seam")
+throwingVisibilityView.throwSetVisible = true
+local visibilityCalled, visibilityError = pcall(function() throwingVisibilityView:setVisible(false) end)
+expect(not visibilityCalled and visibilityError == "vanilla setVisible",
+    "throwing vanilla visibility transition propagates unchanged")
+expect(not throwingVisibilityButton.visible and not throwingVisibilityButton.enabled,
+    "throwing visibility transition hides and disables Admin before propagation")
+equal(rawget(throwingVisibilityView, "setVisible"), vanillaSetVisible,
+    "throwing visibility transition restores the exact prior seam")
+equal(throwingVisibilityView.y, 8, "throwing visibility transition restores vanilla header geometry")
+throwingVisibilityButton:click()
+equal(#throwingVisibilityEnvironment.adminOpens, 0,
+    "throwing visibility transition leaves no stale Admin activation")
+
+local lostVisibilityEnvironment = makeEnvironment({ adminLauncher = true })
+expect(lostVisibilityEnvironment.integration.install().ok, "lost visibility integration installs")
+local lostVisibilityBar = makeBar(lostVisibilityEnvironment, "Axe")
+local lostVisibilityView = makeView(lostVisibilityEnvironment, 0, { lostVisibilityBar })
+local lostVanillaSetVisible = rawget(lostVisibilityView, "setVisible")
+lostVisibilityView:prerender()
+lostVisibilityView:render()
+local lostVisibilityButton = lostVisibilityView.parent.children[1]
+rawset(lostVisibilityView, "setVisible", lostVanillaSetVisible)
+lostVisibilityView:render()
+expect(not lostVisibilityButton.visible and not lostVisibilityButton.enabled,
+    "lost visibility-wrapper ownership fails the Admin launcher closed")
+lostVisibilityButton:click()
+equal(#lostVisibilityEnvironment.adminOpens, 0,
+    "lost visibility-wrapper ownership leaves no stale Admin activation")
 
 local offsetAdminEnvironment = makeEnvironment({ adminLauncher = true })
 expect(offsetAdminEnvironment.integration.install().ok, "offset Admin integration installs")
