@@ -563,17 +563,16 @@ function Build42Lifecycle.create(dependencies)
     end
 
     local eventNames = mode == "server" and { "OnServerStarted", "OnClientCommand" }
-        or mode == "client" and { "OnCreatePlayer", "OnMiniScoreboardUpdate", "OnServerCommand", "OnDisconnect" }
+        or mode == "client" and { "OnMiniScoreboardUpdate", "OnServerCommand", "OnDisconnect" }
         or { "OnGameStart", "OnCreatePlayer" }
     local events = eventSet(rawget(globals, "Events"), eventNames)
     if events == nil then return failure("invalid_dependencies", "required lifecycle events are required") end
 
     local installed, installAttempted, startupAttempted, started = false, false, false, false
-    local adoptionAttempted = false
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
     local ownerSessionReady, ownerSessionSnapshot, advancementRequest
     local adminSessionInspect, adminSessionRequest
-    local pendingPlayers, readyPlayers, readyAttempts = {}, {}, {}
+    local pendingPlayers, readyPlayers, observedPlayers, observedSlots = {}, {}, {}, {}
     local singlePlayerResults, singlePlayerAdminResults = {}, {}
     local owner, readySingle = {}, nil
     local clientStateListener = nil
@@ -727,46 +726,7 @@ function Build42Lifecycle.create(dependencies)
         return { ok = true }
     end
 
-    local function onlineId(player)
-        local called, method, value = pcall(function()
-            local candidate = player.getOnlineID
-            if not callable(candidate) then return nil, nil end
-            return candidate, candidate(player)
-        end)
-        if not called then return nil, failure("player_online_id_threw", "player.getOnlineID") end
-        if method == nil then return nil, failure("player_online_id_missing", "player.getOnlineID") end
-        if value == -1 then return value end
-        if not safeInteger(value) then return nil, failure("player_online_id_invalid", "player.getOnlineID") end
-        return value
-    end
-
-    local function attemptedReadiness(localSlot, player, playerOnlineId)
-        local players = readyAttempts[localSlot]
-        local ids = players ~= nil and players[player] or nil
-        return ids ~= nil and ids[playerOnlineId] == true
-    end
-
-    local function markReadinessAttempt(localSlot, player, playerOnlineId)
-        local players = readyAttempts[localSlot]
-        if players == nil then
-            players = {}
-            readyAttempts[localSlot] = players
-        end
-        local ids = players[player]
-        if ids == nil then
-            ids = {}
-            players[player] = ids
-        end
-        ids[playerOnlineId] = true
-    end
-
     local function readyMultiplayer(localSlot, player)
-        local playerOnlineId, idFailure = onlineId(player)
-        if idFailure ~= nil then return retain(idFailure, idFailure.code, idFailure.detail) end
-        if playerOnlineId == -1 or attemptedReadiness(localSlot, player, playerOnlineId) then
-            return { ok = true }
-        end
-        markReadinessAttempt(localSlot, player, playerOnlineId)
         readyPlayers[localSlot] = nil
         local firstFailure = nil
         if trusted(advancementClient.resetSlot, "advancement_slot_reset_invalid", "advancementClient.resetSlot", localSlot) == nil then
@@ -784,26 +744,39 @@ function Build42Lifecycle.create(dependencies)
         return { ok = true }
     end
 
+    local function clearMultiplayerSlot(localSlot)
+        readyPlayers[localSlot] = nil
+        local firstFailure = nil
+        if trusted(ownerClient.resetSlot, "owner_slot_reset_invalid", "ownerClient.resetSlot", localSlot) == nil then
+            firstFailure = retainedFailure
+        end
+        if trusted(advancementClient.resetSlot, "advancement_slot_reset_invalid", "advancementClient.resetSlot", localSlot) == nil and firstFailure == nil then
+            firstFailure = retainedFailure
+        end
+        if trusted(adminClient.resetSlot, "admin_slot_reset_invalid", "adminClient.resetSlot", localSlot) == nil and firstFailure == nil then
+            firstFailure = retainedFailure
+        end
+        if firstFailure ~= nil then retainedFailure = firstFailure; return firstFailure end
+        return { ok = true }
+    end
+
     local function inspectLocalPlayers()
         local firstFailure = nil
         for slot = 0, 3 do
             local called, player = pcall(getSpecificPlayer, slot)
             if not called then
                 firstFailure = firstFailure or failure("player_resolver_threw", "getSpecificPlayer")
-            elseif player ~= nil then
-                local ready = readyMultiplayer(slot, player)
-                if type(ready) ~= "table" or rawget(ready, "ok") ~= true then
-                    firstFailure = firstFailure or bounded(ready, "player_adoption_failed", "getSpecificPlayer")
+            elseif not observedSlots[slot] or observedPlayers[slot] ~= player then
+                local wasObserved = observedSlots[slot] == true
+                observedSlots[slot], observedPlayers[slot] = true, player
+                local changed = player ~= nil and readyMultiplayer(slot, player)
+                    or wasObserved and clearMultiplayerSlot(slot) or { ok = true }
+                if type(changed) ~= "table" or rawget(changed, "ok") ~= true then
+                    firstFailure = firstFailure or bounded(changed, "player_adoption_failed", "getSpecificPlayer")
                 end
             end
         end
         if firstFailure ~= nil then retainedFailure = firstFailure end
-    end
-
-    local function adoptExistingPlayers()
-        if adoptionAttempted then return end
-        adoptionAttempted = true
-        inspectLocalPlayers()
     end
 
     local function serverDispatch(endpoint, code, detail, allowCommittedFalse, module, command, player, args)
@@ -996,8 +969,7 @@ function Build42Lifecycle.create(dependencies)
     end
     callbacks.OnCreatePlayer = function(localSlot, player)
         if not installed or not ownEvents() or not validSlot(localSlot) or player == nil then return end
-        if mode == "client" then readyMultiplayer(localSlot, player)
-        elseif started then readySingle(localSlot, player)
+        if started then readySingle(localSlot, player)
         elseif not startupAttempted then pendingPlayers[localSlot] = player end
     end
     callbacks.OnMiniScoreboardUpdate = function()
@@ -1038,7 +1010,9 @@ function Build42Lifecycle.create(dependencies)
     callbacks.OnDisconnect = function()
         if not installed then return end
         local ownsEvents = ownEvents()
-        for slot = 0, 3 do readyPlayers[slot], readyAttempts[slot] = nil, nil end
+        for slot = 0, 3 do
+            readyPlayers[slot], observedPlayers[slot], observedSlots[slot] = nil, nil, nil
+        end
         local firstFailure = not ownsEvents and retainedFailure or nil
         local called, result = pcall(ownerClient.reset)
         if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
@@ -1066,7 +1040,6 @@ function Build42Lifecycle.create(dependencies)
             if not pcall(rawget(events[name], "Add"), callbacks[name]) then return retain(nil, "event_register_threw", name) end
         end
         installed = true
-        if mode == "client" then adoptExistingPlayers() end
         return { ok = true }
     end
 
