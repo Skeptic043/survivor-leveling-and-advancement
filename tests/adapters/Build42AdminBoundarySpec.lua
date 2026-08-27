@@ -534,6 +534,146 @@ assertSuccess(canonicalResult, canonicalTarget, 912, "Target", "inspect construc
 assertEqual(0, canonicalFixture.onlineLookupCalls, "canonical inspect avoids online lookup")
 assertEqual(1, canonicalFixture.usernameLookupCalls, "canonical inspect uses username lookup once")
 
+local hostedSelfRole = makeRole({ [SEE] = true }, 10)
+local hostedSelf = makeActor(hostedSelfRole)
+hostedSelf.onlineIdCalls = 0
+hostedSelf.usernameCalls = 0
+function hostedSelf:getOnlineID()
+    self.onlineIdCalls = self.onlineIdCalls + 1
+    return 914
+end
+function hostedSelf:getUsername()
+    self.usernameCalls = self.usernameCalls + 1
+    return "Hosted Admin"
+end
+local hostedSelfFixture = makeBoundary(makeTarget(8, "Other", makeRole({}, 1)))
+local hostedSelfResult = hostedSelfFixture.boundary.authorizeAndResolve(
+    hostedSelf,
+    "inspect",
+    { username = "Hosted Admin" }
+)
+assertSuccess(hostedSelfResult, hostedSelf, 914, "Hosted Admin", "hosted self inspect")
+assertEqual(0, hostedSelfFixture.lookupCalls, "hosted self inspect avoids all lookups")
+assertEqual(1, hostedSelf.onlineIdCalls, "hosted self inspect validates online ID")
+assertEqual(2, hostedSelf.usernameCalls, "hosted self inspect validates canonical username")
+
+local deniedSelfUsernameReads = 0
+local deniedSelf = makeActor(makeRole({}, 10))
+function deniedSelf:getUsername()
+    deniedSelfUsernameReads = deniedSelfUsernameReads + 1
+    return "Hosted Admin"
+end
+local deniedSelfFixture = makeBoundary(makeTarget(8, "Other", makeRole({}, 1)))
+local deniedSelfResult = deniedSelfFixture.boundary.authorizeAndResolve(
+    deniedSelf,
+    "inspect",
+    { username = "Hosted Admin" }
+)
+assertFailure(deniedSelfResult, "unauthorized", "self username read follows authorization")
+assertEqual(0, deniedSelfUsernameReads, "self username is not read before authorization")
+assertEqual(0, deniedSelfFixture.lookupCalls, "denied self inspect avoids lookup")
+
+local remoteActor = makeActor(makeRole({ [SEE] = true }, 10))
+remoteActor.usernameCalls = 0
+function remoteActor:getUsername()
+    self.usernameCalls = self.usernameCalls + 1
+    return "Hosted Admin"
+end
+local remoteTarget = makeTarget(915, "Remote Player", makeRole({}, 1))
+local remoteFixture = makeBoundary(remoteTarget)
+local remoteResult = remoteFixture.boundary.authorizeAndResolve(
+    remoteActor,
+    "inspect",
+    { username = "Remote Player" }
+)
+assertSuccess(remoteResult, remoteTarget, 915, "Remote Player", "remote inspect after actor username")
+assertEqual(1, remoteActor.usernameCalls, "remote inspect reads actor username once")
+assertEqual(1, remoteFixture.usernameLookupCalls, "remote inspect uses username lookup")
+assertEqual(0, remoteFixture.onlineLookupCalls, "remote inspect avoids online lookup")
+
+local malformedActorUsernameCases = {
+    function()
+        error("actor username failure")
+    end,
+    function()
+        return "bad\nname"
+    end,
+}
+for index = 1, #malformedActorUsernameCases do
+    local actor = makeActor(makeRole({ [SEE] = true }, 10))
+    function actor:getUsername()
+        return malformedActorUsernameCases[index]()
+    end
+    local target = makeTarget(916 + index, "Remote Player", makeRole({}, 1))
+    local fixture = makeBoundary(target)
+    local result = fixture.boundary.authorizeAndResolve(
+        actor,
+        "inspect",
+        { username = "Remote Player" }
+    )
+    assertSuccess(result, target, 916 + index, "Remote Player", "malformed actor username fallback " .. tostring(index))
+    assertEqual(1, fixture.usernameLookupCalls, "malformed actor username uses lookup " .. tostring(index))
+end
+
+local displayNameActor = makeActor(makeRole({ [SEE] = true }, 10))
+function displayNameActor:getUsername()
+    return "Hosted Admin"
+end
+function displayNameActor:getDisplayName()
+    error("display name must not be read")
+end
+local displayNameTarget = makeTarget(919, "Remote Player", makeRole({}, 1))
+local displayNameFixture = makeBoundary(displayNameTarget)
+local displayNameResult = displayNameFixture.boundary.authorizeAndResolve(
+    displayNameActor,
+    "inspect",
+    { username = "Remote Player" }
+)
+assertSuccess(displayNameResult, displayNameTarget, 919, "Remote Player", "display name is not identity")
+assertEqual(1, displayNameFixture.usernameLookupCalls, "display name does not select self")
+
+local changedSelfRole = makeRole({ [SEE] = true }, 10)
+local changedSelf = makeActor(changedSelfRole)
+changedSelf.usernameCalls = 0
+function changedSelf:getOnlineID()
+    return 920
+end
+function changedSelf:getUsername()
+    self.usernameCalls = self.usernameCalls + 1
+    if self.usernameCalls == 1 then
+        return "Hosted Admin"
+    end
+    return "Changed"
+end
+local changedSelfFixture = makeBoundary(makeTarget(8, "Other", makeRole({}, 1)))
+local changedSelfResult = changedSelfFixture.boundary.authorizeAndResolve(
+    changedSelf,
+    "inspect",
+    { username = "Hosted Admin" }
+)
+assertFailure(changedSelfResult, "target_mismatch", "self inspect applies canonical username validation")
+assertEqual(0, changedSelfFixture.lookupCalls, "self canonical mismatch avoids lookup")
+
+local mutationUsernameReads = 0
+local mutationActorRole = makeRole({ [MODIFY] = true }, 10)
+local mutationActor = makeActor(mutationActorRole)
+function mutationActor:getUsername()
+    mutationUsernameReads = mutationUsernameReads + 1
+    error("mutation must not read actor username")
+end
+local mutationTarget = makeTarget(921, "Remote Player", makeRole({}, 5))
+local mutationFixture = makeBoundary(mutationTarget)
+local mutationResult = mutationFixture.boundary.authorizeAndResolve(
+    mutationActor,
+    "awardSurvivorXp",
+    { onlineId = 921, username = "Remote Player" }
+)
+assertSuccess(mutationResult, mutationTarget, 921, "Remote Player", "mutation remains canonical lookup")
+assertEqual(0, mutationUsernameReads, "mutation avoids actor username")
+assertEqual(1, mutationFixture.onlineLookupCalls, "mutation retains online lookup")
+assertEqual(0, mutationFixture.usernameLookupCalls, "mutation avoids username lookup")
+assertEqual(1, mutationActorRole.positionCalls, "mutation retains actor hierarchy")
+
 local utf8Username = "T" .. string.char(195) .. string.char(169) .. "st"
 local utf8Target = makeTarget(913, utf8Username, makeRole({}, 99))
 local utf8Fixture = makeBoundary(utf8Target)

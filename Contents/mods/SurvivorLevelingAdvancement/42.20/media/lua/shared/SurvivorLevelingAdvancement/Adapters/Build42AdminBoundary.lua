@@ -204,7 +204,15 @@ function Build42AdminBoundary.create(dependencies)
 
         local lookupOk, target
         if inspection then
-            lookupOk, target = pcall(getPlayerFromUsername, selector.username)
+            local actorUsernameOk, actorUsername = callMethod(actor, "getUsername")
+            if actorUsernameOk
+                and isPrintableUsername(actorUsername)
+                and actorUsername == selector.username
+            then
+                lookupOk, target = true, actor
+            else
+                lookupOk, target = pcall(getPlayerFromUsername, selector.username)
+            end
         else
             lookupOk, target = pcall(getPlayerByOnlineID, selector.onlineId)
         end
