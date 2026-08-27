@@ -162,6 +162,7 @@ function Build42AdminUi.create(dependencies)
         ISButton = true,
         canSeePlayersStats = true,
         getPlayerContextMenu = true,
+        getSpecificPlayer = true,
         isServer = true,
         isClient = true,
         isDebugEnabled = true,
@@ -180,6 +181,7 @@ function Build42AdminUi.create(dependencies)
     local buttonClass = rawget(dependencies, "ISButton")
     local seePlayerStats = rawget(dependencies, "canSeePlayersStats")
     local getPlayerContextMenu = rawget(dependencies, "getPlayerContextMenu")
+    local getSpecificPlayer = rawget(dependencies, "getSpecificPlayer")
     local isServer = rawget(dependencies, "isServer")
     local isClient = rawget(dependencies, "isClient")
     local isDebugEnabled = rawget(dependencies, "isDebugEnabled")
@@ -201,7 +203,7 @@ function Build42AdminUi.create(dependencies)
         or not priorScoreboardMenu or not windowNew or not windowCreateChildren
         or not priorWindowPrerender or not callable(windowInstantiate) or not entryNew or not buttonNew
         or not requestAdmin or not adminStatus or seePlayerStats == nil
-        or not callable(getPlayerContextMenu) or not callable(isServer)
+        or not callable(getPlayerContextMenu) or not callable(getSpecificPlayer) or not callable(isServer)
         or not callable(isClient) or not callable(isDebugEnabled)
         or not callable(getText) or not callable(viewport) or smallFont == nil then
         return failure("invalid_dependencies", "callables")
@@ -253,6 +255,21 @@ function Build42AdminUi.create(dependencies)
         if not callable(hasCapability) then return false end
         local called, allowed = pcall(hasCapability, role, seePlayerStats)
         return called and allowed == true
+    end
+
+    local function localAdminUsername(slot)
+        if mode ~= "multiplayer" or not validSlot(slot) then return nil end
+        local playerCalled, player = pcall(getSpecificPlayer, slot)
+        if not playerCalled or player == nil or not actorCanInspect(player) then return nil end
+        local getUsername = protectedMember(player, "getUsername")
+        if not callable(getUsername) then return nil end
+        local usernameCalled, username = pcall(getUsername, player)
+        return usernameCalled and boundedUsername(username) and username or nil
+    end
+
+    local function launcherAvailable(slot)
+        if mode == "multiplayer" then return localAdminUsername(slot) ~= nil end
+        return debugAvailable(slot)
     end
 
     local function targetMatches(left, right)
@@ -385,7 +402,7 @@ function Build42AdminUi.create(dependencies)
     end
 
     local function updateControls(state)
-        local access = mode == "multiplayer" or debugAvailable(state.slot)
+        local access = launcherAvailable(state.slot)
         state.access = access
         local mutationEnabled = access and not state.waiting and state.summary ~= nil
         local refreshEnabled = access and not state.waiting
@@ -670,7 +687,7 @@ function Build42AdminUi.create(dependencies)
             waiting = false,
             pendingOperation = nil,
             pendingRequestId = nil,
-            access = mode == "multiplayer" or debugAvailable(slot),
+            access = launcherAvailable(slot),
             message = localized("IGUI_SLA_Admin_Waiting"),
             window = window,
             closed = false,
@@ -753,6 +770,9 @@ function Build42AdminUi.create(dependencies)
         if mode == "singleplayer" then
             if username ~= nil then return failure("invalid_target", "single player") end
             if not debugAvailable(slot) then return failure("debug_unavailable", "debug") end
+        elseif username == nil then
+            username = localAdminUsername(slot)
+            if username == nil then return failure("admin_unavailable", "local player") end
         elseif not boundedUsername(username) then
             return failure("invalid_target", "username")
         end
@@ -836,7 +856,7 @@ function Build42AdminUi.create(dependencies)
     end
 
     function integration.isAvailable(slot)
-        return debugAvailable(slot)
+        return launcherAvailable(slot)
     end
 
     function integration.open(slot, username)

@@ -78,6 +78,9 @@ local function makeEnvironment(processMode)
         vanillaContextGets = 0,
         existingMenuGets = 0,
         capabilityReads = 0,
+        specificPlayerReads = 0,
+        specificPlayerSlots = {},
+        localPlayers = {},
         requests = {},
         statusReads = 0,
         status = { ok = true, pending = false },
@@ -96,6 +99,24 @@ local function makeEnvironment(processMode)
     local Entry = {}
     local Button = {}
     local Capability = { CanSeePlayersStats = {} }
+
+    local function localPlayer(slot, username)
+        local role = {
+            hasCapability = function(_, value)
+                evidence.capabilityReads = evidence.capabilityReads + 1
+                evidence.lastCapability = value
+                return evidence.canSee
+            end,
+        }
+        return {
+            getRole = function() return role end,
+            getUsername = function() return username end,
+        }
+    end
+
+    for slot = 0, 3 do
+        evidence.localPlayers[slot] = localPlayer(slot, "Local" .. tostring(slot))
+    end
 
     local function makeMenu()
         local menu = { options = {} }
@@ -247,6 +268,12 @@ local function makeEnvironment(processMode)
             evidence.lastMenuSlot = slot
             return evidence.menu
         end,
+        getSpecificPlayer = function(slot)
+            evidence.specificPlayerReads = evidence.specificPlayerReads + 1
+            evidence.specificPlayerSlots[#evidence.specificPlayerSlots + 1] = slot
+            if evidence.getSpecificThrows then error("specific player boom") end
+            return evidence.localPlayers[slot]
+        end,
         isServer = function()
             evidence.serverReads = evidence.serverReads + 1
             return false
@@ -356,6 +383,96 @@ expect(initialStatus.ok and not initialStatus.installed and initialStatus.mode =
 expect(mp.integration.install().ok, "MP installs")
 expect(mp.integration.install().ok, "MP reload install idempotent")
 equal(mp.priorMenus, 0, "installation invokes no vanilla menu")
+
+expect(mp.integration.isAvailable(2), "MP launcher is available for the exact authorized local slot")
+equal(mp.specificPlayerSlots[#mp.specificPlayerSlots], 2,
+    "MP availability resolves only the requested local slot")
+
+local selfAdmin = makeEnvironment("multiplayer")
+expect(selfAdmin.integration.install().ok, "self-admin environment installs")
+expect(selfAdmin.integration.isAvailable(2), "self-admin local slot is available")
+local selfOpened = selfAdmin.integration.open(2)
+expect(exact(selfOpened, { ok = true }), "self-admin opens without an explicit username")
+equal(#selfAdmin.requests, 1, "self-admin opening issues one inspection")
+equal(selfAdmin.requests[1].slot, 2, "self-admin inspection keeps the exact local slot")
+expect(exact(selfAdmin.requests[1].request, { operation = true, target = true })
+    and exact(selfAdmin.requests[1].request.target, { username = true })
+    and selfAdmin.requests[1].request.target.username == "Local2",
+    "self-admin inspection derives only the exact local username")
+local selfWindow = selfAdmin.windows[1]
+local selfState = rawget(selfWindow, "__slaAdminState")
+equal(selfState.selectedUsername, "Local2", "self-admin panel retains the bounded local username")
+selfAdmin.status = {
+    ok = true,
+    pending = false,
+    result = {
+        requestId = "request-1",
+        operation = "inspect",
+        target = { onlineId = 42, username = "Local2" },
+        ok = true,
+        outcome = "inspected",
+        summary = summary(1, 2, 0),
+    },
+}
+selfWindow:prerender()
+expect(selfState.awardXpButton.enabled and selfState.awardLevelsButton.enabled
+    and selfState.clearSlotsButton.enabled and selfState.refreshButton.enabled
+    and selfState.xpEntry.editable and selfState.levelsEntry.editable,
+    "completed self-admin inspection enables every applicable control")
+selfAdmin.canSee = false
+expect(not selfAdmin.integration.isAvailable(2), "role loss hides the MP launcher on the next availability read")
+selfWindow:prerender()
+expect(not selfState.awardXpButton.enabled and not selfState.awardLevelsButton.enabled
+    and not selfState.clearSlotsButton.enabled and not selfState.refreshButton.enabled
+    and not selfState.xpEntry.editable and not selfState.levelsEntry.editable,
+    "role loss disables every applicable control on an already-open MP panel")
+equal(#selfAdmin.requests, 1, "role loss sends no request")
+
+local explicitRemote = makeEnvironment("multiplayer")
+expect(explicitRemote.integration.open(1, "RemoteTarget").ok,
+    "explicit MP remote target still opens")
+equal(#explicitRemote.requests, 1, "explicit MP remote target inspects once")
+expect(exact(explicitRemote.requests[1].request.target, { username = true })
+    and explicitRemote.requests[1].request.target.username == "RemoteTarget",
+    "explicit MP target never becomes the local self target")
+
+local noLocalRole = makeEnvironment("multiplayer")
+noLocalRole.localPlayers[0] = { getUsername = function() return "Local0" end }
+expect(not noLocalRole.integration.isAvailable(0), "missing local role fails closed")
+local missingRoleOpen = noLocalRole.integration.open(0)
+equal(missingRoleOpen.ok, false, "missing local role cannot open self-admin")
+equal(#noLocalRole.requests, 0, "missing local role sends no inspection")
+
+local throwingCapability = makeEnvironment("multiplayer")
+throwingCapability.localPlayers[1] = {
+    getRole = function()
+        return { hasCapability = function() error("capability boom") end }
+    end,
+    getUsername = function() return "Local1" end,
+}
+expect(not throwingCapability.integration.isAvailable(1), "throwing local capability fails closed")
+local throwingCapabilityOpen = throwingCapability.integration.open(1)
+equal(throwingCapabilityOpen.ok, false, "throwing local capability cannot open self-admin")
+equal(#throwingCapability.requests, 0, "throwing local capability sends no inspection")
+
+local malformedIdentity = makeEnvironment("multiplayer")
+malformedIdentity.localPlayers[3] = {
+    getRole = function()
+        return { hasCapability = function() return true end }
+    end,
+    getUsername = function() return "" end,
+}
+expect(not malformedIdentity.integration.isAvailable(3), "username-less local identity fails closed")
+local malformedIdentityOpen = malformedIdentity.integration.open(3)
+equal(malformedIdentityOpen.ok, false, "username-less local identity cannot open")
+equal(#malformedIdentity.requests, 0, "username-less local identity sends no inspection")
+
+local throwingLocal = makeEnvironment("multiplayer")
+throwingLocal.getSpecificThrows = true
+expect(not throwingLocal.integration.isAvailable(1), "throwing local-player lookup fails closed")
+local throwingLocalOpen = throwingLocal.integration.open(1)
+equal(throwingLocalOpen.ok, false, "throwing local-player lookup cannot open")
+equal(#throwingLocal.requests, 0, "throwing local-player lookup sends no inspection")
 
 local hiddenScoreboard, hiddenPlayer = mp:scoreboard("Hidden", 1)
 expect(rawget(mp.lastAdminProxy, "getRole") == nil

@@ -72,6 +72,7 @@ local adminCalled, adminCreated = pcall(Build42AdminUi.create, {
     ISButton = ISButton,
     canSeePlayersStats = Capability.CanSeePlayersStats,
     getPlayerContextMenu = function(playerNum) return getPlayerContextMenu(playerNum) end,
+    getSpecificPlayer = function(playerNum) return getSpecificPlayer(playerNum) end,
     isServer = function() return isServer() end,
     isClient = function() return isClient() end,
     isDebugEnabled = function() return isDebugEnabled() end,
