@@ -340,7 +340,7 @@ function AdminSession.create(dependencies)
                 or not finite(record.highWaterPosition) or record.highWaterPosition < record.naturalPosition
                 or type(record.activeTargets) ~= "table" or getmetatable(record.activeTargets) ~= nil then
                 return failure("invalid_state", "persisted perk accounting is malformed")
-            elseif hasEntries(record.activeTargets) or record.naturalPosition < record.highWaterPosition then
+            else
                 local insertion = #candidateIds + 1
                 while insertion > 1 and perkId < candidateIds[insertion - 1] do
                     candidateIds[insertion] = candidateIds[insertion - 1]

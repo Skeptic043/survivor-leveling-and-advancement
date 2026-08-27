@@ -474,6 +474,7 @@ do
         configured.options.loadedPerks.Spear = { effectiveMaximum = 12 }
         configured.options.loadedPerks.Cooking = { effectiveMaximum = 10 }
         configured.positions.Axe = 83.25
+        configured.positions.Cooking = 718.5
         configured.positions.Spear = 17.75
         configured.original = deepCopy(configured.state)
     end)
@@ -516,14 +517,21 @@ do
     expectEqual(saved.perks.Spear.compatibilityNote, "retain", "compatibility field preserved")
     expectEqual(saved.perks.Spear.effectiveMaximum, 12, "red-only maximum preserved")
     expectEqual(saved.perks.Spear.postMaxFullRateUsed, 9.25, "red-only post-max usage preserved")
-    expectEqual(saved.perks.Cooking.naturalPosition, 30, "clean loaded record preserved")
+    expectEqual(saved.perks.Cooking.naturalPosition, 718.5, "clean loaded record rebased to authoritative position")
+    expectEqual(saved.perks.Cooking.highWaterPosition, 718.5, "clean loaded record high water rebased")
+    expectEqual(#saved.perks.Cooking.activeTargets, 0, "clean loaded record remains target-free")
+    expectEqual(saved.perks.Cooking.adapterId, "core", "clean loaded adapter identity preserved")
+    expectEqual(saved.perks.Cooking.adapterVersion, 1, "clean loaded adapter version preserved")
+    expectEqual(saved.perks.Cooking.curveFingerprint, "cooking-curve", "clean loaded curve preserved")
+    expectEqual(saved.perks.Cooking.effectiveMaximum, 10, "clean loaded maximum preserved")
+    expectEqual(saved.perks.Cooking.postMaxFullRateUsed, 2, "clean loaded post-max usage preserved")
     expectEqual(saved.perks.Removed, nil, "removed perk record deleted")
     expect(isEmpty(saved.orphanedPerks), "orphaned perks cleared")
-    sequenceEquals(values.positionReads, { "Axe", "Spear" }, "authoritative candidates read once")
+    sequenceEquals(values.positionReads, { "Axe", "Cooking", "Spear" }, "all retained records read once in perk-ID order")
     expect(deepEqual(values.state, values.original), "clear does not mutate loaded state")
     sequenceEquals(values.calls, {
         "ready", "load", "cost", "available",
-        "read:Axe", "baseline", "read:Spear", "baseline", "clear",
+        "read:Axe", "baseline", "read:Cooking", "baseline", "read:Spear", "baseline", "clear",
         "cost", "available", "save",
     }, "clear ordering")
 end
@@ -539,9 +547,14 @@ do
     local result = session.request(values.target, { kind = "clearAdvancementSlots", expectedRevision = 7 })
     expectEqual(result.ok, true, "already-clean clear succeeds")
     expectEqual(result.summary.revision, 8, "already-clean clear establishes revision barrier")
-    expectEqual(#values.positionReads, 0, "already-clean record does not read position")
+    sequenceEquals(values.positionReads, { "Axe" }, "already-clean loaded record reads position once")
+    expectEqual(values.savedStates[1].perks.Axe.naturalPosition, 88.5, "already-clean record rebases moved natural position")
+    expectEqual(values.savedStates[1].perks.Axe.highWaterPosition, 88.5, "already-clean record rebases moved high water")
+    expectEqual(#values.savedStates[1].perks.Axe.activeTargets, 0, "already-clean record stays target-free")
     expectEqual(#values.savedStates, 1, "already-clean clear saves once")
-    sequenceEquals(values.calls, { "ready", "load", "cost", "available", "clear", "cost", "available", "save" }, "already-clean ordering")
+    sequenceEquals(values.calls, {
+        "ready", "load", "cost", "available", "read:Axe", "baseline", "clear", "cost", "available", "save",
+    }, "already-clean ordering")
 end
 
 do

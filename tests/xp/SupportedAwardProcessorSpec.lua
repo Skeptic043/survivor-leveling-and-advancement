@@ -592,6 +592,24 @@ end
 
 do
     local state = freshState()
+    state.perks.Aiming = perkRecord(718.5, 718.5)
+    local env = makeEnvironment({
+        state = state,
+        position = 720.5,
+        level = 7,
+        maximumPosition = 1000,
+    })
+    local result = env.service.process(env.player, award(2, 2, 718.5, 720.5), settings())
+    expect(result.ok, "first supported award after clear succeeds")
+    equal(result.survivorXp, 2, "first supported award after clear grants expected Survivor XP")
+    equal(result.naturalEligibleBase, 2, "first supported award after clear remains naturally eligible")
+    equal(env.store.state.perks.Aiming.naturalPosition, 720.5, "post-clear award advances natural position")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 720.5, "post-clear award advances high water")
+    equal(env.observation.peek(env.player, "Aiming"), 720.5, "post-clear award establishes new observation")
+end
+
+do
+    local state = freshState()
     state.perks.Aiming = perkRecord(0, 0, {}, 0, { curveFingerprint = "old.curve" })
     local env = makeEnvironment({ state = state, observed = 0, position = 1 })
     local result = env.service.process(env.player, award(1, 1, 0, 1), settings())
