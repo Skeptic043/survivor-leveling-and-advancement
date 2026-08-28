@@ -6,8 +6,8 @@ require "ISUI/ISCollapsableWindowJoypad"
 require "ISUI/AdminPanel/ISMiniScoreboardUI"
 require "ISUI/ISContextMenu"
 
-local SENTINEL_KEY = "__SLA_Build42SkillsUi_42_20_v1"
-local SENTINEL_SIGNATURE = "sla.build42-skills-ui/42.20/v1"
+local SENTINEL_KEY = "__SLA_Build42SkillsUi_42_20_v2"
+local SENTINEL_SIGNATURE = "sla.build42-skills-ui/42.20/v2"
 
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }
@@ -90,6 +90,10 @@ end
 
 local providerCalled, providerResult = pcall(Build42WorldSettingsProvider.create, {
     readSandboxVars = function() return SandboxVars end,
+    readSandboxOption = function(name)
+        local option = getSandboxOptions():getOptionByName("SurvivorLevelingAdvancement." .. name)
+        return option ~= nil and option:getValue() or nil
+    end,
 })
 if not providerCalled or type(providerResult) ~= "table" or rawget(providerResult, "ok") ~= true
     or type(rawget(providerResult, "provider")) ~= "table" then
@@ -117,6 +121,7 @@ local createCalled, created = pcall(Build42SkillsUi.create, {
     getText = function(key, ...) return getText(key, ...) end,
     measureText = function(text) return getTextManager():MeasureStringX(UIFont.Small, text) end,
     smallFont = UIFont.Small,
+    joypadAButton = Joypad.AButton,
     adminLauncher = adminCreated.integration,
 })
 if not createCalled or type(created) ~= "table" or rawget(created, "ok") ~= true

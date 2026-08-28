@@ -415,7 +415,25 @@ do
     assertEqual(store.loads, 1, "spend loads once")
 end
 
--- Final-level mastery derives a two-AP cost, bypasses positive capacity, and collapses the full target chain.
+-- Final-level mastery derives a two-AP cost, reserves two slots, and collapses the full target chain.
+do
+    local state = newState(4, 0)
+    state.perks.Axe = newPerk(0, 0, {
+        { targetId = "chain_one", targetLevel = 1, targetPosition = 100 },
+        { targetId = "chain_two", targetLevel = 2, targetPosition = 250 },
+    })
+    state.perks.Carpentry = newPerk(0, 0, {
+        { targetId = "other", targetLevel = 1, targetPosition = 100 },
+    }, "Carpentry")
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    local result = service.spend(player, { perkId = "Axe", requestId = "master_full", expectedRevision = 0 }, { mode = "Global", globalLimit = 3 })
+    assertCode(result, "allotment_rejected")
+    assertEqual(adapter.ensureCalls, 0, "blocked mastery never writes engine XP")
+    assertEqual(store.saves, 0, "blocked mastery never reserves or commits")
+end
 do
     local state = newState(2, 0)
     state.survivor.xpIntoLevel = 33
@@ -428,7 +446,7 @@ do
     local adapter, resolver = makeRuntime()
     local service = createService(store, adapter, resolver)
     local player = newPlayer("Axe", 2, 250)
-    local result = service.spend(player, { perkId = "Axe", requestId = "master_exact", expectedRevision = 0 }, { mode = "Global", globalLimit = 2 })
+    local result = service.spend(player, { perkId = "Axe", requestId = "master_exact", expectedRevision = 0 }, { mode = "Global", globalLimit = 4 })
     assertTrue(result.ok, "exact mastery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
     assertEqual(result.apCost, 2)
     assertTrue(result.mastered)
@@ -457,11 +475,24 @@ do
     local adapter, resolver = makeRuntime()
     local service = createService(store, adapter, resolver)
     local player = newPlayer("Axe", 2, 250)
-    local result = service.spend(player, { perkId = "Axe", requestId = "master_extra", expectedRevision = 0 }, { mode = "PerSkill", perSkillDefault = 2 })
+    local result = service.spend(player, { perkId = "Axe", requestId = "master_extra", expectedRevision = 0 }, { mode = "PerSkill", perSkillDefault = 4 })
     assertTrue(result.ok, "extra AP mastery succeeds: " .. tostring(result.code) .. ":" .. tostring(result.detail))
     assertEqual(result.apCost, 2)
     assertEqual(result.spent, 3)
     assertEqual(result.availableAp, 1)
+end
+do
+    local state = newState(2, 0)
+    state.perks.Axe = newPerk(250, 250, {})
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 2, 250)
+    local result = service.spend(player, { perkId = "Axe", requestId = "master_one_slot", expectedRevision = 0 }, { mode = "PerSkill", perSkillDefault = 1 })
+    assertTrue(result.ok, "one free slot admits mastery when the per-skill limit is one")
+    assertTrue(result.mastered)
+    assertEqual(result.apCost, 2)
+    assertEqual(result.spent, 2)
 end
 do
     local state = newState(3, 0)

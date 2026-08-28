@@ -193,7 +193,8 @@ expectEqual(view.rows.Woodwork.reasonCode, "red_recovery", "red reason")
 expectEqual(view.rows.Tailoring.enabled, false, "maximum mismatch disables row")
 expectEqual(view.rows.Tailoring.reasonCode, "maximum_mismatch", "mismatch reason")
 expectEqual(view.rows.Tailoring.naturalPosition, 0, "mismatch still detaches overlay position")
-expectEqual(view.rows.Aiming.enabled, true, "mastery bypasses positive global capacity")
+expectEqual(view.rows.Aiming.enabled, false, "mastery is blocked without two free global slots")
+expectEqual(view.rows.Aiming.reasonCode, "allotment_capacity", "mastery capacity reason")
 expectEqual(view.rows.Aiming.nextTargetLevel, 10, "mastery target")
 expectEqual(view.rows.Aiming.apCost, 2, "mastery costs two AP")
 expectEqual(view.rows.Maxed.enabled, false, "maximum row disabled")
@@ -207,6 +208,20 @@ local openGlobal = build(model, snapshot(), globalConfig(6), false, {
 expectEqual(openGlobal.ok, true, "open global build succeeds")
 expectEqual(openGlobal.view.rows.Cooking.enabled, true, "global capacity admits ordinary target")
 expectEqual(openGlobal.view.rows.Cooking.apCost, 1, "global ordinary spend costs one AP")
+
+local openGlobalMastery = build(model, snapshot(), globalConfig(7), false, {
+    { perkId = "Aiming", currentLevel = 9, effectiveMaximum = 10 },
+})
+expectEqual(openGlobalMastery.ok, true, "open global mastery build succeeds")
+expectEqual(openGlobalMastery.view.rows.Aiming.enabled, true, "two free global slots admit mastery")
+
+local oneSlotSnapshot = snapshot()
+oneSlotSnapshot.perks = {}
+local oneSlotMastery = build(model, oneSlotSnapshot, globalConfig(1), false, {
+    { perkId = "Aiming", currentLevel = 9, effectiveMaximum = 10 },
+})
+expectEqual(oneSlotMastery.ok, true, "one-slot global mastery build succeeds")
+expectEqual(oneSlotMastery.view.rows.Aiming.enabled, true, "one free slot admits mastery when the global limit is one")
 
 local zeroGlobal = build(model, snapshot(), globalConfig(0), false, {
     { perkId = "Aiming", currentLevel = 9, effectiveMaximum = 10 },

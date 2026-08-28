@@ -33,6 +33,22 @@ local function makeDependencies(overrides)
         load = function() return { ok = true, state = {} } end,
         save = function() return { ok = true } end,
     }
+    local characterInheritanceStore = {
+        inspect = function() return { ok = true } end,
+        tokenNewCharacter = function() return { ok = true } end,
+        markInitialized = function() return { ok = true } end,
+        markDeathRecorded = function() return { ok = true } end,
+    }
+    local inheritanceRecordStore = {
+        peek = function() return { ok = true, found = false } end,
+        put = function() return { ok = true, stored = true } end,
+        consume = function() return { ok = true, consumed = false } end,
+    }
+    local inheritanceSession = {
+        tokenNewCharacter = function() return { ok = true } end,
+        initialize = function() return { ok = true } end,
+        recordDeath = function() return { ok = true } end,
+    }
     local apService = {
         spend = function() return { ok = true } end,
         recover = function() return { ok = true } end,
@@ -94,18 +110,55 @@ local function makeDependencies(overrides)
                 return { ok = true, settings = { mode = "Free" } }
             end,
         },
+        inheritanceSettings = {
+            resolve = function()
+                return { ok = true, settings = { enabled = false, retainedRatio = 0.5 } }
+            end,
+        },
     }
 
     local dependencies = {
         StateCodec = {
             decode = function() return { ok = true } end,
             encode = function() return { ok = true } end,
+            fresh = function() return {} end,
+        },
+        InheritancePolicy = { plan = function() return { ok = true } end },
+        LevelGainCompletion = {
+            create = function(levelsGained, apGained)
+                return { ok = true, completion = {
+                    protocolVersion = 1, kind = "survivor_level_gain",
+                    levelsGained = levelsGained, apGained = apGained,
+                } }
+            end,
+            validate = function(value) return { ok = true, completion = value } end,
         },
         PlayerStateStore = {
             create = function(codec)
                 calls[#calls + 1] = "store"
                 arguments.store = codec
                 return { ok = true, store = store }
+            end,
+        },
+        CharacterInheritanceStore = {
+            create = function(argument)
+                calls[#calls + 1] = "character"
+                arguments.character = argument
+                return { ok = true, store = characterInheritanceStore }
+            end,
+        },
+        InheritanceRecordStore = {
+            create = function(argument)
+                calls[#calls + 1] = "record"
+                arguments.record = argument
+                return { ok = true, store = inheritanceRecordStore }
+            end,
+        },
+        InheritanceSession = {
+            create = function(argument)
+                calls[#calls + 1] = "inheritance"
+                arguments.inheritance = argument
+                return { ok = true, session = inheritanceSession }
             end,
         },
         NaturalLedger = {
@@ -222,6 +275,9 @@ local function makeDependencies(overrides)
         environment = { globals = {} },
         authority = { describe = function() end },
         playerIdentity = { isPlayer = function() end },
+        inheritanceWorldStore = { readRoot = function() end, writeRoot = function() end },
+        inheritanceIdentity = { resolve = function() end },
+        levelGainSink = function() return { ok = true } end,
     }
 
     if overrides ~= nil then
@@ -229,6 +285,9 @@ local function makeDependencies(overrides)
             calls = calls,
             arguments = arguments,
             store = store,
+            characterInheritanceStore = characterInheritanceStore,
+            inheritanceRecordStore = inheritanceRecordStore,
+            inheritanceSession = inheritanceSession,
             ownerSnapshot = ownerSnapshot,
             ownerSession = ownerSession,
             advancementSession = advancementSession,
@@ -248,6 +307,9 @@ local function makeDependencies(overrides)
         calls = calls,
         arguments = arguments,
         store = store,
+        characterInheritanceStore = characterInheritanceStore,
+        inheritanceRecordStore = inheritanceRecordStore,
+        inheritanceSession = inheritanceSession,
         ownerSnapshot = ownerSnapshot,
         ownerSession = ownerSession,
         advancementSession = advancementSession,
@@ -268,9 +330,16 @@ do
     local result = ServiceComposition.create(dependencies)
 
     assertTrue(result.ok, "composition succeeds")
-    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory order")
+    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory order")
     assertSame(fixture.arguments.store, dependencies.StateCodec, "codec identity")
     assertSame(fixture.arguments.settings.provider, dependencies.worldSettingsProvider, "provider identity")
+    assertSame(fixture.arguments.record, dependencies.inheritanceWorldStore, "inheritance world capability identity")
+    assertSame(fixture.arguments.inheritance.characterStore, fixture.characterInheritanceStore, "character inheritance store identity")
+    assertSame(fixture.arguments.inheritance.recordStore, fixture.inheritanceRecordStore, "pending inheritance store identity")
+    assertSame(fixture.arguments.inheritance.identity, dependencies.inheritanceIdentity, "inheritance identity adapter identity")
+    assertSame(fixture.arguments.inheritance.inheritanceSettings, fixture.worldSettings.inheritanceSettings, "inheritance settings identity")
+    assertSame(fixture.arguments.inheritance.StateCodec, dependencies.StateCodec, "inheritance codec identity")
+    assertSame(fixture.arguments.inheritance.InheritancePolicy, dependencies.InheritancePolicy, "inheritance policy identity")
     assertFalse(fixture.arguments.settings.normalizationByPerk == dependencies.normalizationByPerk, "normalization detached")
     assertEqual(fixture.arguments.settings.normalizationByPerk.Cooking, 1200, "normalization retained")
     assertSame(fixture.arguments.accounting.store, fixture.store, "accounting store identity")
@@ -300,6 +369,7 @@ do
     assertSame(fixture.arguments.session.catalog, dependencies.catalog, "session catalog identity")
     assertSame(fixture.arguments.session.xpSource, fixture.source, "session XP source identity")
     assertSame(fixture.arguments.session.ownerSnapshot, fixture.ownerSnapshot, "session snapshot identity")
+    assertSame(fixture.arguments.session.inheritanceSession, fixture.inheritanceSession, "owner inheritance-session identity")
     assertSame(fixture.arguments.advancement.apTransaction, fixture.apService, "advancement AP identity")
     assertSame(fixture.arguments.advancement.allotmentSettings, fixture.worldSettings.allotmentSettings, "advancement settings identity")
     assertSame(fixture.arguments.advancement.ownerSession, fixture.ownerSession, "advancement owner identity")
@@ -327,6 +397,7 @@ do
     assertSame(result.services.awardProcessor, fixture.processor, "result processor")
     assertSame(result.services.xpSource, fixture.source, "result source")
     assertSame(result.services.ownerSession, fixture.ownerSession, "result owner session")
+    assertSame(result.services.inheritanceSession, fixture.inheritanceSession, "result inheritance session")
     assertSame(result.services.advancementSession, fixture.advancementSession, "result advancement session")
     assertSame(result.services.adminSession, fixture.adminSession, "result admin session")
 
@@ -340,6 +411,7 @@ do
         awardHandler = true,
         xpSource = true,
         ownerSession = true,
+        inheritanceSession = true,
         advancementSession = true,
         adminSession = true,
     }
@@ -348,13 +420,63 @@ do
         serviceCount = serviceCount + 1
         assertTrue(expectedKeys[key] == true, "unexpected result service " .. tostring(key))
     end
-    assertEqual(serviceCount, 11, "eleven services only")
+    assertEqual(serviceCount, 12, "twelve services only")
     assertEqual(result.services.dependencies, nil, "dependencies not exposed")
     assertEqual(result.services.modules, nil, "modules not exposed")
     assertEqual(result.services.OwnerSnapshot, nil, "snapshot factory not exposed")
 
     dependencies.normalizationByPerk.Cooking = 2
     assertEqual(fixture.arguments.settings.normalizationByPerk.Cooking, 1200, "later normalization mutation isolated")
+end
+
+do
+    local sinkCalls = {}
+    local currentResult = nil
+    local dependencies, fixture = makeDependencies(function(values, returned)
+        values.levelGainSink = function(player, completion)
+            sinkCalls[#sinkCalls + 1] = { player = player, completion = completion }
+            return { ok = true }
+        end
+        returned.processor.process = function(player, award, settings)
+            returned.processorCalls[#returned.processorCalls + 1] = {
+                player = player, award = award, settings = settings,
+            }
+            return currentResult
+        end
+    end)
+    local result = ServiceComposition.create(dependencies)
+    assertTrue(result.ok, "level completion composition succeeds")
+    local player = {}
+    local award = { perkId = "Cooking" }
+
+    currentResult = { ok = true, levelsGained = 1, apGained = 1, stateWritten = true }
+    local handled = result.services.awardHandler.process(player, award)
+    assertSame(handled, currentResult, "ordinary one-level result preserved")
+    assertEqual(#sinkCalls, 1, "ordinary one-level gain emits once")
+    assertSame(sinkCalls[1].player, player, "ordinary gain exact player")
+    assertEqual(sinkCalls[1].completion.levelsGained, 1, "ordinary one-level count")
+    assertEqual(sinkCalls[1].completion.apGained, 1, "ordinary one-level AP")
+
+    currentResult = { ok = true, levelsGained = 4, apGained = 4, stateWritten = true }
+    handled = result.services.awardHandler.process(player, award)
+    assertSame(handled, currentResult, "ordinary multi-level result preserved")
+    assertEqual(#sinkCalls, 2, "ordinary multi-level gain emits one additional completion")
+    assertEqual(sinkCalls[2].completion.levelsGained, 4, "ordinary multi-level count stays aggregated")
+
+    currentResult = { ok = true, levelsGained = 0, apGained = 0, stateWritten = true }
+    result.services.awardHandler.process(player, award)
+    assertEqual(#sinkCalls, 2, "ordinary zero-level award stays silent")
+
+    dependencies, fixture = makeDependencies(function(values, returned)
+        values.levelGainSink = function() error("feedback route") end
+        returned.processor.process = function()
+            return { ok = true, levelsGained = 2, apGained = 2, stateWritten = true }
+        end
+    end)
+    result = ServiceComposition.create(dependencies)
+    handled = result.services.awardHandler.process(player, award)
+    assertTrue(handled.ok, "completion sink failure does not invalidate saved award")
+    assertEqual(handled.levelsGained, 2, "sink failure preserves committed gains")
 end
 
 do
@@ -447,6 +569,10 @@ end
 
 assertPreflightFailure(function(dependencies) dependencies.StateCodec = nil end, "StateCodec capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.PlayerStateStore.create = nil end, "PlayerStateStore.create is required")
+assertPreflightFailure(function(dependencies) dependencies.CharacterInheritanceStore.create = nil end, "CharacterInheritanceStore.create is required")
+assertPreflightFailure(function(dependencies) dependencies.InheritanceRecordStore.create = nil end, "InheritanceRecordStore.create is required")
+assertPreflightFailure(function(dependencies) dependencies.InheritanceSession.create = nil end, "InheritanceSession.create is required")
+assertPreflightFailure(function(dependencies) dependencies.InheritancePolicy.plan = nil end, "InheritancePolicy capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.AccountingMode.create = nil end, "AccountingMode.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSnapshot.create = nil end, "OwnerSnapshot.create is required")
 assertPreflightFailure(function(dependencies) dependencies.OwnerSession.create = nil end, "OwnerSession.create is required")
@@ -456,6 +582,8 @@ assertPreflightFailure(function(dependencies) dependencies.SurvivorEconomy.nextL
 assertPreflightFailure(function(dependencies) dependencies.catalog.allPerks = nil end, "catalog capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.catalog.resolver.resolve = nil end, "catalog capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.worldSettingsProvider.read = nil end, "worldSettingsProvider.read is required")
+assertPreflightFailure(function(dependencies) dependencies.inheritanceWorldStore.readRoot = nil end, "inheritanceWorldStore capabilities are required")
+assertPreflightFailure(function(dependencies) dependencies.inheritanceIdentity.resolve = nil end, "inheritanceIdentity.resolve is required")
 assertPreflightFailure(function(dependencies) dependencies.normalizationByPerk.Cooking = 0 end, "normalizationByPerk is malformed")
 assertPreflightFailure(function(dependencies) dependencies.normalizationByPerk["bad id"] = 4 end, "normalizationByPerk is malformed")
 assertPreflightFailure(function(dependencies) setmetatable(dependencies.normalizationByPerk, {}) end, "normalizationByPerk is malformed")
@@ -465,6 +593,9 @@ local function assertFactoryStops(factoryName, replacement, expectedCalls, expec
     local labels = {
         PlayerStateStore = "store",
         WorldSettings = "settings",
+        CharacterInheritanceStore = "character",
+        InheritanceRecordStore = "record",
+        InheritanceSession = "inheritance",
         AccountingMode = "accounting",
         OwnerSnapshot = "snapshot",
         ApTransaction = "ap",
@@ -488,26 +619,29 @@ end
 
 assertFactoryStops("PlayerStateStore", function() return { ok = true, store = {} } end, { "store" }, "invalid_factory_result")
 assertFactoryStops("WorldSettings", function() return { ok = true, awardSettings = {} } end, { "store", "settings" }, "invalid_factory_result")
-assertFactoryStops("AccountingMode", function() return { ok = true, service = {} } end, { "store", "settings", "accounting" }, "invalid_factory_result")
-assertFactoryStops("OwnerSnapshot", function() return nil end, { "store", "settings", "accounting", "snapshot" }, "invalid_factory_result")
-assertFactoryStops("OwnerSnapshot", function() return { ok = true, projector = {} } end, { "store", "settings", "accounting", "snapshot" }, "invalid_factory_result")
-assertFactoryStops("ApTransaction", function() return { ok = false, code = "ap_unavailable", detail = "nope" } end, { "store", "settings", "accounting", "snapshot", "ap" }, "ap_unavailable")
+assertFactoryStops("CharacterInheritanceStore", function() return { ok = true, store = {} } end, { "store", "settings", "character" }, "invalid_factory_result")
+assertFactoryStops("InheritanceRecordStore", function() return { ok = true, store = {} } end, { "store", "settings", "character", "record" }, "invalid_factory_result")
+assertFactoryStops("InheritanceSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance" }, "invalid_factory_result")
+assertFactoryStops("AccountingMode", function() return { ok = true, service = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting" }, "invalid_factory_result")
+assertFactoryStops("OwnerSnapshot", function() return nil end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "invalid_factory_result")
+assertFactoryStops("OwnerSnapshot", function() return { ok = true, projector = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "invalid_factory_result")
+assertFactoryStops("ApTransaction", function() return { ok = false, code = "ap_unavailable", detail = "nope" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap" }, "ap_unavailable")
 assertFactoryStops("ApTransaction", function()
     return { ok = true, service = { spend = function() end, recover = function() end } }
-end, { "store", "settings", "accounting", "snapshot", "ap" }, "invalid_factory_result")
-assertFactoryStops("SupportedAwardProcessor", function() return { ok = true, service = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor" }, "invalid_factory_result")
-assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, code = "source_unavailable", detail = "nope" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source" }, "source_unavailable")
-assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
-assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
-assertFactoryStops("OwnerSession", function() error("session boom") end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
-assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
-assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
-assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
-assertFactoryStops("AdminSession", function() return { ok = true, session = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
-assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end }, private = {} } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
-assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end, private = {} } } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
-assertFactoryStops("AdminSession", function() return { ok = false, code = "admin_unavailable", detail = "owner rejected" } end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "admin_unavailable")
-assertFactoryStops("AdminSession", function() error("admin boom") end, { "store", "settings", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory_threw")
+end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap" }, "invalid_factory_result")
+assertFactoryStops("SupportedAwardProcessor", function() return { ok = true, service = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor" }, "invalid_factory_result")
+assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, code = "source_unavailable", detail = "nope" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source" }, "source_unavailable")
+assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
+assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
+assertFactoryStops("OwnerSession", function() error("session boom") end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
+assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
+assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
+assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
+assertFactoryStops("AdminSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end }, private = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end, private = {} } } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = false, code = "admin_unavailable", detail = "owner rejected" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "admin_unavailable")
+assertFactoryStops("AdminSession", function() error("admin boom") end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory_threw")
 
 do
     local dependencies, fixture = makeDependencies(function(values, returned)
@@ -520,7 +654,7 @@ do
     assertFalse(result.ok, "snapshot explicit failure returned")
     assertEqual(result.code, "snapshot_unavailable", "snapshot explicit failure code")
     assertEqual(result.detail, "catalog rejected", "snapshot explicit failure detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot" }, "snapshot explicit failure stops graph")
+    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "snapshot explicit failure stops graph")
 end
 
 do
@@ -534,7 +668,7 @@ do
     assertFalse(result.ok, "snapshot malformed failure returned")
     assertEqual(result.code, "snapshot_unavailable", "snapshot malformed failure keeps explicit code")
     assertEqual(result.detail, "OwnerSnapshot.create failed", "snapshot malformed failure gets stable detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot" }, "snapshot malformed failure stops graph")
+    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "snapshot malformed failure stops graph")
 end
 
 do
@@ -548,7 +682,7 @@ do
     assertFalse(result.ok, "snapshot throw contained")
     assertEqual(result.code, "factory_threw", "snapshot throw code")
     assertEqual(result.detail, "OwnerSnapshot.create threw", "snapshot throw detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "accounting", "snapshot" }, "snapshot throw stops graph")
+    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "snapshot throw stops graph")
 end
 
 do

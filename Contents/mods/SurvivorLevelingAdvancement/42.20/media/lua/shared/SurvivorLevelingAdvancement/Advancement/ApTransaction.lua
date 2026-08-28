@@ -739,7 +739,13 @@ function ApTransaction.create(dependencies)
         local addedTarget = not mastered and ledgerResult.added or false
         local active, activeError = activeByPerk(state)
         if activeError then return activeError end
-        local allotment = deps.Allotment.evaluate(allotmentConfig, request.perkId, active, addedTarget)
+        local allotment = deps.Allotment.evaluate(
+            allotmentConfig,
+            request.perkId,
+            active,
+            addedTarget,
+            mastered and 2 or nil
+        )
         if type(allotment) ~= "table" or not allotment.ok then
             return failure("allotment_invalid", detailOf(allotment))
         end

@@ -32,7 +32,7 @@ local function globalCount(activeByPerk)
     return total
 end
 
-function Allotment.evaluate(config, perkId, activeByPerk, addsTarget)
+function Allotment.evaluate(config, perkId, activeByPerk, addsTarget, requiredSlots)
     if type(config) ~= "table" then
         return failure("invalid_config", "config must be a table")
     end
@@ -41,6 +41,10 @@ function Allotment.evaluate(config, perkId, activeByPerk, addsTarget)
     end
     if type(addsTarget) ~= "boolean" then
         return failure("invalid_config", "addsTarget must be a boolean")
+    end
+    if requiredSlots == nil then requiredSlots = addsTarget and 1 or 0 end
+    if not nonnegativeInteger(requiredSlots) or (addsTarget and requiredSlots < 1) then
+        return failure("invalid_config", "requiredSlots must be a compatible nonnegative integer")
     end
     local active = validateActive(activeByPerk)
     if not active.ok then
@@ -77,7 +81,7 @@ function Allotment.evaluate(config, perkId, activeByPerk, addsTarget)
         end
     end
     local spendingEnabled = mode == "Free" or limit > 0
-    if not addsTarget then
+    if requiredSlots == 0 then
         return { ok = true, allowed = true, spendingEnabled = spendingEnabled, mode = mode, bypassed = true, activeCount = activeByPerk[perkId] or 0, limit = limit }
     end
     if mode == "Free" then
@@ -85,11 +89,13 @@ function Allotment.evaluate(config, perkId, activeByPerk, addsTarget)
     end
     if mode == "Global" then
         local count = globalCount(activeByPerk)
-        return { ok = true, allowed = count < limit, spendingEnabled = spendingEnabled, mode = mode, bypassed = false, activeCount = count, limit = limit }
+        local needed = math.min(requiredSlots, limit)
+        return { ok = true, allowed = limit > 0 and count + needed <= limit, spendingEnabled = spendingEnabled, mode = mode, bypassed = false, activeCount = count, limit = limit }
     end
 
     local count = activeByPerk[perkId] or 0
-    return { ok = true, allowed = count < limit, spendingEnabled = spendingEnabled, mode = mode, bypassed = false, activeCount = count, limit = limit }
+    local needed = math.min(requiredSlots, limit)
+    return { ok = true, allowed = limit > 0 and count + needed <= limit, spendingEnabled = spendingEnabled, mode = mode, bypassed = false, activeCount = count, limit = limit }
 end
 
 return Allotment

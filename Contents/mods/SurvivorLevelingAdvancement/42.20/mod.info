@@ -1,3 +1,4 @@
 name=Survivor Leveling & Advancement
 id=SurvivorLevelingAdvancement
 description=Earn Survivor Levels through skill XP and spend Advancement Points to raise trainable skills.
+incompatible=RpgSkillsSystemsB42,VanillaMenu

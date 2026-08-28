@@ -500,6 +500,7 @@ function Build42AdminTransport.createServer(dependencies)
         adminBoundary = true,
         adminSession = true,
         ownerPublisher = true,
+        completionFactory = true,
         audit = true,
         sendServerCommand = true,
     }) then
@@ -509,6 +510,7 @@ function Build42AdminTransport.createServer(dependencies)
     local adminBoundary = rawget(dependencies, "adminBoundary")
     local adminSession = rawget(dependencies, "adminSession")
     local ownerPublisher = rawget(dependencies, "ownerPublisher")
+    local completionFactory = rawget(dependencies, "completionFactory")
     local audit = rawget(dependencies, "audit")
     local sender = rawget(dependencies, "sendServerCommand")
     if type(adminBoundary) ~= "table" or getmetatable(adminBoundary) ~= nil
@@ -518,6 +520,8 @@ function Build42AdminTransport.createServer(dependencies)
         or type(rawget(adminSession, "request")) ~= "function"
         or type(ownerPublisher) ~= "table" or getmetatable(ownerPublisher) ~= nil
         or type(rawget(ownerPublisher, "publish")) ~= "function"
+        or type(completionFactory) ~= "table" or getmetatable(completionFactory) ~= nil
+        or type(rawget(completionFactory, "create")) ~= "function"
         or type(audit) ~= "table" or getmetatable(audit) ~= nil
         or type(rawget(audit, "record")) ~= "function"
         or type(sender) ~= "function" then
@@ -528,6 +532,7 @@ function Build42AdminTransport.createServer(dependencies)
     local inspect = rawget(adminSession, "inspect")
     local requestMutation = rawget(adminSession, "request")
     local publish = rawget(ownerPublisher, "publish")
+    local createCompletion = rawget(completionFactory, "create")
     local record = rawget(audit, "record")
     local server = {}
 
@@ -599,7 +604,20 @@ function Build42AdminTransport.createServer(dependencies)
                 request.operation,
                 "committed"
             )
-            local publicationCalled, publicationResult = pcall(publish, target)
+            local completion = nil
+            if rawget(sessionResult, "levelsGained") > 0 then
+                local completionCalled, completionResult = pcall(
+                    createCompletion,
+                    rawget(sessionResult, "levelsGained"),
+                    rawget(sessionResult, "apGained")
+                )
+                if completionCalled and type(completionResult) == "table"
+                    and rawget(completionResult, "ok") == true
+                    and type(rawget(completionResult, "completion")) == "table" then
+                    completion = rawget(completionResult, "completion")
+                end
+            end
+            local publicationCalled, publicationResult = pcall(publish, target, completion)
             local auditSucceeded = auditCalled and validDependencySuccess(auditResult)
             local publicationSucceeded = publicationCalled
                 and validDependencySuccess(publicationResult)

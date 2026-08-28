@@ -65,6 +65,34 @@ end
 
 local function validSlot(value) return safeInteger(value) and value <= 3 end
 
+local function pendingNewList(value)
+    if value == nil then return {} end
+    if type(value) ~= "table" or getmetatable(value) ~= nil or #value > 4 then return nil end
+    local copy, seen = {}, {}
+    for key in pairs(value) do
+        if type(key) ~= "number" or key < 1 or key > #value or key ~= math.floor(key) then return nil end
+    end
+    for index = 1, #value do
+        local player = rawget(value, index)
+        if player == nil or seen[player] then return nil end
+        seen[player], copy[index] = true, player
+    end
+    return copy
+end
+
+local function pendingLocalMap(value)
+    if value == nil then return {} end
+    if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+    local copy, count = {}, 0
+    for slot, player in pairs(value) do
+        if not validSlot(slot) or player == nil then return nil end
+        count = count + 1
+        if count > 4 then return nil end
+        copy[slot] = player
+    end
+    return copy
+end
+
 local function eventSet(events, names, removable)
     if type(events) ~= "table" then return nil end
     local captured = {}
@@ -440,9 +468,14 @@ local function localAdminSessionTerminal(operation, request, value)
 end
 
 local function ownerHandled(value)
-    if exactTable(value, { ok = true, handled = true, accepted = true, localSlot = true }) then
+    local acceptedFields = { ok = true, handled = true, accepted = true, localSlot = true }
+    if type(value) == "table" and rawget(value, "completion") ~= nil then
+        acceptedFields.completion = true
+    end
+    if exactTable(value, acceptedFields) then
         return rawget(value, "ok") == true and rawget(value, "handled") == true
-            and rawget(value, "accepted") == true and validSlot(rawget(value, "localSlot")), rawget(value, "localSlot"), true
+            and rawget(value, "accepted") == true and validSlot(rawget(value, "localSlot")),
+            rawget(value, "localSlot"), true, rawget(value, "completion")
     end
     if exactTable(value, { ok = true, handled = true, accepted = true, code = true, localSlot = true }) then
         return rawget(value, "ok") == true and rawget(value, "handled") == true
@@ -495,6 +528,10 @@ function Build42Lifecycle.create(dependencies)
         return failure("invalid_dependencies", "modules and globals are required")
     end
     local modules, globals = rawget(dependencies, "modules"), rawget(dependencies, "globals")
+    local pendingNewPlayers = pendingNewList(rawget(dependencies, "pendingNewPlayers"))
+    if pendingNewPlayers == nil then return failure("invalid_dependencies", "pendingNewPlayers") end
+    local pendingPlayers = pendingLocalMap(rawget(dependencies, "pendingLocalPlayers"))
+    if pendingPlayers == nil then return failure("invalid_dependencies", "pendingLocalPlayers") end
     local authoritativeMode = rawget(dependencies, "mode")
     if authoritativeMode ~= nil and authoritativeMode ~= "server"
         and authoritativeMode ~= "client" and authoritativeMode ~= "single_player" then
@@ -503,6 +540,8 @@ function Build42Lifecycle.create(dependencies)
     local runtimeFactory, ownerFactory = rawget(modules, "Build42RuntimeFactory"), rawget(modules, "Build42OwnerTransport")
     local advancementFactory, clientState = rawget(modules, "Build42AdvancementTransport"), rawget(modules, "ClientOwnerState")
     local adminFactory, adminBoundaryFactory = rawget(modules, "Build42AdminTransport"), rawget(modules, "Build42AdminBoundary")
+    local completionFactory = rawget(modules, "LevelGainCompletion")
+    local feedbackFactory = rawget(modules, "Build42LevelFeedback")
     if type(runtimeFactory) ~= "table" or not callable(rawget(runtimeFactory, "create"))
         or type(ownerFactory) ~= "table" or not callable(rawget(ownerFactory, "createServer"))
         or not callable(rawget(ownerFactory, "createClient"))
@@ -511,6 +550,10 @@ function Build42Lifecycle.create(dependencies)
         or type(adminFactory) ~= "table" or not callable(rawget(adminFactory, "createServer"))
         or not callable(rawget(adminFactory, "createClient"))
         or type(adminBoundaryFactory) ~= "table" or not callable(rawget(adminBoundaryFactory, "create"))
+        or type(completionFactory) ~= "table"
+        or not callable(rawget(completionFactory, "create"))
+        or not callable(rawget(completionFactory, "validate"))
+        or type(feedbackFactory) ~= "table" or not callable(rawget(feedbackFactory, "create"))
         or type(clientState) ~= "table" or not callable(rawget(clientState, "create"))
         or not callable(rawget(clientState, "validate")) then
         return failure("invalid_dependencies", "lifecycle module capabilities are required")
@@ -520,6 +563,8 @@ function Build42Lifecycle.create(dependencies)
     local createAdvServer, createAdvClient = rawget(advancementFactory, "createServer"), rawget(advancementFactory, "createClient")
     local createAdminServer, createAdminClient = rawget(adminFactory, "createServer"), rawget(adminFactory, "createClient")
     local createAdminBoundary = rawget(adminBoundaryFactory, "create")
+    local createCompletion, validateCompletion = rawget(completionFactory, "create"), rawget(completionFactory, "validate")
+    local createFeedback = rawget(feedbackFactory, "create")
     local validateSnapshot = rawget(clientState, "validate")
     local Capability = rawget(globals, "Capability")
     local getPlayerByOnlineID = rawget(globals, "getPlayerByOnlineID")
@@ -542,6 +587,29 @@ function Build42Lifecycle.create(dependencies)
     if mode == "single_player" and not callable(isDebugEnabled) then
         return failure("invalid_dependencies", "single-player debug capability is required")
     end
+    if mode ~= "single_player" and #pendingNewPlayers > 0 then
+        return failure("invalid_dependencies", "pendingNewPlayers require single-player mode")
+    end
+    if mode ~= "single_player" then
+        for slot = 0, 3 do
+            if pendingPlayers[slot] ~= nil then
+                return failure("invalid_dependencies", "pendingLocalPlayers require single-player mode")
+            end
+        end
+    end
+    local levelFeedback = nil
+    if mode ~= "server" then
+        local feedbackCalled, feedbackCreated = pcall(createFeedback, {
+            HaloTextHelper = rawget(globals, "HaloTextHelper"),
+            getText = rawget(globals, "getText"),
+        })
+        local feedbackEndpoint = feedbackCalled
+            and service(feedbackCreated, "presenter", { "show" }) or nil
+        if feedbackEndpoint == nil then
+            return bounded(feedbackCreated, "level_feedback_invalid", "Build42LevelFeedback.create")
+        end
+        levelFeedback = feedbackEndpoint.value
+    end
     local sendCommand = mode == "server" and rawget(globals, "sendServerCommand") or rawget(globals, "sendClientCommand")
     if not callable(sendCommand) then return failure("invalid_dependencies", "mode command sender is required") end
     if mode == "client" and not callable(getSpecificPlayer) then
@@ -550,7 +618,11 @@ function Build42Lifecycle.create(dependencies)
 
     local ownerClient, advancementClient, adminClient
     if mode ~= "server" then
-        local called, created = pcall(createOwnerClient, { ClientOwnerState = clientState, sendClientCommand = sendCommand })
+        local called, created = pcall(createOwnerClient, {
+            ClientOwnerState = clientState,
+            completionValidator = completionFactory,
+            sendClientCommand = sendCommand,
+        })
         ownerClient = called and service(created, "client", { "ready", "refresh", "handle", "reset", "resetSlot", "acceptLocal", "get", "status" }) or nil
         if ownerClient == nil then return bounded(created, "owner_client_invalid", "Build42OwnerTransport.createClient") end
         if mode == "client" then
@@ -563,47 +635,123 @@ function Build42Lifecycle.create(dependencies)
         end
     end
 
-    local eventNames = mode == "server" and { "OnServerStarted", "OnClientCommand" }
+    local eventNames = mode == "server" and { "OnServerStarted", "OnClientCommand", "OnNewGame", "OnCharacterDeath" }
         or mode == "client" and { "OnMiniScoreboardUpdate", "OnTick", "OnServerCommand", "OnDisconnect" }
-        or { "OnGameStart", "OnCreatePlayer" }
+        or { "OnGameStart", "OnCreatePlayer", "OnNewGame", "OnCharacterDeath" }
     local events = eventSet(rawget(globals, "Events"), eventNames,
         mode == "client" and { OnTick = true } or nil)
     if events == nil then return failure("invalid_dependencies", "required lifecycle events are required") end
 
     local installed, installAttempted, startupAttempted, started = false, false, false, false
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
+    local ownerPublisher
     local ownerSessionReady, ownerSessionSnapshot, advancementRequest
+    local tokenNewCharacter, recordDeath
     local adminSessionInspect, adminSessionRequest
-    local pendingPlayers, readyPlayers, observedPlayers, observedSlots = {}, {}, {}, {}
+    local readyPlayers, observedPlayers, observedSlots = {}, {}, {}
     local deferredPlayers, deferredSlots = {}, {}
     local tickRegistered, tickAddAttempted = false, false
     local singlePlayerResults, singlePlayerAdminResults = {}, {}
     local owner, readySingle = {}, nil
     local clientStateListener = nil
     local callbacks = {}
+    local pendingReferencesClosed = false
+
+    local function clearPendingPlayerReferences()
+        for index = 1, #pendingNewPlayers do pendingNewPlayers[index] = nil end
+        pendingNewPlayers = {}
+        for slot = 0, 3 do pendingPlayers[slot] = nil end
+        pendingReferencesClosed = true
+    end
+
+    local function bufferNewPlayer(player)
+        if player == nil then return failure("invalid_new_player", "OnNewGame") end
+        for index = 1, #pendingNewPlayers do
+            if pendingNewPlayers[index] == player then return { ok = true } end
+        end
+        if #pendingNewPlayers >= 4 then return failure("new_player_buffer_full", "OnNewGame") end
+        pendingNewPlayers[#pendingNewPlayers + 1] = player
+        return { ok = true }
+    end
 
     local function retain(result, code, detail)
         retainedFailure = bounded(result, code, detail)
         return retainedFailure
     end
 
-    local function notifyClientState(localSlot, kind)
+    local function detachCompletion(value)
+        if value == nil then return nil end
+        local called, result = pcall(validateCompletion, value)
+        if not called or not exactTable(result, { ok = true, completion = true })
+            or rawget(result, "ok") ~= true
+            or type(rawget(result, "completion")) ~= "table" then return nil end
+        return rawget(result, "completion")
+    end
+
+    local function notifyClientState(localSlot, kind, completion, exactPlayer)
         if clientStateListener ~= nil then pcall(clientStateListener, localSlot, kind) end
+        local checked = detachCompletion(completion)
+        if checked == nil or levelFeedback == nil then return end
+        local player = exactPlayer
+        if player == nil and mode == "client" then
+            local called, resolved = pcall(getSpecificPlayer, localSlot)
+            if called then player = resolved end
+        end
+        if player ~= nil then pcall(rawget(levelFeedback, "show"), player, checked) end
+    end
+
+    local function levelGainSink(player, completion)
+        local checked = detachCompletion(completion)
+        if checked == nil or player == nil then return { ok = true, published = false } end
+        if mode == "server" then
+            if ownerPublisher ~= nil then pcall(rawget(ownerPublisher, "publish"), player, checked) end
+            return { ok = true, published = ownerPublisher ~= nil }
+        end
+        if mode ~= "single_player" or ownerSessionSnapshot == nil then
+            return { ok = true, published = false }
+        end
+        local localSlot = nil
+        for slot = 0, 3 do
+            if readyPlayers[slot] == player then localSlot = slot; break end
+        end
+        if localSlot == nil then return { ok = true, published = false } end
+        local snapshotCalled, snapshotResult = pcall(ownerSessionSnapshot, player)
+        if not snapshotCalled or type(snapshotResult) ~= "table"
+            or rawget(snapshotResult, "ok") ~= true
+            or type(rawget(snapshotResult, "snapshot")) ~= "table" then
+            return { ok = true, published = false }
+        end
+        local acceptedCalled, accepted = pcall(
+            ownerClient.acceptLocal,
+            localSlot,
+            rawget(snapshotResult, "snapshot")
+        )
+        if acceptedCalled and acceptance(accepted) == true then
+            notifyClientState(localSlot, "owner_snapshot", checked, player)
+            return { ok = true, published = true }
+        end
+        return { ok = true, published = false }
     end
 
     local function startupFailure(result, code, detail)
-        if mode == "single_player" then
-            for slot = 0, 3 do pendingPlayers[slot] = nil end
-        end
+        clearPendingPlayerReferences()
         return retain(result, code, detail)
     end
 
     local function ownEvents()
         local current = rawget(globals, "Events")
-        if type(current) ~= "table" then retain(nil, "event_ownership_lost", "Events"); return false end
+        if type(current) ~= "table" then
+            if not started then clearPendingPlayerReferences() end
+            retain(nil, "event_ownership_lost", "Events")
+            return false
+        end
         for index = 1, #eventNames do
             local name = eventNames[index]
-            if rawget(current, name) ~= events[name] then retain(nil, "event_ownership_lost", name); return false end
+            if rawget(current, name) ~= events[name] then
+                if not started then clearPendingPlayerReferences() end
+                retain(nil, "event_ownership_lost", name)
+                return false
+            end
         end
         return true
     end
@@ -645,7 +793,11 @@ function Build42Lifecycle.create(dependencies)
     local function startup()
         if startupAttempted then return retainedFailure or { ok = started } end
         startupAttempted = true
-        local called, created = pcall(createRuntime, { modules = modules, globals = globals })
+        local called, created = pcall(createRuntime, {
+            modules = modules,
+            globals = globals,
+            levelGainSink = levelGainSink,
+        })
         if not called or type(created) ~= "table" or rawget(created, "ok") ~= true
             or type(rawget(created, "runtime")) ~= "table"
             or type(rawget(rawget(created, "runtime"), "catalog")) ~= "table"
@@ -654,11 +806,15 @@ function Build42Lifecycle.create(dependencies)
         end
         local services = rawget(rawget(created, "runtime"), "services")
         local xpSource, ownerSession = rawget(services, "xpSource"), rawget(services, "ownerSession")
+        local inheritanceSession = rawget(services, "inheritanceSession")
         local advancementSession, adminSession = rawget(services, "advancementSession"), rawget(services, "adminSession")
         if type(xpSource) ~= "table" or not callable(rawget(xpSource, "install"))
             or type(ownerSession) ~= "table" or not callable(rawget(ownerSession, "ready"))
             or not callable(rawget(ownerSession, "snapshot")) or not callable(rawget(ownerSession, "isReady"))
             or not callable(rawget(ownerSession, "clearPlayer"))
+            or type(inheritanceSession) ~= "table"
+            or not callable(rawget(inheritanceSession, "tokenNewCharacter"))
+            or not callable(rawget(inheritanceSession, "recordDeath"))
             or type(advancementSession) ~= "table" or not callable(rawget(advancementSession, "request"))
             or type(adminSession) ~= "table" or not callable(rawget(adminSession, "inspect"))
             or not callable(rawget(adminSession, "request")) then
@@ -670,7 +826,8 @@ function Build42Lifecycle.create(dependencies)
         end
         if mode == "server" then
             local ownerCalled, ownerCreated = pcall(createOwnerServer, {
-                ownerSession = ownerSession, snapshotValidator = { validate = validateSnapshot }, sendServerCommand = sendCommand,
+                ownerSession = ownerSession, snapshotValidator = { validate = validateSnapshot },
+                completionValidator = completionFactory, sendServerCommand = sendCommand,
             })
             local ownerEndpoint = ownerCalled and service(ownerCreated, "server", { "handle", "clearPlayer", "publish" }) or nil
             if ownerEndpoint == nil then return startupFailure(ownerCreated, "owner_server_invalid", "Build42OwnerTransport.createServer") end
@@ -692,18 +849,33 @@ function Build42Lifecycle.create(dependencies)
                 adminBoundary = boundaryEndpoint.value,
                 adminSession = adminSession,
                 ownerPublisher = ownerEndpoint.value,
+                completionFactory = completionFactory,
                 audit = audit,
                 sendServerCommand = sendCommand,
             })
             local adminEndpoint = adminCalled and service(adminCreated, "server", { "handle" }) or nil
             if adminEndpoint == nil then return startupFailure(adminCreated, "admin_server_invalid", "Build42AdminTransport.createServer") end
+            ownerPublisher = ownerEndpoint.value
             ownerServerHandle, advancementServerHandle, adminServerHandle = ownerEndpoint.handle, advEndpoint.handle, adminEndpoint.handle
         end
         ownerSessionReady = rawget(ownerSession, "ready")
         ownerSessionSnapshot = rawget(ownerSession, "snapshot")
+        tokenNewCharacter = rawget(inheritanceSession, "tokenNewCharacter")
+        recordDeath = rawget(inheritanceSession, "recordDeath")
         advancementRequest = rawget(advancementSession, "request")
         adminSessionInspect = rawget(adminSession, "inspect")
         adminSessionRequest = rawget(adminSession, "request")
+        local newPlayers = pendingNewPlayers
+        local newPlayerCount = #newPlayers
+        pendingNewPlayers = {}
+        for index = 1, newPlayerCount do
+            local tokened = trusted(tokenNewCharacter, "new_character_token_invalid", "inheritanceSession.tokenNewCharacter", newPlayers[index])
+            newPlayers[index] = nil
+            if tokened == nil then
+                for remaining = index + 1, newPlayerCount do newPlayers[remaining] = nil end
+                return startupFailure(retainedFailure, retainedFailure.code, retainedFailure.detail)
+            end
+        end
         started, retainedFailure = true, nil
         if mode == "single_player" then
             for slot = 0, 3 do
@@ -727,7 +899,7 @@ function Build42Lifecycle.create(dependencies)
             return accepted == nil and retainedFailure or retain(accepted, "owner_accept_invalid", "ownerClient.acceptLocal")
         end
         readyPlayers[localSlot] = player
-        notifyClientState(localSlot, "owner_snapshot")
+        notifyClientState(localSlot, "owner_snapshot", rawget(ready, "completion"), player)
         return { ok = true }
     end
 
@@ -912,7 +1084,7 @@ function Build42Lifecycle.create(dependencies)
         return detachLocalAdminTerminal(stored)
     end
 
-    local function postAdminMutation(localSlot, player, operation)
+    local function postAdminMutation(localSlot, player, operation, sessionResult)
         local called, snapshotResult = pcall(ownerSessionSnapshot, player)
         if not called or not exactTable(snapshotResult, { ok = true, snapshot = true })
             or rawget(snapshotResult, "ok") ~= true
@@ -930,7 +1102,20 @@ function Build42Lifecycle.create(dependencies)
             retain(accepted, "sp_admin_snapshot_accept_invalid", "ownerClient.acceptLocal")
             return failure("owner_snapshot_failed", "ownerClient.acceptLocal", true)
         end
-        notifyClientState(localSlot, "owner_snapshot")
+        local completion = nil
+        if type(sessionResult) == "table" and rawget(sessionResult, "levelsGained") ~= nil
+            and rawget(sessionResult, "levelsGained") > 0 then
+            local completionCalled, completionResult = pcall(
+                createCompletion,
+                rawget(sessionResult, "levelsGained"),
+                rawget(sessionResult, "apGained")
+            )
+            if completionCalled and type(completionResult) == "table"
+                and rawget(completionResult, "ok") == true then
+                completion = rawget(completionResult, "completion")
+            end
+        end
+        notifyClientState(localSlot, "owner_snapshot", completion, player)
         return { ok = true, operation = operation }
     end
 
@@ -959,7 +1144,7 @@ function Build42Lifecycle.create(dependencies)
             )
             terminal.operation = operation
         elseif terminal.ok and terminal.outcome == "applied" then
-            local refreshed = postAdminMutation(localSlot, player, operation)
+            local refreshed = postAdminMutation(localSlot, player, operation, sessionResult)
             if not refreshed.ok then
                 refreshed.operation = operation
                 terminal = refreshed
@@ -983,7 +1168,20 @@ function Build42Lifecycle.create(dependencies)
     callbacks.OnCreatePlayer = function(localSlot, player)
         if not installed or not ownEvents() or not validSlot(localSlot) or player == nil then return end
         if started then readySingle(localSlot, player)
-        elseif not startupAttempted then pendingPlayers[localSlot] = player end
+        elseif not startupAttempted and not pendingReferencesClosed then pendingPlayers[localSlot] = player end
+    end
+    callbacks.OnNewGame = function(player)
+        if not installed or not ownEvents() then return end
+        if started then
+            trusted(tokenNewCharacter, "new_character_token_invalid", "inheritanceSession.tokenNewCharacter", player)
+        elseif not startupAttempted and not pendingReferencesClosed then
+            local buffered = bufferNewPlayer(player)
+            if not buffered.ok then retain(buffered, buffered.code, buffered.detail) end
+        end
+    end
+    callbacks.OnCharacterDeath = function(player)
+        if not installed or not ownEvents() or not started then return end
+        trusted(recordDeath, "inheritance_death_invalid", "inheritanceSession.recordDeath", player)
     end
     callbacks.OnTick = function()
         if not tickRegistered then return end
@@ -1019,12 +1217,12 @@ function Build42Lifecycle.create(dependencies)
         if not installed or not ownEvents() or module ~= MODULE then return end
         if command == "ownerSnapshot" then
             local called, result = pcall(ownerClient.handle, module, command, args)
-            local handled, localSlot, accepted = false, nil, nil
-            if called then handled, localSlot, accepted = ownerHandled(result) end
+            local handled, localSlot, accepted, completion = false, nil, nil, nil
+            if called then handled, localSlot, accepted, completion = ownerHandled(result) end
             if not handled then
                 retain(result, "owner_client_handle_invalid", "ownerClient.handle")
             elseif accepted then
-                notifyClientState(localSlot, "owner_snapshot")
+                notifyClientState(localSlot, "owner_snapshot", completion)
             end
         elseif command == "advancementResult" then
             local called, result = pcall(advancementClient.handle, module, command, args)
@@ -1084,6 +1282,7 @@ function Build42Lifecycle.create(dependencies)
         for index = 1, #eventNames do
             local name = eventNames[index]
             if name ~= "OnTick" and not pcall(rawget(events[name], "Add"), callbacks[name]) then
+                clearPendingPlayerReferences()
                 return retain(nil, "event_register_threw", name)
             end
         end

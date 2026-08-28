@@ -270,7 +270,7 @@ local function expectedLimit(config, perkId)
     return override == nil and config.perSkillDefault or override
 end
 
-local function validateAllotmentResult(result, config, perkId, addsTarget, activeByPerk, globalActive)
+local function validateAllotmentResult(result, config, perkId, requiredSlots, activeByPerk, globalActive)
     local limited = config.mode ~= "Free"
     local fields = {
         ok = true,
@@ -287,9 +287,9 @@ local function validateAllotmentResult(result, config, perkId, addsTarget, activ
         or type(rawget(result, "spendingEnabled")) ~= "boolean"
         or rawget(result, "mode") ~= config.mode
         or type(rawget(result, "bypassed")) ~= "boolean"
-        or rawget(result, "bypassed") ~= not addsTarget
+        or rawget(result, "bypassed") ~= (requiredSlots == 0)
         or not nonnegativeInteger(rawget(result, "activeCount")) then return nil end
-    local expectedActive = config.mode == "Global" and addsTarget
+    local expectedActive = config.mode == "Global" and requiredSlots > 0
         and globalActive or (activeByPerk[perkId] or 0)
     if rawget(result, "activeCount") ~= expectedActive then return nil end
     if limited then
@@ -297,23 +297,29 @@ local function validateAllotmentResult(result, config, perkId, addsTarget, activ
         if not nonnegativeInteger(rawget(result, "limit"))
             or rawget(result, "limit") ~= limit
             or rawget(result, "spendingEnabled") ~= (limit > 0) then return nil end
+        if requiredSlots > 0 then
+            local needed = math.min(requiredSlots, limit)
+            if rawget(result, "allowed") ~= (limit > 0 and expectedActive + needed <= limit) then return nil end
+        elseif rawget(result, "allowed") ~= true then
+            return nil
+        end
     elseif rawget(result, "allowed") ~= true or rawget(result, "spendingEnabled") ~= true then
         return nil
     end
-    if not addsTarget and rawget(result, "allowed") ~= true then return nil end
     return result
 end
 
-local function evaluateAllotment(evaluate, config, perkId, addsTarget, activeByPerk, globalActive)
+local function evaluateAllotment(evaluate, config, perkId, addsTarget, requiredSlots, activeByPerk, globalActive)
     local called, result = pcall(
         evaluate,
         copyConfiguration(config),
         perkId,
         copyMap(activeByPerk),
-        addsTarget
+        addsTarget,
+        requiredSlots
     )
     if not called then return nil end
-    return validateAllotmentResult(result, config, perkId, addsTarget, activeByPerk, globalActive)
+    return validateAllotmentResult(result, config, perkId, requiredSlots, activeByPerk, globalActive)
 end
 
 local function disabledReason(pending, mismatch, atMaximum, red, availableAp, apCost, allotment, mastery, addsTarget)
@@ -323,7 +329,7 @@ local function disabledReason(pending, mismatch, atMaximum, red, availableAp, ap
     if red then return "red_recovery" end
     if availableAp < apCost then return "insufficient_ap" end
     if mastery and not allotment.spendingEnabled then return "allotment_disabled" end
-    if addsTarget and not allotment.allowed then
+    if (addsTarget or mastery) and not allotment.allowed then
         return allotment.spendingEnabled and "allotment_capacity" or "allotment_disabled"
     end
     return nil
@@ -447,11 +453,13 @@ function SkillsViewModel.create(dependencies)
             local mastery = nextTargetLevel ~= nil and nextTargetLevel == source.effectiveMaximum
             local reboost = nextTargetLevel ~= nil and containsLevel(targets, nextTargetLevel)
             local addsTarget = nextTargetLevel ~= nil and not mastery and not reboost
+            local requiredSlots = mastery and 2 or (addsTarget and 1 or 0)
             local evaluated = evaluateAllotment(
                 evaluate,
                 config,
                 source.perkId,
                 addsTarget,
+                requiredSlots,
                 counts,
                 globalActive
             )

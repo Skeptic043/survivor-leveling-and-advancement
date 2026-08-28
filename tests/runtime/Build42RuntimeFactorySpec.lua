@@ -3,8 +3,12 @@ local function eq(a, b, m) assertions = assertions + 1; if a ~= b then error(m o
 local function ok(r, m) eq(r.ok, true, m .. ": " .. tostring(r.code) .. " " .. tostring(r.detail)) end
 
 local function globals()
-    local sandboxSingleton = {}
-    return { PerkFactory = { PerkList = {} }, Perks = { None = {} }, SandboxOptions = { instance = sandboxSingleton }, SandboxVars = {}, PZMath = { clampFloat = function(v) return v end }, Events = {}, addXp = function() end, addXpNoMultiplier = function() end, isClient = function() return false end, instanceof = function() return true end }
+    local sandboxSingleton = { liveValue = 7 }
+    function sandboxSingleton:getOptionByName(name)
+        if name ~= "SurvivorLevelingAdvancement.GlobalAdvancementLimit" then return nil end
+        return { getValue = function() return self.liveValue end }
+    end
+    return { PerkFactory = { PerkList = {} }, Perks = { None = {} }, SandboxOptions = { instance = sandboxSingleton }, SandboxVars = {}, PZMath = { clampFloat = function(v) return v end }, Events = {}, addXp = function() end, addXpNoMultiplier = function() end, isServer = function() return false end, isClient = function() return false end, instanceof = function() return true end, getPlayerByOnlineID = function() end, ModData = { getOrCreate = function() return {} end, add = function() end } }
 end
 
 local function makeModules(log, g)
@@ -15,6 +19,9 @@ local function makeModules(log, g)
     local advancementSession = { create = function() end }
     local adminSession = { create = function() end }
     local accountingMode = { create = function() end }
+    local inheritanceWorldStore = { readRoot = function() end, writeRoot = function() end }
+    local inheritanceIdentity = { resolve = function() end }
+    local levelGainCompletion = { create = function() end, validate = function() end }
     local m = {
         Build42PerkCatalog = { create = function(a) log[#log + 1] = "catalog"; eq(a.perkRegistry, g.PerkFactory.PerkList, "registry identity"); eq(type(a.progressionAdapter), "table", "adapter identity"); return { ok = true, catalog = catalog } end },
         VanillaProgressionAdapter = { build = function() end, describe = function() end, inspect = function() end },
@@ -22,8 +29,10 @@ local function makeModules(log, g)
         Build42WorldSettingsProvider = { create = function(a) log[#log + 1] = "provider"; eq(a.readSandboxVars(), g.SandboxVars, "live sandbox vars"); return { ok = true, provider = {} } end },
         Build42SandboxMultiplier = { create = function(a) log[#log + 1] = "multiplier"; eq(a.SandboxOptions, g.SandboxOptions.instance, "options singleton identity"); return { ok = true, resolver = { resolve = function() end } } end },
         Build42XpPositionArithmetic = { create = function(a) log[#log + 1] = "arithmetic"; eq(a.environment.globals, g, "globals identity"); return { ok = true, arithmetic = { add = function() end } } end },
-        ServiceComposition = { create = function(a) log[#log + 1] = "composition"; eq(a.catalog, catalog, "composition catalog"); eq(a.normalizationByPerk.Cooking, 3, "normalization map"); eq(a.AccountingMode, accountingMode, "accounting factory identity"); eq(a.OwnerSnapshot, ownerSnapshot, "snapshot factory identity"); eq(a.OwnerSession, ownerSession, "session factory identity"); eq(a.AdvancementSession, advancementSession, "advancement factory identity"); eq(a.AdminSession, adminSession, "admin factory identity"); eq(a.authority.describe().authoritative, true, "authority"); eq(a.playerIdentity.isPlayer({}), true, "identity"); return { ok = true, services = services } end },
-        StateCodec = { decode = function() end, encode = function() end }, PlayerStateStore = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, AccountingMode = accountingMode, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, AdvancementSession = advancementSession, AdminSession = adminSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
+        Build42InheritanceWorldStore = { create = function(a) log[#log + 1] = "inheritance_world"; eq(type(a.getOrCreate), "function", "captured ModData reader"); eq(type(a.add), "function", "captured ModData writer"); return { ok = true, capabilities = inheritanceWorldStore } end },
+        Build42InheritanceIdentity = { create = function(a) log[#log + 1] = "inheritance_identity"; eq(type(a.isServer), "function", "captured server mode"); eq(type(a.isClient), "function", "captured client mode"); eq(a.getPlayerByOnlineID, g.getPlayerByOnlineID, "captured exact Lua lookup"); return { ok = true, adapter = inheritanceIdentity } end },
+        ServiceComposition = { create = function(a) log[#log + 1] = "composition"; eq(a.catalog, catalog, "composition catalog"); eq(a.normalizationByPerk.Cooking, 3, "normalization map"); eq(a.AccountingMode, accountingMode, "accounting factory identity"); eq(a.OwnerSnapshot, ownerSnapshot, "snapshot factory identity"); eq(a.OwnerSession, ownerSession, "session factory identity"); eq(a.AdvancementSession, advancementSession, "advancement factory identity"); eq(a.AdminSession, adminSession, "admin factory identity"); eq(a.LevelGainCompletion, levelGainCompletion, "completion factory identity"); eq(type(a.levelGainSink), "function", "completion sink callable"); eq(a.inheritanceWorldStore, inheritanceWorldStore, "inheritance world identity"); eq(a.inheritanceIdentity, inheritanceIdentity, "inheritance identity"); eq(a.authority.describe().authoritative, true, "authority"); eq(a.playerIdentity.isPlayer({}), true, "identity"); return { ok = true, services = services } end },
+        StateCodec = { decode = function() end, encode = function() end, fresh = function() end }, InheritancePolicy = { plan = function() end }, LevelGainCompletion = levelGainCompletion, PlayerStateStore = { create = function() end }, CharacterInheritanceStore = { create = function() end }, InheritanceRecordStore = { create = function() end }, InheritanceSession = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, AccountingMode = accountingMode, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, AdvancementSession = advancementSession, AdminSession = adminSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
     }
     return m, catalog, services
 end
@@ -33,7 +42,7 @@ local result = Build42RuntimeFactory.create({ modules = m, globals = g })
 ok(result, "success"); eq(result.runtime.catalog, catalog, "catalog result"); eq(result.runtime.services, services, "services result")
 local resultKeys = 0; for key in pairs(result) do resultKeys = resultKeys + 1; eq(key == "ok" or key == "runtime", true, "result allowlist") end; eq(resultKeys, 2, "result key count")
 local runtimeKeys = 0; for key in pairs(result.runtime) do runtimeKeys = runtimeKeys + 1; eq(key == "catalog" or key == "services", true, "runtime allowlist") end; eq(runtimeKeys, 2, "runtime key count")
-eq(table.concat(log, ","), "catalog,refresh,normalization,provider,multiplier,arithmetic,composition", "order")
+eq(table.concat(log, ","), "catalog,refresh,normalization,provider,multiplier,arithmetic,inheritance_world,inheritance_identity,composition", "order")
 local savedOwnerSnapshot = m.OwnerSnapshot
 m.OwnerSnapshot = nil
 local callsBeforeMissingSnapshot = #log
@@ -91,9 +100,53 @@ eq(hostileAdmin.code, "invalid_module_AdminSession", "hostile admin module code"
 g.SandboxVars = {}; local providerArgs
 m.Build42WorldSettingsProvider.create = function(a) providerArgs = a; return { ok = true, provider = {} } end
 ok(Build42RuntimeFactory.create({ modules = m, globals = g }), "current settings success"); eq(providerArgs.readSandboxVars(), g.SandboxVars, "current settings")
+eq(providerArgs.readSandboxOption("GlobalAdvancementLimit"), 7, "current engine sandbox option")
 g.isClient = function() return true end
-m.ServiceComposition.create = function(a) eq(a.authority.describe().authoritative, false, "client authority"); g.isClient = function() return "bad" end; eq(a.authority.describe().ok, false, "invalid authority"); g.isClient = function() return true end; g.instanceof = function() error("boom") end; eq(a.playerIdentity.isPlayer({}), false, "thrown identity"); return { ok = true, services = services } end
+m.ServiceComposition.create = function(a) eq(a.authority.describe().authoritative, false, "client authority"); g.isClient = function() return "bad" end; eq(a.authority.describe().authoritative, false, "authority captures exact function"); g.instanceof = function() error("boom") end; eq(a.playerIdentity.isPlayer({}), true, "player identity captures exact function"); return { ok = true, services = services } end
 ok(Build42RuntimeFactory.create({ modules = m, globals = g }), "authority variants")
+
+do
+    local boundaryGlobals = globals()
+    local boundaryLog = {}
+    local boundaryModules = makeModules(boundaryLog, boundaryGlobals)
+    local globalCalls, fakeMemberCalls, modReads, modWrites = 0, 0, 0, 0
+    boundaryGlobals.GameServer = {
+        getPlayerByOnlineID = function() fakeMemberCalls = fakeMemberCalls + 1; error("fake member") end,
+    }
+    local capturedGlobal = function(id) globalCalls = globalCalls + 1; return "global:" .. tostring(id) end
+    boundaryGlobals.getPlayerByOnlineID = capturedGlobal
+    boundaryGlobals.ModData = {
+        getOrCreate = function() modReads = modReads + 1; return {} end,
+        add = function() modWrites = modWrites + 1 end,
+    }
+    boundaryModules.Build42InheritanceIdentity.create = function(argument)
+        eq(argument.getPlayerByOnlineID, capturedGlobal, "identity receives exact Lua global")
+        boundaryGlobals.getPlayerByOnlineID = function() return "replacement" end
+        eq(argument.getPlayerByOnlineID(12), "global:12", "captured lookup ignores later global replacement")
+        return { ok = true, adapter = { resolve = function() end } }
+    end
+    boundaryModules.ServiceComposition.create = function(argument)
+        eq(type(argument.inheritanceWorldStore.readRoot), "function", "world adapter reaches composition")
+        eq(type(argument.inheritanceIdentity.resolve), "function", "identity adapter reaches composition")
+        return { ok = true, services = {} }
+    end
+    ok(Build42RuntimeFactory.create({ modules = boundaryModules, globals = boundaryGlobals }), "Build 42 inheritance boundaries")
+    eq(globalCalls, 1, "Lua global lookup called once")
+    eq(fakeMemberCalls, 0, "fake GameServer member is never read or called")
+    eq(modReads, 0, "factory construction does not read Global ModData namespace")
+    eq(modWrites, 0, "factory construction does not replace Global ModData namespace")
+end
+do
+    local fakeOnlyGlobals = globals()
+    local fakeOnlyCalls = 0
+    fakeOnlyGlobals.getPlayerByOnlineID = nil
+    fakeOnlyGlobals.GameServer = { getPlayerByOnlineID = function() fakeOnlyCalls = fakeOnlyCalls + 1 end }
+    local fakeOnlyLog = {}
+    local rejected = Build42RuntimeFactory.create({ modules = makeModules(fakeOnlyLog, fakeOnlyGlobals), globals = fakeOnlyGlobals })
+    eq(rejected.ok, false, "fake GameServer member cannot replace missing Lua global")
+    eq(rejected.code, "missing_global_getPlayerByOnlineID", "missing Lua lookup has exact code")
+    eq(fakeOnlyCalls, 0, "fake GameServer member remains untouched on rejection")
+end
 local explicit = { ok = false, code = "catalog_down", detail = "catalog unavailable" }
 local bad
 m.Build42PerkCatalog.create = function() return explicit end

@@ -23,7 +23,7 @@ local function isPlainTable(value)
     return type(value) == 'table' and getmetatable(value) == nil
 end
 
-local function readSettings(readSandboxVars)
+local function readSettings(readSandboxVars, readSandboxOption)
     local sandboxVars = readSandboxVars()
     if not isPlainTable(sandboxVars) then
         return nil
@@ -32,6 +32,19 @@ local function readSettings(readSandboxVars)
     local namespace = sandboxVars.SurvivorLevelingAdvancement
     if not isPlainTable(namespace) then
         return nil
+    end
+
+    if readSandboxOption ~= nil then
+        local liveNamespace = {}
+        for key, value in pairs(namespace) do
+            local liveValue = readSandboxOption(key)
+            if liveValue == nil then
+                liveNamespace[key] = value
+            else
+                liveNamespace[key] = liveValue
+            end
+        end
+        namespace = liveNamespace
     end
 
     local survivorMultiplier = namespace.SurvivorXpMultiplier
@@ -51,6 +64,17 @@ local function readSettings(readSandboxVars)
     if type(automaticCurveNormalization) ~= 'boolean' then
         return nil
     end
+
+    local inheritanceEnabled = namespace.EnableSurvivorLevelInheritance
+    if type(inheritanceEnabled) ~= 'boolean' then
+        return nil
+    end
+
+    local retainedPercent = namespace.SurvivorLevelRetainedPercent
+    if not isFiniteNumber(retainedPercent) or retainedPercent < 0 or retainedPercent > 100 then
+        return nil
+    end
+    local retainedRatio = retainedPercent / 100
 
     local allotmentModeValue = namespace.AllotmentMode
     local allotmentMode
@@ -97,7 +121,9 @@ local function readSettings(readSandboxVars)
         allotmentMode = allotmentMode,
         globalLimit = globalLimit,
         perSkillDefault = perSkillDefault,
-        perSkillOverrides = perSkillOverrides
+        perSkillOverrides = perSkillOverrides,
+        inheritanceEnabled = inheritanceEnabled,
+        retainedRatio = retainedRatio
     }
 end
 
@@ -110,10 +136,14 @@ function Build42WorldSettingsProvider.create(dependencies)
     if type(readSandboxVars) ~= 'function' then
         return { ok = false, code = 'invalid_capability', detail = 'readSandboxVars capability is required' }
     end
+    local readSandboxOption = dependencies.readSandboxOption
+    if readSandboxOption ~= nil and type(readSandboxOption) ~= 'function' then
+        return { ok = false, code = 'invalid_capability', detail = 'readSandboxOption capability must be callable' }
+    end
 
     local provider = {}
     function provider.read()
-        local ok, settings = pcall(readSettings, readSandboxVars)
+        local ok, settings = pcall(readSettings, readSandboxVars, readSandboxOption)
         if not ok then
             return nil
         end

@@ -24,6 +24,7 @@ local translations = {
     IGUI_SLA_StatusActive = "Advancement Slots: %1/%2",
     IGUI_SLA_StatusSurvivorXp = "Survivor XP: %1 / %2",
     IGUI_SLA_Advance = "Advance to level %1 for %2 AP.",
+    IGUI_SLA_Master = "Master skill for %1 AP.",
     IGUI_SLA_PerSkillActive = "Advancement Slots: %1/%2.",
     IGUI_SLA_TargetXpLeft = "%1 natural skill XP left",
     IGUI_SLA_TargetCatchUp = "Catch up to free this advancement slot.",
@@ -35,7 +36,7 @@ local translations = {
     IGUI_SLA_Reason_RedRecovery = "Recover natural XP before advancing again.",
     IGUI_SLA_Reason_InsufficientAp = "Not enough AP.",
     IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
-    IGUI_SLA_Reason_AllotmentCapacity = "This skill has reached its advancement limit.",
+    IGUI_SLA_Reason_AllotmentCapacity = "Advancement slot unavailable.",
     IGUI_SLA_Admin_Button = "Admin",
 }
 
@@ -76,6 +77,8 @@ local function settings(mode, fitnessStrengthNormalization)
         globalLimit = 6,
         perSkillDefault = 2,
         perSkillOverrides = { Axe = 4 },
+        inheritanceEnabled = true,
+        retainedRatio = 0.5,
     }
 end
 
@@ -89,6 +92,13 @@ local function makeEnvironment(options)
         priorTooltip = 0,
         priorRemoveTooltip = 0,
         priorActivate = 0,
+        priorJoypadDown = 0,
+        priorJoypadUp = 0,
+        priorJoypadDownDirection = 0,
+        priorJoypadLeft = 0,
+        priorJoypadRight = 0,
+        priorJoypadGain = 0,
+        priorJoypadLose = 0,
         priorMouseUp = 0,
         refresh = { 0, 0, 0, 0 },
         stateReads = { 0, 0, 0, 0 },
@@ -111,6 +121,7 @@ local function makeEnvironment(options)
         listenerSets = 0,
         listener = nil,
         prerenderGeometry = {},
+        joypadHighlights = {},
         mode = options.mode or "Global",
         fitnessStrengthNormalization = options.fitnessStrengthNormalization,
         pending = { false, false, false, false },
@@ -153,12 +164,54 @@ local function makeEnvironment(options)
         if self.buttonList[1] ~= nil then self.buttonList[1]:setY(10) end
         self:setWidthAndParentWidth(math.max(self:getWidth(), self.vanillaWidth))
         self:setHeightAndParentHeight(self.vanillaHeight)
-        self.scrollHeight = self.vanillaScrollHeight
+        self:setScrollHeight(self.vanillaScrollHeight)
+        if self.joyfocus and self.joypadIndex and self.progressBars[self.joypadIndex] then
+            evidence.joypadHighlights[#evidence.joypadHighlights + 1] = {
+                index = self.joypadIndex,
+                yScroll = self:getYScroll(),
+                barY = self.progressBars[self.joypadIndex]:getY(),
+                height = self:getHeight(),
+                scrollHeight = self:getScrollHeight(),
+            }
+        end
     end
 
+    function CharacterInfo.onJoypadDown(self, button)
+        evidence.priorJoypadDown = evidence.priorJoypadDown + 1
+        if button == "A" and self.joypadIndex and self.progressBars[self.joypadIndex] then
+            self.progressBars[self.joypadIndex]:activate()
+        end
+    end
+
+    function CharacterInfo.onJoypadDirUp(self)
+        evidence.priorJoypadUp = evidence.priorJoypadUp + 1
+        if not self.joypadIndex or self.joypadIndex == 1 then
+            self.joypadIndex = #self.progressBars
+        else
+            self.joypadIndex = self.joypadIndex - 1
+        end
+    end
+
+    function CharacterInfo.onJoypadDirDown(self)
+        evidence.priorJoypadDownDirection = evidence.priorJoypadDownDirection + 1
+        if not self.joypadIndex or self.joypadIndex == #self.progressBars then
+            self.joypadIndex = 1
+        else
+            self.joypadIndex = self.joypadIndex + 1
+        end
+    end
+
+    function CharacterInfo.onJoypadDirLeft() evidence.priorJoypadLeft = evidence.priorJoypadLeft + 1 end
+    function CharacterInfo.onJoypadDirRight() evidence.priorJoypadRight = evidence.priorJoypadRight + 1 end
+    function CharacterInfo.onGainJoypadFocus(self)
+        evidence.priorJoypadGain = evidence.priorJoypadGain + 1
+        self.joypadIndex = nil
+    end
+    function CharacterInfo.onLoseJoypadFocus() evidence.priorJoypadLose = evidence.priorJoypadLose + 1 end
     function ProgressBar.renderPerkRect(self)
         evidence.priorOverlay = evidence.priorOverlay + 1
         evidence.drawOrder[#evidence.drawOrder + 1] = "gold"
+        self.level = self.perk.level
     end
 
     function ProgressBar.updateTooltip(self)
@@ -210,7 +263,10 @@ local function makeEnvironment(options)
         function button:click()
             if self.enabled and self.onclick ~= nil then self.onclick(self.target, self) end
         end
-        return button
+        return setmetatable(button, { __index = {
+            setJoypadFocused = function(self, value) self.joypadFocused = value end,
+            forceClick = function(self) self:click() end,
+        } })
     end
 
     local owner = {
@@ -425,6 +481,7 @@ local function makeEnvironment(options)
         getText = formatText,
         measureText = function(text) return #text * (evidence.measureScale or 1) end,
         smallFont = "small-font",
+        joypadAButton = "A",
     }
     if options.adminLauncher then
         dependencies.adminLauncher = {
@@ -531,6 +588,7 @@ local function makeBar(environment, id, options)
         y = options.y or 40,
         width = options.width or 200,
         height = options.height or 20,
+        level = perk.level,
         mouseX = options.mouseX or -1,
         children = {},
         draws = {},
@@ -595,8 +653,18 @@ local function makeView(environment, slot, bars, delayed)
     function view:setWidth(value) self.width = value end
     function view:setHeight(value) self.height = value end
     function view:getYScroll() return self.yScroll end
-    function view:setYScroll(value) self.yScroll = value end
+    function view:setYScroll(value)
+        if environment.realisticScrollClamp then
+            local maximum = math.max(0, self.scrollHeight - self.height)
+            value = math.max(-maximum, math.min(0, value))
+        end
+        self.yScroll = value
+    end
     function view:getScrollHeight() return self.scrollHeight end
+    function view:setScrollHeight(value)
+        self.scrollHeight = value
+        if environment.vanillaRenderClampsScroll then self.yScroll = 0 end
+    end
     function view:isVisible() return self.visible ~= false end
     function view:setVisible(value)
         self.visibleTransitions = self.visibleTransitions + 1
@@ -618,6 +686,7 @@ local function makeView(environment, slot, bars, delayed)
             current:setHeight(child:getY() + child:getHeight())
             child, current = current, current.parent
         end
+        if environment.vanillaRenderClampsScroll then self.yScroll = 0 end
     end
     setmetatable(view, { __index = environment.CharacterInfo })
     return view
@@ -645,7 +714,7 @@ end
 
 expect(type(Build42SkillsUi) == "table", "module loads")
 expect(type(Build42SkillsUi.create) == "function", "module exposes create")
-equal(SkillsUiBootstrapHarness, 24, "bootstrap harness checks")
+equal(SkillsUiBootstrapHarness, 25, "bootstrap harness checks")
 expect(C11CBootstrapFirst == rawget(_G, "__C11C_BOOTSTRAP_EVIDENCE").integration,
     "bootstrap returns integration")
 expect(C11CBootstrapReload == C11CBootstrapFirst, "reload returns exact integration")
@@ -740,7 +809,7 @@ equal(view.parent.drawTextRightStatic, nil, "live-faithful parent exposes no sta
 view:prerender()
 equal(environment.priorPrerender, 1, "first prerender chains vanilla once")
 equal(environment.prerenderGeometry[1].y, 58, "two-row header inset is applied before vanilla prerender")
-equal(environment.prerenderGeometry[1].height, 270, "header viewport is reserved before vanilla stencil")
+equal(environment.prerenderGeometry[1].height, 250, "the full fixed-header offset is reserved before vanilla stencil")
 equal(view.y, 58, "view moves by the exact two-row native header inset")
 equal(environment.refresh[1], 1, "first visible prerender requests refresh")
 equal(total(environment.stateReads), 0, "first prerender reads no owner state")
@@ -750,10 +819,10 @@ equal(environment.modelBuilds, 0, "first prerender builds no model")
 
 view:render()
 equal(environment.priorRender, 1, "first render chains vanilla once")
-equal(view.height, 270, "viewport loses exactly one native header inset")
-equal(view.parent.height, 328, "containing panel grows by exactly one native row")
-equal(view.outer.height, 348, "outer window grows by exactly one native row")
-equal(view.scrollHeight, 500, "vanilla scroll height remains unchanged")
+equal(view.height, 250, "viewport loses the same offset by which it was moved")
+equal(view.parent.height, 308, "fixed header preserves the containing panel bottom edge")
+equal(view.outer.height, 328, "fixed header preserves the outer window bottom edge")
+equal(view.scrollHeight, 500, "fixed header does not add phantom skill content")
 equal(#view.progressBars, 1, "vanilla creates one bar")
 equal(environment.buttonCreates, 1, "reconciliation creates one button")
 equal(axe.children[1].enabled, false, "new button stays disabled before the first model build")
@@ -778,6 +847,9 @@ expect(exact(firstInput, { snapshot = true, allotment = true, pending = true, ro
     "model input exact")
 expect(exact(firstInput.allotment, { mode = true, globalLimit = true }), "Global projection exact")
 equal(firstInput.allotment.globalLimit, 6, "Global limit projected")
+expect(environment.lastRawSettings.inheritanceEnabled == true
+    and environment.lastRawSettings.retainedRatio == 0.5,
+    "live inheritance settings shape is accepted without entering the allotment projection")
 expect(firstInput.rows[1].perkId == "Axe" and firstInput.rows[1].currentLevel == 1
     and firstInput.rows[1].effectiveMaximum == 10, "resolved row projected")
 local axeButton = axe.children[1]
@@ -923,9 +995,11 @@ equal(environment.requests[1], 1, "mouse plus sends one request")
 equal(environment.lastRequest.slot, 0, "request uses view slot")
 equal(environment.lastRequest.perkId, "Axe", "request uses resolved perk ID")
 equal(axeButton.enabled, false, "successful request disables button before return")
+axeButton:click()
+equal(environment.requests[1], 1, "disabled mouse plus cannot duplicate a pending request")
 axe:activate()
-equal(environment.requests[1], 1, "controller activation same frame coalesces")
-equal(environment.priorActivate, 2, "mouse and controller each retain vanilla activate seam")
+equal(environment.requests[1], 1, "activating the skill row does not spend AP")
+equal(environment.priorActivate, 1, "skill-row activation retains vanilla seam once")
 expect(slotBar.children[1].enabled, "other slot button remains enabled")
 expect(environment.ProgressBar.onMouseUp == installedMouseUp, "vanilla mouse seam remains unpatched")
 local requestsBeforeOutside = environment.requests[1]
@@ -938,11 +1012,87 @@ environment.pending[1] = false
 environment.now = 1602
 view:prerender()
 expect(axeButton.enabled, "terminal listener rebuild re-enables eligible row")
+view.joypadIndex = 1
+view:onJoypadDirRight()
+expect(axeButton.joypadFocused, "right selects the exact plus button")
+equal(environment.priorJoypadRight, 0, "handled plus focus does not escape the Skills panel")
+view:onJoypadDown("A")
+equal(environment.requests[1], 2, "controller A activates the focused plus once")
+equal(environment.priorJoypadDown, 0, "focused plus consumes controller A")
+expect(not axeButton.enabled, "controller request disables the focused plus")
+view:onJoypadDown("A")
+equal(environment.requests[1], 2, "disabled controller plus cannot duplicate a pending request")
+environment.listener(0, "advancement_result")
+environment.pending[1] = false
+environment.now = 1603
+view:prerender()
+view:onJoypadDirLeft()
+expect(not axeButton.joypadFocused, "left returns focus from plus to the skill row")
 environment.requestReject = true
 axeButton:click()
-equal(environment.requests[1], 2, "ordinary rejection is delivered once")
+equal(environment.requests[1], 3, "ordinary rejection is delivered once")
 expect(axeButton.enabled, "ordinary rejection does not poison control")
 equal(string.find(axeButton.tooltip or "", "secret", 1, true), nil, "backend detail never leaks")
+
+do
+    local scrollEnvironment = makeEnvironment({})
+    expect(scrollEnvironment.integration.install().ok, "deep-row scroll integration installs")
+    local shallowBar = makeBar(scrollEnvironment, "Axe", { y = 40 })
+    local deepBar = makeBar(scrollEnvironment, "Trapping", { y = 490 })
+    local scrollView = makeView(scrollEnvironment, 0, { shallowBar, deepBar })
+    scrollView:prerender()
+    scrollView:render()
+    equal(scrollView.scrollHeight, 550, "scroll range includes forty pixels below the final skill")
+    scrollView.joypadIndex = 1
+    scrollView.joyfocus = true
+    scrollView:onJoypadDirDown()
+    equal(scrollView.joypadIndex, 2, "controller selects the deep final skill")
+    equal(scrollView.yScroll, -300, "controller selection uses the actual shortened viewport")
+    scrollEnvironment.vanillaRenderClampsScroll = true
+    scrollEnvironment.realisticScrollClamp = true
+    local originalHeightSetter = rawget(scrollView, "setHeightAndParentHeight")
+    local originalScrollSetter = rawget(scrollView, "setScrollHeight")
+    scrollView:render()
+    equal(scrollView.yScroll, -300, "controller scroll survives vanilla render clamping")
+    local highlight = scrollEnvironment.joypadHighlights[#scrollEnvironment.joypadHighlights]
+    equal(highlight.index, 2, "vanilla highlight follows the selected deep skill")
+    equal(highlight.barY, 490, "vanilla highlight uses the selected skill row")
+    equal(highlight.yScroll, -300, "vanilla highlight is drawn with the preserved controller scroll")
+    equal(highlight.height, 250, "vanilla highlight uses the shortened Skills viewport")
+    equal(highlight.scrollHeight, 550, "vanilla highlight uses the extended final-row scroll range")
+    equal(rawget(scrollView, "setHeightAndParentHeight"), originalHeightSetter,
+        "controller render restores the exact instance height setter")
+    equal(rawget(scrollView, "setScrollHeight"), originalScrollSetter,
+        "controller render restores the exact instance scroll-height setter")
+    scrollView:setYScroll(-90)
+    scrollView:render()
+    equal(scrollView.yScroll, -90, "mouse-wheel scroll survives vanilla render clamping")
+end
+
+do
+    local tooltipEnvironment = makeEnvironment({})
+    expect(tooltipEnvironment.integration.install().ok, "tooltip refresh integration installs")
+    local tooltipBar = makeBar(tooltipEnvironment, "Axe")
+    local tooltipView = makeView(tooltipEnvironment, 0, { tooltipBar })
+    tooltipView:prerender()
+    tooltipView:render()
+    expect(string.find(tooltipBar.children[1].tooltip or "", "level 2", 1, true) ~= nil,
+        "initial plus tooltip uses the current target")
+    tooltipBar.perk.level = 2
+    tooltipBar:renderPerkRect()
+    tooltipView:prerender()
+    expect(string.find(tooltipBar.children[1].tooltip or "", "level 3", 1, true) ~= nil,
+        "plus tooltip refreshes to the next level after advancement")
+
+    local masteryEnvironment = makeEnvironment({})
+    expect(masteryEnvironment.integration.install().ok, "mastery tooltip integration installs")
+    local masteryBar = makeBar(masteryEnvironment, "Axe", { level = 9 })
+    local masteryView = makeView(masteryEnvironment, 0, { masteryBar })
+    masteryView:prerender()
+    masteryView:render()
+    equal(masteryBar.children[1].tooltip, "Master skill for 2 AP.",
+        "final two-point advancement uses mastery copy")
+end
 
 axe:renderPerkRect()
 equal(environment.drawOrder[1], "gold", "vanilla gold renders before overlays")
@@ -1352,8 +1502,8 @@ view:render()
 expect(tornParent.width > 300, "torn-off parent identity widens independently")
 equal(view.width, stableViewWidth, "torn-off reconciliation remains non-cumulative")
 equal(view.y, 66, "torn-off view rebases two header rows from its new vanilla position")
-equal(tornParent.height, 336, "torn-off parent receives one-row-expanded absolute height")
-equal(tornOuter.height, 360, "torn-off outer window receives full expanded ancestor height")
+equal(tornParent.height, 316, "torn-off parent preserves its rebased bottom edge")
+equal(tornOuter.height, 340, "torn-off outer window preserves its rebased bottom edge")
 equal(lastDrawText(tornParent.statusDraws, "AP: 3").y, 26,
     "torn-off first status row uses the new parent-local position")
 equal(lastDrawText(tornParent.statusDraws, "Survivor XP: 10 / 100").y, 46,
@@ -1362,8 +1512,8 @@ view.parent = dockedParent
 view:setY(8)
 view:render()
 equal(view.y, 58, "reattached view reapplies the two-row header inset")
-equal(dockedParent.height, 328, "reattached panel restores one-row-expanded height")
-equal(dockedOuter.height, 348, "reattached outer window restores one-row-expanded height")
+equal(dockedParent.height, 308, "reattached panel restores its original bottom edge")
+equal(dockedOuter.height, 328, "reattached outer window restores its original bottom edge")
 
 local unsupported = makeBar(environment, "Unsupported", { unsupported = true })
 view.progressBars = { unsupported }
@@ -1609,10 +1759,16 @@ equal(ownershipEnvironment.listenerSets, 1, "lost ownership does not replace lis
 local vanillaThrowEnvironment = makeEnvironment()
 expect(vanillaThrowEnvironment.integration.install().ok, "vanilla throw integration installs")
 local vanillaThrowView = makeView(vanillaThrowEnvironment, 0, {})
+local vanillaThrowHeightSetter = rawget(vanillaThrowView, "setHeightAndParentHeight")
+local vanillaThrowScrollSetter = rawget(vanillaThrowView, "setScrollHeight")
 vanillaThrowView.throwRender = true
 local renderOk = pcall(function() vanillaThrowView:render() end)
 expect(not renderOk, "vanilla render throw propagates")
 equal(vanillaThrowEnvironment.priorRender, 1, "throwing vanilla render called once")
+equal(rawget(vanillaThrowView, "setHeightAndParentHeight"), vanillaThrowHeightSetter,
+    "throwing vanilla render restores the exact instance height setter")
+equal(rawget(vanillaThrowView, "setScrollHeight"), vanillaThrowScrollSetter,
+    "throwing vanilla render restores the exact instance scroll-height setter")
 
 local invalidLauncherDependencies = {}
 for key, value in pairs(environment.dependencies) do invalidLauncherDependencies[key] = value end
