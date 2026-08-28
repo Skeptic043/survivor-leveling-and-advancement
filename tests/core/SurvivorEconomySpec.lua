@@ -101,6 +101,29 @@ local perSkillBypass = A.evaluate({ mode = "PerSkill", perSkillDefault = 1 }, "A
 expect(perSkillBypass.ok and perSkillBypass.allowed and perSkillBypass.spendingEnabled and perSkillBypass.bypassed, "nonzero per skill spend bypasses capacity")
 local freeBypass = A.evaluate({ mode = "Free" }, "Axe", active, false)
 expect(freeBypass.ok and freeBypass.allowed and freeBypass.spendingEnabled and freeBypass.bypassed, "free spend remains enabled")
+local globalMasteryBlocked = A.evaluate({ mode = "Global", globalLimit = 3 }, "Axe", { Axe = 2, Carpentry = 1 }, false, 2)
+expect(globalMasteryBlocked.ok and not globalMasteryBlocked.allowed and not globalMasteryBlocked.bypassed,
+    "global mastery requires two free slots")
+local globalMasteryOpen = A.evaluate({ mode = "Global", globalLimit = 3 }, "Axe", { Axe = 1 }, false, 2)
+expect(globalMasteryOpen.ok and globalMasteryOpen.allowed and globalMasteryOpen.activeCount == 1,
+    "global mastery opens with two free slots")
+local globalMasteryOne = A.evaluate({ mode = "Global", globalLimit = 1 }, "Axe", {}, false, 2)
+expect(globalMasteryOne.ok and globalMasteryOne.allowed and globalMasteryOne.limit == 1,
+    "one-slot global mode requires only its one free slot for mastery")
+local globalMasteryOneFull = A.evaluate({ mode = "Global", globalLimit = 1 }, "Axe", { Carpentry = 1 }, false, 2)
+expect(globalMasteryOneFull.ok and not globalMasteryOneFull.allowed,
+    "one-slot global mode blocks mastery while its slot is occupied")
+local perSkillMasteryBlocked = A.evaluate({ mode = "PerSkill", perSkillDefault = 3 }, "Axe", { Axe = 2 }, false, 2)
+expect(perSkillMasteryBlocked.ok and not perSkillMasteryBlocked.allowed,
+    "per-skill mastery requires two free skill slots")
+local perSkillMasteryOne = A.evaluate({ mode = "PerSkill", perSkillDefault = 1 }, "Axe", {}, false, 2)
+expect(perSkillMasteryOne.ok and perSkillMasteryOne.allowed,
+    "one-slot per-skill mode requires only its one free slot for mastery")
+local freeMastery = A.evaluate({ mode = "Free" }, "Axe", active, false, 2)
+expect(freeMastery.ok and freeMastery.allowed and not freeMastery.bypassed,
+    "free mode admits mastery without a capacity limit")
+bad(A.evaluate({ mode = "Global", globalLimit = 3 }, "Axe", active, false, -1), "invalid_config")
+bad(A.evaluate({ mode = "Global", globalLimit = 3 }, "Axe", active, true, 0), "invalid_config")
 bad(A.evaluate({ mode = "Global", globalLimit = -1 }, "Axe", active, false), "invalid_config")
 bad(A.evaluate({ mode = "PerSkill", perSkillDefault = 1, perSkillOverrides = { Axe = -1 } }, "Axe", active, false), "invalid_config")
 expect(active.Axe == 1 and active.Carpentry == 1, "allotment never modifies existing counts")

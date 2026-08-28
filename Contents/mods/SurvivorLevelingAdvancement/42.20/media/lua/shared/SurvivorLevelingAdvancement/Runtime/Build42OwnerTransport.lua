@@ -17,6 +17,13 @@ local SUCCESS_FIELDS = {
     ok = true,
     snapshot = true,
 }
+local SUCCESS_COMPLETION_FIELDS = {
+    protocolVersion = true,
+    correlationId = true,
+    ok = true,
+    snapshot = true,
+    completion = true,
+}
 local FAILURE_FIELDS = {
     protocolVersion = true,
     correlationId = true,
@@ -90,7 +97,18 @@ local function validateRequest(args)
     return args.correlationId
 end
 
-local function validateResponse(args)
+local function detachCompletion(validateCompletion, value)
+    if value == nil then return nil end
+    local called, result = pcall(validateCompletion, value)
+    if not called or not exactPlainTable(result, { ok = true, completion = true })
+        or rawget(result, "ok") ~= true
+        or type(rawget(result, "completion")) ~= "table" then
+        return nil
+    end
+    return rawget(result, "completion")
+end
+
+local function validateResponse(args, validateCompletion)
     if type(args) ~= "table" or getmetatable(args) ~= nil then
         return nil, failure("invalid_response", "response shape")
     end
@@ -98,7 +116,8 @@ local function validateResponse(args)
     if isSuccess ~= true and isSuccess ~= false then
         return nil, failure("invalid_response", "response shape")
     end
-    local fields = isSuccess and SUCCESS_FIELDS or FAILURE_FIELDS
+    local fields = isSuccess and (rawget(args, "completion") == nil
+        and SUCCESS_FIELDS or SUCCESS_COMPLETION_FIELDS) or FAILURE_FIELDS
     if not exactPlainTable(args, fields) then
         return nil, failure("invalid_response", "response shape")
     end
@@ -116,18 +135,35 @@ local function validateResponse(args)
         or not printable(args.detail, MAX_DETAIL_LENGTH) then
         return nil, failure("invalid_response", "failure detail")
     end
-    return args
+    if isSuccess then
+        local response = {
+            protocolVersion = args.protocolVersion,
+            correlationId = args.correlationId,
+            ok = true,
+            snapshot = args.snapshot,
+        }
+        local completion = detachCompletion(validateCompletion, rawget(args, "completion"))
+        if completion ~= nil then response.completion = completion end
+        return response
+    end
+    return {
+        protocolVersion = args.protocolVersion,
+        correlationId = args.correlationId,
+        ok = false,
+        code = args.code,
+        detail = args.detail,
+    }
 end
 
 local function sessionSnapshot(callable, operation, player)
     local called, result = pcall(callable, player)
     if not called then
-        return nil, failure("session_" .. operation .. "_threw", "ownerSession." .. operation)
+        return nil, nil, failure("session_" .. operation .. "_threw", "ownerSession." .. operation)
     end
     if type(result) == "table" and result.ok == true and type(result.snapshot) == "table" then
-        return result.snapshot
+        return result.snapshot, rawget(result, "completion"), nil
     end
-    return nil, boundedDependencyFailure(
+    return nil, nil, boundedDependencyFailure(
         result,
         "session_" .. operation .. "_invalid",
         "ownerSession." .. operation
@@ -162,13 +198,15 @@ local function sendClient(send, player, command, envelope)
     return { ok = true }
 end
 
-local function serverSuccess(correlationId, snapshot)
-    return {
+local function serverSuccess(correlationId, snapshot, completion)
+    local result = {
         protocolVersion = PROTOCOL_VERSION,
         correlationId = correlationId,
         ok = true,
         snapshot = snapshot,
     }
+    if completion ~= nil then result.completion = completion end
+    return result
 end
 
 local function serverFailure(correlationId, failed)
@@ -195,6 +233,12 @@ function Build42OwnerTransport.createServer(dependencies)
     local validateSnapshot = type(snapshotValidator) == "table" and snapshotValidator.validate or nil
     if type(validateSnapshot) ~= "function" then
         return failure("invalid_dependencies", "snapshotValidator.validate")
+    end
+    local completionValidator = dependencies.completionValidator
+    local validateCompletion = type(completionValidator) == "table"
+        and completionValidator.validate or nil
+    if type(validateCompletion) ~= "function" then
+        return failure("invalid_dependencies", "completionValidator.validate")
     end
     local send = dependencies.sendServerCommand
     if type(send) ~= "function" then
@@ -225,7 +269,7 @@ function Build42OwnerTransport.createServer(dependencies)
             return { ok = true, handled = true }
         end
 
-        local snapshot, readyFailure = sessionSnapshot(ownerSession.ready, "ready", player)
+        local snapshot, readyCompletion, readyFailure = sessionSnapshot(ownerSession.ready, "ready", player)
         if snapshot == nil then
             local sentFailure = sendServer(send, player, serverFailure(correlationId, readyFailure))
             if not sentFailure.ok then return sentFailure end
@@ -239,18 +283,19 @@ function Build42OwnerTransport.createServer(dependencies)
             return validationFailure
         end
 
-        local sent = sendServer(send, player, serverSuccess(correlationId, checkedSnapshot))
+        local completion = detachCompletion(validateCompletion, readyCompletion)
+        local sent = sendServer(send, player, serverSuccess(correlationId, checkedSnapshot, completion))
         if not sent.ok then return sent end
         bindings[player] = correlationId
         return { ok = true, handled = true }
     end
 
-    function server.publish(player)
+    function server.publish(player, completion)
         if player == nil then return failure("invalid_player", "player") end
         local correlationId = bindings[player]
         if correlationId == nil then return failure("not_bound", "player route") end
 
-        local snapshot, snapshotFailure = sessionSnapshot(ownerSession.snapshot, "snapshot", player)
+        local snapshot, _, snapshotFailure = sessionSnapshot(ownerSession.snapshot, "snapshot", player)
         if snapshot == nil then
             local sentFailure = sendServer(send, player, serverFailure(correlationId, snapshotFailure))
             if not sentFailure.ok then return sentFailure end
@@ -264,7 +309,8 @@ function Build42OwnerTransport.createServer(dependencies)
             return validationFailure
         end
 
-        local sent = sendServer(send, player, serverSuccess(correlationId, checkedSnapshot))
+        local checkedCompletion = detachCompletion(validateCompletion, completion)
+        local sent = sendServer(send, player, serverSuccess(correlationId, checkedSnapshot, checkedCompletion))
         if not sent.ok then return sent end
         return { ok = true, published = true }
     end
@@ -316,6 +362,12 @@ function Build42OwnerTransport.createClient(dependencies)
     local send = dependencies.sendClientCommand
     if type(send) ~= "function" then
         return failure("invalid_dependencies", "sendClientCommand")
+    end
+    local completionValidator = dependencies.completionValidator
+    local validateCompletion = type(completionValidator) == "table"
+        and completionValidator.validate or nil
+    if type(validateCompletion) ~= "function" then
+        return failure("invalid_dependencies", "completionValidator.validate")
     end
 
     local slots = {}
@@ -422,7 +474,7 @@ function Build42OwnerTransport.createClient(dependencies)
             return { ok = true, handled = false }
         end
 
-        local response, responseFailure = validateResponse(args)
+        local response, responseFailure = validateResponse(args, validateCompletion)
         if response == nil then return responseFailure end
         local route = routes[response.correlationId]
         if type(route) ~= "table" then
@@ -471,7 +523,11 @@ function Build42OwnerTransport.createClient(dependencies)
         route.phase = "active"
         entry.refreshPending = false
         entry.failure = nil
-        return { ok = true, handled = true, accepted = true, localSlot = route.slot }
+        local result = { ok = true, handled = true, accepted = true, localSlot = route.slot }
+        if rawget(response, "completion") ~= nil then
+            result.completion = rawget(response, "completion")
+        end
+        return result
     end
 
     function client.acceptLocal(localSlot, snapshot)

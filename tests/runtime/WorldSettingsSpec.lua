@@ -23,6 +23,8 @@ local function rawSettings()
         globalLimit = 3,
         perSkillDefault = 1,
         perSkillOverrides = { Carving = 0, Sprinting = 2 },
+        inheritanceEnabled = false,
+        retainedRatio = 0.5,
     }
 end
 
@@ -44,12 +46,24 @@ local resolver = WorldSettings.create({
     },
 })
 expect(resolver.ok)
+expect(type(resolver.inheritanceSettings) == "table")
 
 local opaquePlayer = setmetatable({}, {
     __index = function()
         error("player must remain opaque")
     end,
 })
+
+local inheritance = resolver.inheritanceSettings.resolve(opaquePlayer)
+expect(inheritance.ok)
+expectEqual(inheritance.settings.enabled, false)
+expectEqual(inheritance.settings.retainedRatio, 0.5)
+inheritance.settings.enabled = true
+inheritance.settings.retainedRatio = 1
+inheritance = resolver.inheritanceSettings.resolve(opaquePlayer)
+expectEqual(inheritance.settings.enabled, false)
+expectEqual(inheritance.settings.retainedRatio, 0.5)
+reads = 0
 
 local accounting = resolver.accountingSettings.resolve(opaquePlayer)
 expect(accounting.ok)
@@ -153,12 +167,15 @@ local function expectClosed(raw)
     current = raw
     local awardFailure = resolver.awardSettings.resolve(nil, "Carving")
     local allotmentFailure = resolver.allotmentSettings.resolve(nil, "Carving")
+    local inheritanceFailure = resolver.inheritanceSettings.resolve(nil)
     expectEqual(awardFailure.ok, false)
     expectEqual(awardFailure.code, "invalid_settings")
     expect(type(awardFailure.detail) == "string")
     expectEqual(allotmentFailure.ok, false)
     expectEqual(allotmentFailure.code, "invalid_settings")
     expect(type(allotmentFailure.detail) == "string")
+    expectEqual(inheritanceFailure.ok, false)
+    expectEqual(inheritanceFailure.code, "invalid_settings")
 end
 
 local malformed = rawSettings()
@@ -197,6 +214,18 @@ expectClosed(malformed)
 malformed = rawSettings()
 malformed.self = malformed
 expectClosed(malformed)
+malformed = rawSettings()
+malformed.inheritanceEnabled = "false"
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.retainedRatio = -0.1
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.retainedRatio = 1.1
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.retainedRatio = 0 / 0
+expectClosed(malformed)
 
 local unknown = resolver.awardSettings.resolve(nil, "UnknownSkill")
 expectEqual(unknown.ok, false)
@@ -218,6 +247,7 @@ expectEqual(providerFailure.ok, false)
 expectEqual(providerFailure.code, "provider_failure")
 expectEqual(providerFailure.detail, "provider.read failed")
 expectEqual(throwing.allotmentSettings.resolve(nil, "Carving").code, "provider_failure")
+expectEqual(throwing.inheritanceSettings.resolve(nil).code, "provider_failure")
 local invalidNormalization = WorldSettings.create({ provider = { read = function() return rawSettings() end }, normalizationByPerk = { ["bad perk"] = 1 } })
 expectEqual(invalidNormalization.ok, false)
 expectEqual(invalidNormalization.code, "invalid_normalization")

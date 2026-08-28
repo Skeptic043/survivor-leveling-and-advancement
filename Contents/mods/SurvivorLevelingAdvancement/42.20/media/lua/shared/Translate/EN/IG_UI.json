@@ -3,6 +3,7 @@
     "IGUI_SLA_StatusActive": "Advancement Slots: %1/%2",
     "IGUI_SLA_StatusSurvivorXp": "Survivor XP: %1 / %2",
     "IGUI_SLA_Advance": "Advance to level %1 for %2 AP.",
+    "IGUI_SLA_Master": "Master skill for %1 AP.",
     "IGUI_SLA_PerSkillActive": "Advancement Slots: %1/%2.",
     "IGUI_SLA_TargetXpLeft": "%1 natural skill XP left",
     "IGUI_SLA_TargetCatchUp": "Catch up to free this advancement slot.",
@@ -14,7 +15,7 @@
     "IGUI_SLA_Reason_RedRecovery": "Recover natural XP before advancing again.",
     "IGUI_SLA_Reason_InsufficientAp": "Not enough AP.",
     "IGUI_SLA_Reason_AllotmentDisabled": "Advancement spending is disabled for this skill.",
-    "IGUI_SLA_Reason_AllotmentCapacity": "This skill has reached its advancement limit.",
+    "IGUI_SLA_Reason_AllotmentCapacity": "Advancement slot unavailable.",
     "IGUI_SLA_Admin_Button": "Admin",
     "IGUI_SLA_Admin_Menu": "Survivor progression",
     "IGUI_SLA_Admin_Title": "Survivor progression",
@@ -36,5 +37,11 @@
     "IGUI_SLA_Admin_CommittedFailure": "The change may have applied. Refresh before trying again.",
     "IGUI_SLA_Admin_InvalidXp": "Enter a positive XP amount.",
     "IGUI_SLA_Admin_InvalidLevels": "Enter a positive whole level count.",
-    "IGUI_SLA_Admin_PendingOther": "Another admin request is pending."
+    "IGUI_SLA_Admin_PendingOther": "Another admin request is pending.",
+    "IGUI_SLA_LevelGain_Singular": "Survivor Level +%1",
+    "IGUI_SLA_LevelGain_Plural": "Survivor Levels +%1",
+    "IGUI_SLA_LevelGain_AP": "AP +%1",
+    "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
+    "IGUI_SLA_WatchOption": "Show XP %% to next level on digital watch",
+    "IGUI_SLA_WatchOption_Tooltip": "Show XP progress to the next Survivor Level as a small percentage in the bottom-right of the digital watch. This only shows Player 1's XP %%."
 }

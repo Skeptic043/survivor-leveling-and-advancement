@@ -94,11 +94,13 @@ local function validateDependencies(dependencies)
     end
 
     local requiredCapabilities = {
-        { "StateCodec", { "decode", "encode" } },
+        { "StateCodec", { "decode", "encode", "fresh" } },
+        { "InheritancePolicy", { "plan" } },
         { "NaturalLedger", { "baseline", "inspect", "reconcileExternal", "appendTarget", "master", "applySupported" } },
         { "SurvivorEconomy", { "availableAp", "nextLevelCost", "computeAward", "applyXp" } },
         { "Allotment", { "evaluate" } },
         { "PostMax", { "apply" } },
+        { "LevelGainCompletion", { "create", "validate" } },
         { "sandboxMultiplier", { "resolve" } },
         { "positionArithmetic", { "add" } },
         { "authority", { "describe" } },
@@ -114,6 +116,9 @@ local function validateDependencies(dependencies)
     if type(dependencies.environment) ~= "table" or type(dependencies.environment.globals) ~= "table" then
         return failure("invalid_dependencies", "environment.globals is required")
     end
+    if type(dependencies.levelGainSink) ~= "function" then
+        return failure("invalid_dependencies", "levelGainSink is required")
+    end
 
     local factories = {
         "PlayerStateStore",
@@ -124,6 +129,9 @@ local function validateDependencies(dependencies)
         "WorldSettings",
         "EventDerivedXpSource",
         "OwnerSession",
+        "CharacterInheritanceStore",
+        "InheritanceRecordStore",
+        "InheritanceSession",
     }
     for index = 1, #factories do
         local name = factories[index]
@@ -150,6 +158,12 @@ local function validateDependencies(dependencies)
     end
     if not hasFunctions(dependencies.worldSettingsProvider, { "read" }) then
         return failure("invalid_dependencies", "worldSettingsProvider.read is required")
+    end
+    if not hasFunctions(dependencies.inheritanceWorldStore, { "readRoot", "writeRoot" }) then
+        return failure("invalid_dependencies", "inheritanceWorldStore capabilities are required")
+    end
+    if not hasFunctions(dependencies.inheritanceIdentity, { "resolve" }) then
+        return failure("invalid_dependencies", "inheritanceIdentity.resolve is required")
     end
 
     local catalog = dependencies.catalog
@@ -254,7 +268,8 @@ local function callWorldSettings(factory, argument)
     if type(result) ~= "table" or result.ok ~= true
         or not hasFunctions(result.accountingSettings, { "resolve" })
         or not hasFunctions(result.awardSettings, { "resolve" })
-        or not hasFunctions(result.allotmentSettings, { "resolve" }) then
+        or not hasFunctions(result.allotmentSettings, { "resolve" })
+        or not hasFunctions(result.inheritanceSettings, { "resolve" }) then
         if type(result) == "table" and result.ok == false
             and type(result.code) == "string" and result.code ~= "" then
             return nil, failure(result.code, stableDetail(result.detail, "WorldSettings.create failed"))
@@ -311,6 +326,43 @@ function ServiceComposition.create(dependencies)
     if worldSettings == nil then
         return worldSettingsFailure
     end
+
+    local characterInheritanceStore, characterStoreFailure = callSingleFactory(
+        "CharacterInheritanceStore",
+        dependencies.CharacterInheritanceStore,
+        {},
+        "store",
+        { "inspect", "tokenNewCharacter", "markInitialized", "markDeathRecorded" }
+    )
+    if characterInheritanceStore == nil then return characterStoreFailure end
+
+    local inheritanceRecordStore, recordStoreFailure = callSingleFactory(
+        "InheritanceRecordStore",
+        dependencies.InheritanceRecordStore,
+        dependencies.inheritanceWorldStore,
+        "store",
+        { "peek", "put", "consume" }
+    )
+    if inheritanceRecordStore == nil then return recordStoreFailure end
+
+    local inheritanceSession, inheritanceSessionFailure = callSingleFactory(
+        "InheritanceSession",
+        dependencies.InheritanceSession,
+        {
+            authority = dependencies.authority,
+            playerIdentity = dependencies.playerIdentity,
+            characterStore = characterInheritanceStore,
+            stateStore = store,
+            recordStore = inheritanceRecordStore,
+            identity = dependencies.inheritanceIdentity,
+            inheritanceSettings = worldSettings.inheritanceSettings,
+            StateCodec = dependencies.StateCodec,
+            InheritancePolicy = dependencies.InheritancePolicy,
+        },
+        "session",
+        { "tokenNewCharacter", "initialize", "recordDeath" }
+    )
+    if inheritanceSession == nil then return inheritanceSessionFailure end
 
     local accountingMode, accountingModeFailure = callSingleFactory(
         "AccountingMode",
@@ -421,6 +473,21 @@ function ServiceComposition.create(dependencies)
                 or type(processorResult.detail) ~= "string" or processorResult.detail == "") then
             return failure("invalid_processor_result", "award processor returned a malformed failure")
         end
+        if processorResult.ok == true
+            and type(rawget(processorResult, "levelsGained")) == "number"
+            and rawget(processorResult, "levelsGained") > 0
+            and rawget(processorResult, "apGained") == rawget(processorResult, "levelsGained") then
+            local completionCalled, completionResult = pcall(
+                dependencies.LevelGainCompletion.create,
+                rawget(processorResult, "levelsGained"),
+                rawget(processorResult, "apGained")
+            )
+            if completionCalled and type(completionResult) == "table"
+                and rawget(completionResult, "ok") == true
+                and type(rawget(completionResult, "completion")) == "table" then
+                pcall(dependencies.levelGainSink, player, rawget(completionResult, "completion"))
+            end
+        end
         return processorResult
     end
 
@@ -450,6 +517,7 @@ function ServiceComposition.create(dependencies)
             catalog = dependencies.catalog,
             xpSource = xpSource,
             ownerSnapshot = ownerSnapshot,
+            inheritanceSession = inheritanceSession,
         },
         "session",
         { "ready", "snapshot", "isReady", "clearPlayer" }
@@ -499,6 +567,7 @@ function ServiceComposition.create(dependencies)
             awardHandler = awardHandler,
             xpSource = xpSource,
             ownerSession = ownerSession,
+            inheritanceSession = inheritanceSession,
             advancementSession = advancementSession,
             adminSession = adminSession,
         },

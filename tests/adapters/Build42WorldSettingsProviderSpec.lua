@@ -29,6 +29,8 @@ local function makeNamespace(allotmentMode, overrides)
         SurvivorXpMultiplier = 1.25,
         FitnessStrengthContributionPercent = 75,
         AutomaticCurveNormalization = true,
+        EnableSurvivorLevelInheritance = false,
+        SurvivorLevelRetainedPercent = 50,
         AllotmentMode = allotmentMode,
         GlobalAdvancementLimit = 9,
         PerSkillDefaultLimit = 4,
@@ -55,6 +57,8 @@ expectEqual(reads, 0, 'creation must not read the capability')
 expect(Build42WorldSettingsProvider.create(nil).ok == false, 'nil capability should be rejected')
 expect(Build42WorldSettingsProvider.create({}).ok == false, 'missing capability should be rejected')
 expect(Build42WorldSettingsProvider.create({ readSandboxVars = true }).ok == false, 'malformed capability should be rejected')
+expect(Build42WorldSettingsProvider.create({ readSandboxVars = readSandboxVars, readSandboxOption = true }).ok == false,
+    'malformed live option capability should be rejected')
 
 local settings = creation.provider.read()
 expectEqual(reads, 1, 'a read should invoke the capability once')
@@ -66,7 +70,9 @@ expectKeys(settings, {
     allotmentMode = true,
     globalLimit = true,
     perSkillDefault = true,
-    perSkillOverrides = true
+    perSkillOverrides = true,
+    inheritanceEnabled = true,
+    retainedRatio = true,
 }, 'raw settings shape')
 expectEqual(settings.survivorMultiplier, 1.25, 'survivor multiplier')
 expectEqual(settings.fitnessStrengthNormalization, 0.75, 'fitness/strength normalization')
@@ -74,10 +80,37 @@ expectEqual(settings.automaticCurveNormalization, true, 'automatic normalization
 expectEqual(settings.allotmentMode, 'Global', 'allotment enum 1')
 expectEqual(settings.globalLimit, 9, 'global limit')
 expectEqual(settings.perSkillDefault, 4, 'per-skill default')
+expectEqual(settings.inheritanceEnabled, false, 'inheritance defaults disabled')
+expectEqual(settings.retainedRatio, 0.5, 'retained percentage converts once')
 expectEqual(settings.perSkillOverrides['A:opaque-ID._-9'], nil, 'Use default override should be omitted')
 expectEqual(settings.perSkillOverrides['Fitness.Strength'], 0, 'override enum 2 should map to zero')
 expectEqual(settings.perSkillOverrides['Other:Skill'], 10, 'override enum 12 should map to ten')
 expectEqual(settings.perSkillOverrides.FutureSetting, nil, 'unrelated namespace key should be ignored')
+
+local liveValues = { GlobalAdvancementLimit = 1, PerSkillLimit_Other = 4 }
+local liveReads = 0
+local liveCreation = Build42WorldSettingsProvider.create({
+    readSandboxVars = function() return currentSandboxVars end,
+    readSandboxOption = function(name)
+        liveReads = liveReads + 1
+        return liveValues[name]
+    end,
+})
+currentSandboxVars = { SurvivorLevelingAdvancement = makeNamespace(1, { Other = 2 }) }
+local liveSettings = liveCreation.provider.read()
+expectEqual(liveSettings.globalLimit, 1, 'current engine option overrides the stale Lua mirror')
+expectEqual(liveSettings.perSkillOverrides.Other, 2, 'live per-skill enum overrides the stale Lua mirror')
+expect(liveReads > 0, 'live option capability is consulted during each settings read')
+liveValues.GlobalAdvancementLimit = 2
+expectEqual(liveCreation.provider.read().globalLimit, 2, 'live sandbox edits are visible without reloading')
+
+local throwingLiveReader = Build42WorldSettingsProvider.create({
+    readSandboxVars = function() return currentSandboxVars end,
+    readSandboxOption = function() error('live reader throw') end,
+})
+expectNil(throwingLiveReader.provider.read(), 'throwing live option capability should fail closed')
+
+currentSandboxVars = { SurvivorLevelingAdvancement = makeNamespace(1, { ['A:opaque-ID._-9'] = 1, ['Fitness.Strength'] = 2, ['Other:Skill'] = 12 }) }
 
 settings.perSkillOverrides['Fitness.Strength'] = 99
 local detached = creation.provider.read()
@@ -124,6 +157,9 @@ local invalidScalars = {
     { field = 'FitnessStrengthContributionPercent', value = -0.0001 },
     { field = 'FitnessStrengthContributionPercent', value = 100.0001 },
     { field = 'AutomaticCurveNormalization', value = 1 },
+    { field = 'EnableSurvivorLevelInheritance', value = 1 },
+    { field = 'SurvivorLevelRetainedPercent', value = -0.1 },
+    { field = 'SurvivorLevelRetainedPercent', value = 100.1 },
     { field = 'AllotmentMode', value = 4 },
     { field = 'GlobalAdvancementLimit', value = -1 },
     { field = 'PerSkillDefaultLimit', value = 1.5 }
@@ -163,5 +199,12 @@ currentSandboxVars.SurvivorLevelingAdvancement.FitnessStrengthContributionPercen
 expectEqual(creation.provider.read().fitnessStrengthNormalization, 0.067, 'percentage conversion divides exactly once')
 currentSandboxVars.SurvivorLevelingAdvancement.FitnessStrengthContributionPercent = 100
 expectEqual(creation.provider.read().fitnessStrengthNormalization, 1, 'one hundred percent resolves to ordinary normalization')
+currentSandboxVars.SurvivorLevelingAdvancement.EnableSurvivorLevelInheritance = true
+expectEqual(creation.provider.read().inheritanceEnabled, true, 'inheritance enabled is exposed')
+local retainedCases = { [0] = 0, [50] = 0.5, [80] = 0.8, [100] = 1 }
+for percent, ratio in pairs(retainedCases) do
+    currentSandboxVars.SurvivorLevelingAdvancement.SurvivorLevelRetainedPercent = percent
+    expectEqual(creation.provider.read().retainedRatio, ratio, 'retained percentage divides exactly once')
+end
 
 return assertions

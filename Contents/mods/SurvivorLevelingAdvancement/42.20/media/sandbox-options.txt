@@ -28,6 +28,24 @@ option SurvivorLevelingAdvancement.AutomaticCurveNormalization
     translation = SLA_AutomaticCurveNormalization,
 }
 
+option SurvivorLevelingAdvancement.EnableSurvivorLevelInheritance
+{
+    type = boolean,
+    default = false,
+    page = SLA,
+    translation = SLA_EnableSurvivorLevelInheritance,
+}
+
+option SurvivorLevelingAdvancement.SurvivorLevelRetainedPercent
+{
+    type = double,
+    min = 0,
+    max = 100,
+    default = 50,
+    page = SLA,
+    translation = SLA_SurvivorLevelRetainedPercent,
+}
+
 option SurvivorLevelingAdvancement.AllotmentMode
 {
     type = enum,

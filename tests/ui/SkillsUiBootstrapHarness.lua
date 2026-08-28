@@ -1,5 +1,5 @@
-local key = "__SLA_Build42SkillsUi_42_20_v1"
-local signature = "sla.build42-skills-ui/42.20/v1"
+local key = "__SLA_Build42SkillsUi_42_20_v2"
+local signature = "sla.build42-skills-ui/42.20/v2"
 local evidence = rawget(_G, "__C11C_BOOTSTRAP_EVIDENCE")
 
 local function check(condition, message)
@@ -18,7 +18,13 @@ if evidence == nil then
     evidence.scoreboard = {}
     evidence.capability = { CanSeePlayersStats = {} }
     evidence.smallFont = {}
+    evidence.aButton = {}
     evidence.sandboxVars = { SurvivorLevelingAdvancement = {} }
+    evidence.sandboxOption = { getValue = function() return 3 end }
+    evidence.sandboxOptions = { getOptionByName = function(_, name)
+        evidence.sandboxOptionName = name
+        return evidence.sandboxOption
+    end }
     evidence.owner = {
         install = function() return { ok = true } end,
         status = function() return { ok = true } end,
@@ -91,7 +97,9 @@ if evidence == nil then
     ISMiniScoreboardUI = evidence.scoreboard
     Capability = evidence.capability
     UIFont = { Small = evidence.smallFont }
+    Joypad = { AButton = evidence.aButton }
     SandboxVars = evidence.sandboxVars
+    getSandboxOptions = function() return evidence.sandboxOptions end
     getTimestampMs = function() return 4321 end
     getPlayerContextMenu = function(slot) return { slot = slot } end
     getSpecificPlayer = function(slot) return { slot = slot } end
@@ -120,6 +128,7 @@ elseif evidence.phase == 1 then
         and evidence.dependencies.settingsProvider == evidence.provider
         and evidence.dependencies.progressionAdapter == evidence.progression, "exact service identities")
     check(evidence.dependencies.smallFont == evidence.smallFont
+        and evidence.dependencies.joypadAButton == evidence.aButton
         and evidence.dependencies.clockMillis() == 4321
         and evidence.dependencies.getText("copy") == "copy"
         and evidence.dependencies.measureText("abcd") == 4, "exact UI capabilities")
@@ -146,6 +155,9 @@ elseif evidence.phase == 1 then
         and evidence.modelDependencies.Allotment == evidence.allotment, "view-model dependencies")
     check(evidence.providerDependencies.readSandboxVars() == evidence.sandboxVars,
         "settings provider reads the live global cell")
+    check(evidence.providerDependencies.readSandboxOption("GlobalAdvancementLimit") == 3
+        and evidence.sandboxOptionName == "SurvivorLevelingAdvancement.GlobalAdvancementLimit",
+        "settings provider reads the current engine sandbox option")
     check(rawget(evidence.dependencies, "Events") == nil
         and rawget(evidence.dependencies, "players") == nil, "no event or player surface")
     evidence.phase = 2

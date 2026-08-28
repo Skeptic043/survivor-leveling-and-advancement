@@ -198,6 +198,10 @@ function OwnerSession.create(dependencies)
     if type(ownerSnapshot) ~= "table" or type(ownerSnapshot.project) ~= "function" then
         return failure("invalid_dependencies", "ownerSnapshot.project is required")
     end
+    local inheritanceSession = dependencies.inheritanceSession
+    if type(inheritanceSession) ~= "table" or type(inheritanceSession.initialize) ~= "function" then
+        return failure("invalid_dependencies", "inheritanceSession.initialize is required")
+    end
 
     local entries = setmetatable({}, { __mode = "k" })
     local loadOptions = catalog.resolver.loadOptions
@@ -228,6 +232,21 @@ function OwnerSession.create(dependencies)
 
     function session.ready(player)
         if player == nil then return failure("invalid_player", "player is required") end
+        local priorEntry = entryFor(player)
+
+        local inherited, inheritanceFailure, inheritanceResult = call(inheritanceSession.initialize, player)
+        if inherited == nil then
+            return dependencyFailure("inheritance_initialize", inheritanceFailure, inheritanceResult)
+        end
+        if not exactPlain(inherited, {
+                ok = true, outcome = true, survivorLevel = true, consumed = true,
+            }) or rawget(inherited, "ok") ~= true
+            or (inherited.outcome ~= "existing" and inherited.outcome ~= "fresh"
+                and inherited.outcome ~= "inherit")
+            or not nonnegativeInteger(inherited.survivorLevel)
+            or type(inherited.consumed) ~= "boolean" then
+            return failure("inheritance_initialize_invalid", "inheritanceSession.initialize")
+        end
 
         local loaded, loadFailure, loadResult = call(store.load, player, loadOptions)
         if loaded == nil then return dependencyFailure("store_load", loadFailure, loadResult) end
@@ -260,19 +279,29 @@ function OwnerSession.create(dependencies)
             return failure("xp_initialize_invalid", "xpSource.initializePlayer")
         end
 
-        local sequence = nextSequence(entryFor(player))
+        local sequence = nextSequence(priorEntry)
         if sequence == nil then return failure("sequence_invalid", "session sequence") end
         local snapshot, snapshotFailure = project(synchronizedState, sequence)
         if snapshot == nil then return snapshotFailure end
 
         entries[player] = { ready = true, sequence = sequence }
-        return {
+        local result = {
             ok = true,
             snapshot = snapshot,
             recovered = recovered.recovered,
             initialized = initializedCount,
             skipped = skippedCount,
         }
+        if priorEntry == nil and inherited.outcome == "inherit" and inherited.consumed
+            and inherited.survivorLevel > 0 then
+            result.completion = {
+                protocolVersion = 1,
+                kind = "survivor_level_gain",
+                levelsGained = inherited.survivorLevel,
+                apGained = inherited.survivorLevel,
+            }
+        end
+        return result
     end
 
     function session.snapshot(player)

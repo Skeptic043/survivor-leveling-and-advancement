@@ -1,12 +1,61 @@
 $lifecyclePath = Join-Path $PSScriptRoot '..\..\Contents\mods\SurvivorLevelingAdvancement\42.20\media\lua\shared\SurvivorLevelingAdvancement\Runtime\Build42Lifecycle.lua'
 $lifecycleSource = [System.IO.File]::ReadAllText($lifecyclePath)
+$bootstrapPath = Join-Path $PSScriptRoot '..\..\Contents\mods\SurvivorLevelingAdvancement\42.20\media\lua\shared\SurvivorLevelingAdvancement\Bootstrap.lua'
+$bootstrapSource = [System.IO.File]::ReadAllText($bootstrapPath)
 
-$cleanupPattern = '(?ms)^\s*local function startupFailure\(result, code, detail\)\s*\r?\n\s*if mode == "single_player" then\s*\r?\n\s*for slot = 0, 3 do pendingPlayers\[slot\] = nil end\s*\r?\n\s*end\s*\r?\n\s*return retain\(result, code, detail\)\s*\r?\n\s*end\s*$'
-if (-not [regex]::IsMatch($lifecycleSource, $cleanupPattern)) {
-    throw 'C10-X guard: startupFailure must clear all four pending-player slots before retaining failure'
+$clearPendingDefinition = '(?ms)^\s*local function clearPendingNewPlayers\(\)\s*\r?\n\s*for index = 1, #pendingNewPlayers do pendingNewPlayers\[index\] = nil end\s*\r?\n\s*pendingNewPlayers = \{\}\s*\r?\n\s*end\s*$'
+if (-not [regex]::IsMatch($bootstrapSource, $clearPendingDefinition)) {
+    throw 'C18-D2 guard: Bootstrap must nil every pending-new reference and replace the private table'
+}
+if ([regex]::Matches($bootstrapSource, 'clearPendingNewPlayers\(\)').Count -ne 7) {
+    throw 'C18-D2 guard: Bootstrap pending-new clear definition/call count changed'
+}
+$clearPendingLocalDefinition = '(?ms)^\s*local function clearPendingLocalPlayers\(\)\s*\r?\n\s*for slot = 0, 3 do pendingLocalPlayers\[slot\] = nil end\s*\r?\n\s*pendingLocalPlayers = \{\}\s*\r?\n\s*end\s*$'
+if (-not [regex]::IsMatch($bootstrapSource, $clearPendingLocalDefinition)) {
+    throw 'C18-H guard: Bootstrap must nil every pending-local reference and replace the private table'
+}
+if ([regex]::Matches($bootstrapSource, 'clearPendingLocalPlayers\(\)').Count -ne 7) {
+    throw 'C18-H guard: Bootstrap pending-local clear definition/call count changed'
+}
+$terminalClearPatterns = @(
+    '(?ms)local function loseResolverOwnership\(detail\)\s*\r?\n\s*clearPendingNewPlayers\(\)\s*\r?\n\s*clearPendingLocalPlayers\(\)',
+    '(?ms)for slot = 0, 3 do localPlayers\[slot\] = pendingLocalPlayers\[slot\] end\s*\r?\n\s*end\s*\r?\n\s*local clientStateListener = deferredClientStateListener\s*\r?\n\s*clearPendingNewPlayers\(\)\s*\r?\n\s*clearPendingLocalPlayers\(\)\s*\r?\n\s*clearDeferredClientStateListener\(\)\s*\r?\n\s*local called, created = pcall\(createLifecycle,',
+    '(?ms)if mode == nil then\s*\r?\n\s*resolutionAttempted = true\s*\r?\n\s*clearPendingNewPlayers\(\)\s*\r?\n\s*clearPendingLocalPlayers\(\)\s*\r?\n\s*clearDeferredClientStateListener\(\)\s*\r?\n\s*return\s*\r?\n\s*end',
+    '(?ms)else\s*\r?\n\s*resolutionAttempted = true\s*\r?\n\s*clearPendingNewPlayers\(\)\s*\r?\n\s*clearPendingLocalPlayers\(\)\s*\r?\n\s*clearDeferredClientStateListener\(\)\s*\r?\n\s*retain\("mode_invalid", "OnGameStart cannot resolve server mode"\)',
+    '(?ms)if resolverInstallAttempted and not resolverInstalled then\s*\r?\n\s*resolutionAttempted = true\s*\r?\n\s*clearPendingNewPlayers\(\)\s*\r?\n\s*clearPendingLocalPlayers\(\)',
+    '(?ms)local mode = checkMode\(\)\s*\r?\n\s*if mode == nil then\s*\r?\n\s*resolutionAttempted = true\s*\r?\n\s*clearPendingNewPlayers\(\)\s*\r?\n\s*clearPendingLocalPlayers\(\)\s*\r?\n\s*clearDeferredClientStateListener\(\)'
+)
+foreach ($terminalClearPattern in $terminalClearPatterns) {
+    if (-not [regex]::IsMatch($bootstrapSource, $terminalClearPattern)) {
+        throw 'C18-D2 guard: Bootstrap terminal pending-new clear path changed'
+    }
 }
 
-$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\)\s*\r?\n\s*if not installed or not ownEvents\(\) or not validSlot\(localSlot\) or player == nil then return end\s*\r?\n\s*if started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnTick = function\(\).*?^\s*end\s*\r?\n\s*callbacks\.OnMiniScoreboardUpdate = function\(\)\s*\r?\n\s*if not installed or not ownEvents\(\) then return end\s*\r?\n\s*inspectLocalPlayers\(\)\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
+$listenerHandoffPattern = '(?ms)local clientStateListener = deferredClientStateListener\s*\r?\n\s*clearPendingNewPlayers\(\)\s*\r?\n\s*clearPendingLocalPlayers\(\)\s*\r?\n\s*clearDeferredClientStateListener\(\).*?pcall\(\s*\r?\n\s*rawget\(candidateOwner, "setClientStateListener"\),\s*\r?\n\s*clientStateListener\s*\r?\n\s*\)'
+if (-not [regex]::IsMatch($bootstrapSource, $listenerHandoffPattern)) {
+    throw 'C18-F correction guard: unresolved listener must be cleared locally and handed to the concrete owner once'
+}
+
+$playerCapturePattern = '(?ms)callbacks\.OnCreatePlayer = function\(localSlot, player\)\s*\r?\n\s*if resolverInstalled and not resolutionAttempted.*?pendingLocalPlayers\[localSlot\] = player\s*\r?\n\s*end\s*\r?\n\s*resolveFrom\("OnCreatePlayer"\)'
+$playerHandoffPattern = '(?ms)pendingLocalPlayers = localPlayers,\s*\r?\n\s*\}\).*?if localPlayers ~= nil then\s*\r?\n\s*for slot = 0, 3 do localPlayers\[slot\] = nil end'
+$hasPlayerCapture = [regex]::IsMatch($bootstrapSource, $playerCapturePattern)
+$hasPlayerHandoff = [regex]::IsMatch($bootstrapSource, $playerHandoffPattern)
+if (-not $hasPlayerCapture -or -not $hasPlayerHandoff) {
+    throw 'C18-H guard: unresolved exact local players must be handed to SP lifecycle and cleared'
+}
+
+$cleanupDefinition = '(?ms)^\s*local function clearPendingPlayerReferences\(\)\s*\r?\n\s*for index = 1, #pendingNewPlayers do pendingNewPlayers\[index\] = nil end\s*\r?\n\s*pendingNewPlayers = \{\}\s*\r?\n\s*for slot = 0, 3 do pendingPlayers\[slot\] = nil end\s*\r?\n\s*pendingReferencesClosed = true\s*\r?\n\s*end\s*$'
+$cleanupPattern = '(?ms)^\s*local function startupFailure\(result, code, detail\)\s*\r?\n\s*clearPendingPlayerReferences\(\)\s*\r?\n\s*return retain\(result, code, detail\)\s*\r?\n\s*end\s*$'
+$installCleanupPattern = '(?ms)if name ~= "OnTick" and not pcall\(rawget\(events\[name\], "Add"\), callbacks\[name\]\) then\s*\r?\n\s*clearPendingPlayerReferences\(\)\s*\r?\n\s*return retain\(nil, "event_register_threw", name\)'
+$hasCleanupDefinition = [regex]::IsMatch($lifecycleSource, $cleanupDefinition)
+$hasCleanupPattern = [regex]::IsMatch($lifecycleSource, $cleanupPattern)
+$hasInstallCleanup = [regex]::IsMatch($lifecycleSource, $installCleanupPattern)
+$cleanupCallCount = [regex]::Matches($lifecycleSource, 'clearPendingPlayerReferences\(\)').Count
+if (-not $hasCleanupDefinition -or -not $hasCleanupPattern -or -not $hasInstallCleanup -or $cleanupCallCount -ne 5) {
+    throw 'C18-Q guard: terminal install, startup, and ownership-loss paths must clear both pending-player collections'
+}
+
+$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\)\s*\r?\n\s*if not installed or not ownEvents\(\) or not validSlot\(localSlot\) or player == nil then return end\s*\r?\n\s*if started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted and not pendingReferencesClosed then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnNewGame = function\(player\).*?^\s*end\s*\r?\n\s*callbacks\.OnCharacterDeath = function\(player\).*?^\s*end\s*\r?\n\s*callbacks\.OnTick = function\(\).*?^\s*end\s*\r?\n\s*callbacks\.OnMiniScoreboardUpdate = function\(\)\s*\r?\n\s*if not installed or not ownEvents\(\) then return end\s*\r?\n\s*inspectLocalPlayers\(\)\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
 if (-not [regex]::IsMatch($lifecycleSource, $createPlayerPattern)) {
     throw 'C10-X guard: OnCreatePlayer, one-shot tick, and finite post-ack callbacks must retain their exact boundaries'
 }
@@ -86,5 +135,15 @@ if ($pendingWrites.Count -ne 3 -or $clearWrites.Count -ne 2 -or $enqueueWrites.C
         [pscustomobject]@{ Global = 'C10TBootstrapExtraOwnerCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapIndexOwner'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
         [pscustomobject]@{ Global = 'C10TBootstrapIndexOwnerCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapPartialGameStart'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapPartialGameStartCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapPartialCreatePlayer'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapPartialCreatePlayerCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapPartialNewGame'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapPartialNewGameCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapFinalCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapBufferedModeFailure'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Bootstrap.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapBufferedModeFailureCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
+        [pscustomobject]@{ Global = 'C18D2BootstrapCorrectedFinalCheck'; Path = 'tests/runtime/Build42BootstrapHarness.lua' }
     )
 }

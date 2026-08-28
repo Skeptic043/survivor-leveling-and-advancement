@@ -188,6 +188,8 @@ local function projectAllotment(settings)
         globalLimit = true,
         perSkillDefault = true,
         perSkillOverrides = true,
+        inheritanceEnabled = true,
+        retainedRatio = true,
     }
     if not exactPlainTable(settings, fields)
         or not finite(rawget(settings, "survivorMultiplier"))
@@ -196,7 +198,11 @@ local function projectAllotment(settings)
         or rawget(settings, "fitnessStrengthNormalization") < 0
         or type(rawget(settings, "automaticCurveNormalization")) ~= "boolean"
         or not nonnegativeInteger(rawget(settings, "globalLimit"))
-        or not nonnegativeInteger(rawget(settings, "perSkillDefault")) then return nil end
+        or not nonnegativeInteger(rawget(settings, "perSkillDefault"))
+        or type(rawget(settings, "inheritanceEnabled")) ~= "boolean"
+        or not finite(rawget(settings, "retainedRatio"))
+        or rawget(settings, "retainedRatio") < 0
+        or rawget(settings, "retainedRatio") > 1 then return nil end
     local mode = rawget(settings, "allotmentMode")
     if mode == "Global" then
         return { mode = mode, globalLimit = rawget(settings, "globalLimit") }
@@ -348,6 +354,7 @@ function Build42SkillsUi.create(dependencies)
         getText = true,
         measureText = true,
         smallFont = true,
+        joypadAButton = true,
     }
     local launcherDependencyFields = {}
     for key in pairs(dependencyFields) do launcherDependencyFields[key] = true end
@@ -370,6 +377,7 @@ function Build42SkillsUi.create(dependencies)
     local getText = rawget(dependencies, "getText")
     local measureText = rawget(dependencies, "measureText")
     local smallFont = rawget(dependencies, "smallFont")
+    local joypadAButton = rawget(dependencies, "joypadAButton")
     local adminLauncher = rawget(dependencies, "adminLauncher")
 
     local priorPrerender = method(characterInfo, "prerender")
@@ -378,6 +386,13 @@ function Build42SkillsUi.create(dependencies)
     local priorUpdateTooltip = method(progressBar, "updateTooltip")
     local priorRemoveTooltip = method(progressBar, "removeTooltip")
     local priorActivate = method(progressBar, "activate")
+    local priorOnJoypadDown = method(characterInfo, "onJoypadDown")
+    local priorOnJoypadDirUp = method(characterInfo, "onJoypadDirUp")
+    local priorOnJoypadDirDown = method(characterInfo, "onJoypadDirDown")
+    local priorOnJoypadDirLeft = method(characterInfo, "onJoypadDirLeft")
+    local priorOnJoypadDirRight = method(characterInfo, "onJoypadDirRight")
+    local priorOnGainJoypadFocus = method(characterInfo, "onGainJoypadFocus")
+    local priorOnLoseJoypadFocus = method(characterInfo, "onLoseJoypadFocus")
     local buttonNew = method(buttonClass, "new")
     local clientState = validOwner(owner) and rawget(owner, "clientState") or nil
     local refreshOwner = validOwner(owner) and rawget(owner, "refreshOwner") or nil
@@ -402,12 +417,16 @@ function Build42SkillsUi.create(dependencies)
     if type(characterInfo) ~= "table" or type(progressBar) ~= "table" or type(buttonClass) ~= "table"
         or not priorPrerender or not priorRender or not priorRenderPerkRect
         or not priorUpdateTooltip or not priorRemoveTooltip or not priorActivate or not buttonNew
+        or not priorOnJoypadDown or not priorOnJoypadDirUp or not priorOnJoypadDirDown
+        or not priorOnJoypadDirLeft or not priorOnJoypadDirRight
+        or not priorOnGainJoypadFocus or not priorOnLoseJoypadFocus
         or not clientState or not refreshOwner or not setClientStateListener
         or not requestAdvancement or not advancementStatus
         or not callable(buildView) or not callable(readSettings)
         or not callable(buildProgression) or not callable(describeProgression)
         or not callable(inspectProgression) or not callable(clockMillis)
         or not callable(getText) or not callable(measureText) or smallFont == nil
+        or joypadAButton == nil
         or not validAdminLauncher then
         return failure("invalid_dependencies", "callables")
     end
@@ -489,14 +508,28 @@ function Build42SkillsUi.create(dependencies)
             adminVisible = false,
             adminButton = nil,
             adminButtonParent = nil,
+            joypadButton = nil,
+            vanillaScrollHeight = nil,
+            appliedScrollHeight = nil,
         }
         views[target] = state
         return state
     end
 
+    local function clearJoypadButton(state)
+        local button = state and state.joypadButton or nil
+        if type(button) == "table" and callable(button.setJoypadFocused) then
+            pcall(button.setJoypadFocused, button, false)
+        end
+        if state ~= nil then state.joypadButton = nil end
+    end
+
     local function removeButtonCallback(barState)
         local button = barState and barState.button or nil
         if type(button) == "table" then
+            if barState.state and barState.state.joypadButton == button then
+                clearJoypadButton(barState.state)
+            end
             rawset(button, "onclick", nil)
             rawset(button, "target", nil)
         end
@@ -524,6 +557,7 @@ function Build42SkillsUi.create(dependencies)
         state.statusLeft = nil
         state.statusRight = nil
         state.adminVisible = false
+        clearJoypadButton(state)
         if type(state.adminButton) == "table" then
             local setVisible = state.adminButton.setVisible
             local setEnable = state.adminButton.setEnable
@@ -539,6 +573,8 @@ function Build42SkillsUi.create(dependencies)
             end
         end
     end
+
+    local request
 
     local function resolveBar(bar, state)
         local perk = type(bar) == "table" and rawget(bar, "perk") or nil
@@ -587,11 +623,13 @@ function Build42SkillsUi.create(dependencies)
             overlayValid = false,
         }
         local buttonCalled, button = pcall(buttonNew, buttonClass, baseWidth, 0, height, height, "+", bar, function(target)
-            if type(target) == "table" and callable(target.activate) then target:activate() end
+            local targetState = type(target) == "table" and bars[target] or nil
+            if targetState ~= nil and callable(request) then request(targetState) end
         end)
         if not buttonCalled or type(button) ~= "table"
             or not callable(button.initialise) or not callable(button.setEnable)
-            or not callable(button.setTooltip) or not callable(button.getWidth) then
+            or not callable(button.setTooltip) or not callable(button.getWidth)
+            or not callable(button.forceClick) or not callable(button.setJoypadFocused) then
             return { supported = false, perkId = perkId }
         end
         if not pcall(button.initialise, button)
@@ -778,7 +816,14 @@ function Build42SkillsUi.create(dependencies)
             if value == nil then return nil end
             lines[#lines + 1] = value
         elseif rawget(row, "nextTargetLevel") ~= nil and rawget(row, "apCost") ~= nil then
-            local value = localized("IGUI_SLA_Advance", rawget(row, "nextTargetLevel"), rawget(row, "apCost"))
+            local key = rawget(row, "nextTargetLevel") == rawget(row, "effectiveMaximum")
+                and rawget(row, "apCost") == 2 and "IGUI_SLA_Master" or "IGUI_SLA_Advance"
+            local value
+            if key == "IGUI_SLA_Master" then
+                value = localized(key, rawget(row, "apCost"))
+            else
+                value = localized(key, rawget(row, "nextTargetLevel"), rawget(row, "apCost"))
+            end
             if value == nil then return nil end
             lines[#lines + 1] = value
         end
@@ -1027,7 +1072,7 @@ function Build42SkillsUi.create(dependencies)
         end
     end
 
-    local function request(barState)
+    request = function(barState)
         local state = barState.state
         local row = state and state.cache and state.cache.rows[barState.perkId] or nil
         if state == nil or row == nil or not row.enabled or state.cache.pending
@@ -1112,11 +1157,11 @@ function Build42SkillsUi.create(dependencies)
                 state.vanillaHeight = currentHeight
             end
         end
-        state.viewportInset = viewportInset
+        state.viewportInset = headerInset
         local appliedY = state.baseY + headerInset
         if not writeNumber(view, "setY", appliedY) then return false end
         state.appliedY = appliedY
-        local appliedHeight = state.vanillaHeight - viewportInset
+        local appliedHeight = state.vanillaHeight - headerInset
         if appliedHeight < 0 or not propagate(view, appliedHeight, "height") then return false end
         state.appliedHeight = appliedHeight
         return true
@@ -1129,6 +1174,24 @@ function Build42SkillsUi.create(dependencies)
         local appliedHeight = height - state.viewportInset
         if not propagate(view, appliedHeight, "height") then return false end
         state.appliedHeight = appliedHeight
+        local scrollHeight = readNumber(view, "getScrollHeight")
+        if scrollHeight == nil then return false end
+        if state.appliedScrollHeight ~= nil and scrollHeight == state.appliedScrollHeight then
+            scrollHeight = state.vanillaScrollHeight
+        end
+        state.vanillaScrollHeight = scrollHeight
+        local appliedScrollHeight = scrollHeight
+        local collection = rawget(view, "progressBars")
+        local last = type(collection) == "table" and rawget(collection, #collection) or nil
+        if type(last) == "table" then
+            local lastY = readNumber(last, "getY")
+            local lastHeight = readNumber(last, "getHeight")
+            if lastY ~= nil and lastHeight ~= nil then
+                appliedScrollHeight = math.max(appliedScrollHeight, lastY + lastHeight + 40)
+            end
+        end
+        if not writeNumber(view, "setScrollHeight", appliedScrollHeight) then return false end
+        state.appliedScrollHeight = appliedScrollHeight
         return true
     end
 
@@ -1136,6 +1199,10 @@ function Build42SkillsUi.create(dependencies)
         local restored = true
         if state.baseY ~= nil and not writeNumber(view, "setY", state.baseY) then restored = false end
         if state.vanillaHeight ~= nil and not propagate(view, state.vanillaHeight, "height") then
+            restored = false
+        end
+        if state.vanillaScrollHeight ~= nil
+            and not writeNumber(view, "setScrollHeight", state.vanillaScrollHeight) then
             restored = false
         end
         if state.baseWidth ~= nil and not propagate(view, state.baseWidth, "width") then restored = false end
@@ -1343,6 +1410,99 @@ function Build42SkillsUi.create(dependencies)
         end
     end
 
+    local function focusCurrentButton(view, state)
+        clearJoypadButton(state)
+        local index = type(view) == "table" and rawget(view, "joypadIndex") or nil
+        local progressBars = type(view) == "table" and rawget(view, "progressBars") or nil
+        local bar = type(index) == "number" and type(progressBars) == "table"
+            and rawget(progressBars, index) or nil
+        local barState = type(bar) == "table" and bars[bar] or nil
+        local button = barState and barState.button or nil
+        if type(button) ~= "table" or not callable(button.setJoypadFocused) then return false end
+        local called = pcall(button.setJoypadFocused, button, true)
+        if not called then return false end
+        state.joypadButton = button
+        return true
+    end
+
+    local function forceSelectedVisible(view)
+        local index = type(view) == "table" and rawget(view, "joypadIndex") or nil
+        local collection = type(view) == "table" and rawget(view, "progressBars") or nil
+        local child = type(index) == "number" and type(collection) == "table"
+            and rawget(collection, index) or nil
+        if type(child) ~= "table" then return true end
+        local scroll = readNumber(view, "getYScroll")
+        local height = readNumber(view, "getHeight")
+        local y = readNumber(child, "getY")
+        local childHeight = readNumber(child, "getHeight")
+        if scroll == nil or height == nil or y == nil or childHeight == nil then return false end
+        local visibleTop = 0 - scroll
+        if y - 40 < visibleTop then
+            return writeNumber(view, "setYScroll", 0 - y + 40)
+        end
+        if y + childHeight + 40 > visibleTop + height then
+            return writeNumber(view, "setYScroll", 0 - (y + childHeight + 40 - height))
+        end
+        return true
+    end
+
+    local function moveJoypadSelection(view, prior, ...)
+        local state = viewFor(view)
+        local keepButtonFocus = state ~= nil and state.joypadButton ~= nil
+        if keepButtonFocus then clearJoypadButton(state) end
+        local ok, a, b, c = pcall(prior, view, ...)
+        if ok and not forceSelectedVisible(view) and state ~= nil then disableView(state) end
+        if ok and keepButtonFocus and not focusCurrentButton(view, state) then clearJoypadButton(state) end
+        if not ok then error(a, 0) end
+        return a, b, c
+    end
+
+    local function preserveScrollInsideVanillaRender(view, scroll, appliedHeight, appliedScrollHeight)
+        local heightCalled, heightSetter = pcall(function()
+            return view.setHeightAndParentHeight
+        end)
+        local scrollCalled, scrollSetter = pcall(function()
+            return view.setScrollHeight
+        end)
+        if not heightCalled or not scrollCalled
+            or not callable(heightSetter) or not callable(scrollSetter) then
+            return nil
+        end
+
+        local rawHeightSetter = rawget(view, "setHeightAndParentHeight")
+        local rawScrollSetter = rawget(view, "setScrollHeight")
+        local vanillaHeight = nil
+        local vanillaScrollHeight = nil
+        rawset(view, "setHeightAndParentHeight", function(target, value, ...)
+            local a, b, c = heightSetter(target, value, ...)
+            vanillaHeight = value
+            if appliedHeight ~= nil and not propagate(target, appliedHeight, "height") then
+                error("SLA could not preserve the shortened viewport during vanilla layout", 0)
+            end
+            if not writeNumber(target, "setYScroll", scroll) then
+                error("SLA could not preserve scroll after vanilla height layout", 0)
+            end
+            return a, b, c
+        end)
+        rawset(view, "setScrollHeight", function(target, value, ...)
+            local a, b, c = scrollSetter(target, value, ...)
+            vanillaScrollHeight = value
+            if appliedScrollHeight ~= nil then
+                scrollSetter(target, appliedScrollHeight)
+            end
+            if not writeNumber(target, "setYScroll", scroll) then
+                error("SLA could not preserve scroll after vanilla scroll layout", 0)
+            end
+            return a, b, c
+        end)
+        return function()
+            rawset(view, "setHeightAndParentHeight", rawHeightSetter)
+            rawset(view, "setScrollHeight", rawScrollSetter)
+            if vanillaHeight ~= nil then heightSetter(view, vanillaHeight) end
+            if vanillaScrollHeight ~= nil then scrollSetter(view, vanillaScrollHeight) end
+        end
+    end
+
     wrappers.prerender = function(view, ...)
         local state = viewFor(view)
         if state ~= nil and not state.disabled then
@@ -1358,22 +1518,50 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.render = function(view, ...)
         local state = viewFor(view)
+        local preservedScroll = nil
+        local restoreRenderSetters = nil
         if state ~= nil and not state.disabled then
+            preservedScroll = readNumber(view, "getYScroll")
             installAdminVisibility(view, state)
             local headerCalled, headerPrepared = pcall(prepareHeader, view, state)
             local geometryCalled, geometryPrepared = pcall(prepareGeometry, view, state)
             if not headerCalled or not headerPrepared or not geometryCalled or not geometryPrepared then
                 disableView(state)
             end
+            if preservedScroll ~= nil and not state.disabled then
+                restoreRenderSetters = preserveScrollInsideVanillaRender(view, preservedScroll,
+                    state.appliedHeight, state.appliedScrollHeight)
+                if restoreRenderSetters == nil then disableView(state) end
+            end
         end
         local ok, a, b, c = pcall(priorRender, view, ...)
+        if restoreRenderSetters ~= nil and not pcall(restoreRenderSetters) then
+            disableView(views[view])
+        end
         local addonOk = pcall(onRender, view)
         if not addonOk then disableView(views[view]) end
+        state = views[view]
+        if addonOk and preservedScroll ~= nil and state ~= nil and not state.disabled
+            and not writeNumber(view, "setYScroll", preservedScroll) then
+            disableView(state)
+        end
         if not ok then error(a, 0) end
         return a, b, c
     end
     wrappers.renderPerkRect = function(bar, ...)
         local ok, a, b, c = pcall(priorRenderPerkRect, bar, ...)
+        local barState = bars[bar]
+        if ok and barState ~= nil and barState.supported then
+            local currentLevel = rawget(bar, "level")
+            if nonnegativeInteger(currentLevel) and currentLevel <= barState.effectiveMaximum
+                and currentLevel ~= barState.currentLevel then
+                barState.currentLevel = currentLevel
+                if barState.state ~= nil then
+                    barState.state.dirty = true
+                end
+                pcall(priorRemoveTooltip, bar)
+            end
+        end
         local addonCalled, addonResult = pcall(onOverlay, bar)
         if (not addonCalled or addonResult ~= true) and bars[bar] ~= nil then
             bars[bar].overlayValid = false
@@ -1395,8 +1583,51 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.activate = function(bar, ...)
         local ok, a, b, c = pcall(priorActivate, bar, ...)
-        local barState = bars[bar]
-        if barState ~= nil then pcall(request, barState) end
+        if not ok then error(a, 0) end
+        return a, b, c
+    end
+    wrappers.onJoypadDown = function(view, button, ...)
+        local state = viewFor(view)
+        if state ~= nil and state.joypadButton ~= nil and button == joypadAButton then
+            local forceClick = state.joypadButton.forceClick
+            if not callable(forceClick) or not pcall(forceClick, state.joypadButton) then disableView(state) end
+            return
+        end
+        local ok, a, b, c = pcall(priorOnJoypadDown, view, button, ...)
+        if not ok then error(a, 0) end
+        return a, b, c
+    end
+    wrappers.onJoypadDirUp = function(view, ...)
+        return moveJoypadSelection(view, priorOnJoypadDirUp, ...)
+    end
+    wrappers.onJoypadDirDown = function(view, ...)
+        return moveJoypadSelection(view, priorOnJoypadDirDown, ...)
+    end
+    wrappers.onJoypadDirLeft = function(view, ...)
+        local state = viewFor(view)
+        if state ~= nil and state.joypadButton ~= nil then clearJoypadButton(state); return end
+        local ok, a, b, c = pcall(priorOnJoypadDirLeft, view, ...)
+        if not ok then error(a, 0) end
+        return a, b, c
+    end
+    wrappers.onJoypadDirRight = function(view, ...)
+        local state = viewFor(view)
+        if state ~= nil and focusCurrentButton(view, state) then return end
+        local ok, a, b, c = pcall(priorOnJoypadDirRight, view, ...)
+        if not ok then error(a, 0) end
+        return a, b, c
+    end
+    wrappers.onGainJoypadFocus = function(view, ...)
+        local state = viewFor(view)
+        if state ~= nil then clearJoypadButton(state) end
+        local ok, a, b, c = pcall(priorOnGainJoypadFocus, view, ...)
+        if not ok then error(a, 0) end
+        return a, b, c
+    end
+    wrappers.onLoseJoypadFocus = function(view, ...)
+        local state = viewFor(view)
+        if state ~= nil then clearJoypadButton(state) end
+        local ok, a, b, c = pcall(priorOnLoseJoypadFocus, view, ...)
         if not ok then error(a, 0) end
         return a, b, c
     end
@@ -1412,6 +1643,13 @@ function Build42SkillsUi.create(dependencies)
         return ownsAdminIntegration()
             and rawget(characterInfo, "prerender") == wrappers.prerender
             and rawget(characterInfo, "render") == wrappers.render
+            and rawget(characterInfo, "onJoypadDown") == wrappers.onJoypadDown
+            and rawget(characterInfo, "onJoypadDirUp") == wrappers.onJoypadDirUp
+            and rawget(characterInfo, "onJoypadDirDown") == wrappers.onJoypadDirDown
+            and rawget(characterInfo, "onJoypadDirLeft") == wrappers.onJoypadDirLeft
+            and rawget(characterInfo, "onJoypadDirRight") == wrappers.onJoypadDirRight
+            and rawget(characterInfo, "onGainJoypadFocus") == wrappers.onGainJoypadFocus
+            and rawget(characterInfo, "onLoseJoypadFocus") == wrappers.onLoseJoypadFocus
             and rawget(progressBar, "renderPerkRect") == wrappers.renderPerkRect
             and rawget(progressBar, "updateTooltip") == wrappers.updateTooltip
             and rawget(progressBar, "activate") == wrappers.activate
@@ -1437,6 +1675,13 @@ function Build42SkillsUi.create(dependencies)
         end
         rawset(characterInfo, "prerender", wrappers.prerender)
         rawset(characterInfo, "render", wrappers.render)
+        rawset(characterInfo, "onJoypadDown", wrappers.onJoypadDown)
+        rawset(characterInfo, "onJoypadDirUp", wrappers.onJoypadDirUp)
+        rawset(characterInfo, "onJoypadDirDown", wrappers.onJoypadDirDown)
+        rawset(characterInfo, "onJoypadDirLeft", wrappers.onJoypadDirLeft)
+        rawset(characterInfo, "onJoypadDirRight", wrappers.onJoypadDirRight)
+        rawset(characterInfo, "onGainJoypadFocus", wrappers.onGainJoypadFocus)
+        rawset(characterInfo, "onLoseJoypadFocus", wrappers.onLoseJoypadFocus)
         rawset(progressBar, "renderPerkRect", wrappers.renderPerkRect)
         rawset(progressBar, "updateTooltip", wrappers.updateTooltip)
         rawset(progressBar, "activate", wrappers.activate)

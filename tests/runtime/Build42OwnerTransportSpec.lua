@@ -91,11 +91,12 @@ failed(Build42OwnerTransport.createServer({
 failed(Build42OwnerTransport.createServer({
     ownerSession = { ready = function() end, snapshot = function() end, clearPlayer = function() end },
     snapshotValidator = ClientOwnerState,
+    completionValidator = LevelGainCompletion,
 }), "invalid_dependencies", "sendServerCommand")
 failed(Build42OwnerTransport.createClient(nil), "invalid_dependencies", "dependencies")
 failed(Build42OwnerTransport.createClient({}), "invalid_dependencies", "ClientOwnerState.create")
 failed(Build42OwnerTransport.createClient({ ClientOwnerState = {} }), "invalid_dependencies", "ClientOwnerState.create")
-failed(Build42OwnerTransport.createClient({ ClientOwnerState = ClientOwnerState }), "invalid_dependencies", "sendClientCommand")
+failed(Build42OwnerTransport.createClient({ ClientOwnerState = ClientOwnerState, completionValidator = LevelGainCompletion }), "invalid_dependencies", "sendClientCommand")
 
 local serverCalls = { ready = 0, snapshot = 0, clear = 0, validate = 0, sends = {} }
 local readySnapshot = snapshot(1, 4, 3)
@@ -135,6 +136,7 @@ local serverValidator = {
 local serverCreated = Build42OwnerTransport.createServer({
     ownerSession = session,
     snapshotValidator = serverValidator,
+    completionValidator = LevelGainCompletion,
     sendServerCommand = captureServerSend,
 })
 expect(same(serverCreated, { ok = true, server = serverCreated.server }), "server creation shape")
@@ -219,13 +221,21 @@ equal(serverCalls.validate, 2, "bound refresh validates once")
 equal(#serverCalls.sends, 3, "bound refresh sends once")
 equal(serverCalls.sends[3].args.correlationId, correlation64, "refresh preserves active correlation")
 
-local published = server.publish(serverPlayer)
+local publicationCompletion = {
+    protocolVersion = 1, kind = "survivor_level_gain", levelsGained = 2, apGained = 2,
+}
+local published = server.publish(serverPlayer, publicationCompletion)
 expect(same(published, { ok = true, published = true }), "publish succeeds")
 equal(serverCalls.snapshot, 2, "snapshot called once after refresh")
 equal(serverCalls.validate, 3, "published snapshot validated once")
 equal(serverCalls.snapshotPlayer, serverPlayer, "publish uses exact bound player")
 equal(#serverCalls.sends, 4, "publish sends once")
 equal(serverCalls.sends[4].args.correlationId, correlation64, "publish reuses bound correlation")
+expect(exact(serverCalls.sends[4].args, {
+    protocolVersion = true, correlationId = true, ok = true, snapshot = true, completion = true,
+}), "gain publish pairs one optional completion")
+expect(same(serverCalls.sends[4].args.completion, publicationCompletion), "gain completion preserves public values")
+expect(serverCalls.sends[4].args.completion ~= publicationCompletion, "gain completion is detached")
 expect(serverCalls.sends[4].args.snapshot ~= publishedSnapshot, "publish sends detached validated output")
 expect(same(serverCalls.sends[4].args.snapshot, publishedSnapshot), "publish preserves exact public snapshot")
 
@@ -278,6 +288,7 @@ local function serverHarness(readyResult, snapshotResult, sendFunction, clearRes
     return Build42OwnerTransport.createServer({
         ownerSession = owner,
         snapshotValidator = checkedValidator,
+        completionValidator = LevelGainCompletion,
         sendServerCommand = sender,
     }).server, calls
 end
@@ -436,6 +447,7 @@ local function captureClientSend(player, module, command, args)
 end
 local clientCreated = Build42OwnerTransport.createClient({
     ClientOwnerState = ClientOwnerState,
+    completionValidator = LevelGainCompletion,
     sendClientCommand = captureClientSend,
 })
 expect(same(clientCreated, { ok = true, client = clientCreated.client }), "client creation shape")
@@ -490,6 +502,19 @@ expect(same(slot1Handled, { ok = true, handled = true, accepted = true, localSlo
 equal(client.get(1).snapshot.survivor.level, 5, "slot one receives its response")
 equal(client.get(0).present, false, "slot zero remains pending")
 equal(client.status(1).route, "active", "accepted route becomes active")
+local malformedCompletionAccepted = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+    protocolVersion = 1,
+    correlationId = ready1.correlationId,
+    ok = true,
+    snapshot = snapshot(2, 3, 6),
+    completion = {
+        protocolVersion = 1, kind = "survivor_level_gain",
+        levelsGained = 2, apGained = 1,
+    },
+})
+equal(malformedCompletionAccepted.accepted, true, "malformed optional completion does not reject valid newer snapshot")
+equal(malformedCompletionAccepted.completion, nil, "malformed optional completion fails closed")
+equal(client.get(1).snapshot.sequence, 2, "malformed completion snapshot is still accepted")
 
 local slot0Snapshot = snapshot(1, 3, 3)
 expect(client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
@@ -499,7 +524,7 @@ expect(client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
     snapshot = slot0Snapshot,
 }).accepted, "slot zero snapshot accepted")
 equal(client.get(0).snapshot.survivor.level, 3, "slot zero receives its response")
-equal(client.get(1).snapshot.survivor.level, 5, "slot one remains isolated")
+equal(client.get(1).snapshot.survivor.level, 6, "slot one remains isolated")
 
 slot0Snapshot.survivor.level = 99
 slot0Snapshot.perks.Axe.activeTargets[1].targetPosition = 99
@@ -510,17 +535,28 @@ detached.survivor.level = 88
 equal(client.get(0).snapshot.survivor.level, 3, "client get remains detached")
 
 local newerSnapshot = snapshot(2, 4, 4)
-expect(client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+local acceptedGain = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
     protocolVersion = 1,
     correlationId = ready0.correlationId,
     ok = true,
     snapshot = newerSnapshot,
-}).accepted, "active route accepts newer snapshot")
+    completion = {
+        protocolVersion = 1, kind = "survivor_level_gain",
+        levelsGained = 4, apGained = 4,
+    },
+})
+expect(acceptedGain.accepted, "active route accepts newer snapshot")
+equal(acceptedGain.completion.levelsGained, 4, "accepted newer snapshot releases completion")
+equal(acceptedGain.completion.apGained, 4, "accepted newer snapshot releases equal AP")
 local staleResult = client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
     protocolVersion = 1,
     correlationId = ready0.correlationId,
     ok = true,
     snapshot = snapshot(2, 99, 8),
+    completion = {
+        protocolVersion = 1, kind = "survivor_level_gain",
+        levelsGained = 9, apGained = 9,
+    },
 })
 expect(same(staleResult, { ok = true, handled = true, accepted = false, code = "stale_snapshot", localSlot = 0 }), "stale snapshot remains unaccepted")
 equal(client.get(0).snapshot.revision, 4, "stale response does not mutate inbox")
@@ -682,6 +718,7 @@ expect(tokenAfterReset ~= tokenBeforeReset, "reset preserves monotone process to
 
 local throwingClient = Build42OwnerTransport.createClient({
     ClientOwnerState = ClientOwnerState,
+    completionValidator = LevelGainCompletion,
     sendClientCommand = function() error("send private detail") end,
 }).client
 failed(throwingClient.ready(0, {}), "send_threw", "sendClientCommand")
@@ -707,6 +744,7 @@ local fakeFactory = {
 local fakeSent
 local fakeClient = Build42OwnerTransport.createClient({
     ClientOwnerState = fakeFactory,
+    completionValidator = LevelGainCompletion,
     sendClientCommand = function(_, _, _, args) fakeSent = args end,
 }).client
 expect(fakeClient.ready(0, {}).ok, "fake inbox ready succeeds")
@@ -753,6 +791,7 @@ local function resetFailureHarness(mode)
     }
     local transport = Build42OwnerTransport.createClient({
         ClientOwnerState = factory,
+        completionValidator = LevelGainCompletion,
         sendClientCommand = function() calls.sends = calls.sends + 1 end,
     }).client
     local readyResult = transport.ready(0, {})
@@ -782,6 +821,7 @@ do
     local sent, reentrant = {}, nil
     reentrant = Build42OwnerTransport.createClient({
         ClientOwnerState = ClientOwnerState,
+        completionValidator = LevelGainCompletion,
         sendClientCommand = function(player, module, command, args)
             sent[#sent + 1] = { player = player, module = module, command = command, args = args }
             if command == "ownerRefresh" then
@@ -809,6 +849,7 @@ do
     local failRefresh, failedSends = false, 0
     local failing = Build42OwnerTransport.createClient({
         ClientOwnerState = ClientOwnerState,
+        completionValidator = LevelGainCompletion,
         sendClientCommand = function(_, _, command)
             failedSends = failedSends + 1
             if command == "ownerRefresh" and failRefresh then error("send failure") end
@@ -831,6 +872,7 @@ do
     local isolatedSends = {}
     local isolated = Build42OwnerTransport.createClient({
         ClientOwnerState = ClientOwnerState,
+        completionValidator = LevelGainCompletion,
         sendClientCommand = function(playerValue, module, command, args)
             isolatedSends[#isolatedSends + 1] = { player = playerValue, module = module, command = command, args = args }
         end,

@@ -25,12 +25,14 @@ $ids = @('Fitness','Strength','Sprinting','Lightfoot','Nimble','Sneak','Axe','Bl
 $text = Get-Content -Raw $optionsPath
 Assert ($text -match '(?m)^VERSION\s*=\s*1,\s*$') 'VERSION must be 1'
 $blocks = @([regex]::Matches($text, '(?ms)^option\s+([^\s{]+)\s*\{(.*?)^\}'))
-Assert ($blocks.Count -eq 41) 'exactly six main and 35 per-skill options are required'
+Assert ($blocks.Count -eq 43) 'exactly eight main and 35 per-skill options are required'
 
 $main = @{
     'SurvivorXpMultiplier' = @('double','0','100','1','SLA')
     'FitnessStrengthContributionPercent' = @('double','0','100','6.7230769','SLA')
     'AutomaticCurveNormalization' = @('boolean','','','true','SLA')
+    'EnableSurvivorLevelInheritance' = @('boolean','','','false','SLA')
+    'SurvivorLevelRetainedPercent' = @('double','0','100','50','SLA')
     'AllotmentMode' = @('enum','','','1','SLA')
     'GlobalAdvancementLimit' = @('integer','0','100','3','SLA')
     'PerSkillDefaultLimit' = @('integer','0','10','1','SLA')
@@ -39,7 +41,7 @@ $seen = @()
 foreach ($b in $blocks) {
     $name = $b.Groups[1].Value
     $body = $b.Groups[2].Value
-    if ($name -match '^SurvivorLevelingAdvancement\.(SurvivorXpMultiplier|FitnessStrengthContributionPercent|AutomaticCurveNormalization|AllotmentMode|GlobalAdvancementLimit|PerSkillDefaultLimit)$') {
+    if ($name -match '^SurvivorLevelingAdvancement\.(SurvivorXpMultiplier|FitnessStrengthContributionPercent|AutomaticCurveNormalization|EnableSurvivorLevelInheritance|SurvivorLevelRetainedPercent|AllotmentMode|GlobalAdvancementLimit|PerSkillDefaultLimit)$') {
         $key = $Matches[1]; $seen += $key; $expected = $main[$key]
         Assert ((Field $body 'type') -eq $expected[0]) "$key type"
         if ($expected[1]) { Assert ((Field $body 'min') -eq $expected[1] -and (Field $body 'max') -eq $expected[2]) "$key range" }
@@ -49,7 +51,7 @@ foreach ($b in $blocks) {
         if ($key -eq 'AllotmentMode') { Assert ((Field $body 'numValues') -eq '3' -and (Field $body 'valueTranslation')) 'allotment enum encoding' }
     }
 }
-Assert ((@($seen | Sort-Object -Unique) -join ',') -eq (($main.Keys | Sort-Object) -join ',')) 'exact six main settings'
+Assert ((@($seen | Sort-Object -Unique) -join ',') -eq (($main.Keys | Sort-Object) -join ',')) 'exact eight main settings'
 
 $actualIds = @($blocks | ForEach-Object { if ($_.Groups[1].Value -match '^SurvivorLevelingAdvancement\.PerSkillLimit_(.+)$') { $Matches[1] } })
 Assert (($actualIds -join ',') -eq ($ids -join ',')) 'ordered vanilla override IDs'
@@ -59,15 +61,16 @@ foreach ($b in $blocks | Where-Object { $_.Groups[1].Value -match 'PerSkillLimit
     Assert ((Field $body 'page') -eq 'SLA' -and (Field $body 'valueTranslation') -eq 'SLA_PerSkillLimit') 'per-skill page/value translation'
     Assert ((Field $body 'valueTranslation') -eq 'SLA_PerSkillLimit') 'per-skill enum value translation'
 }
-Assert ((@($blocks | ForEach-Object { Field $_.Groups[2].Value 'page' } | Where-Object { $_ -eq 'SLA' }).Count -eq 41)) 'all settings use the one SLA page'
+Assert ((@($blocks | ForEach-Object { Field $_.Groups[2].Value 'page' } | Where-Object { $_ -eq 'SLA' }).Count -eq 43)) 'all settings use the one SLA page'
 Assert ($text -notmatch '(?m)^\s*page\s*=\s*SLA_PerSkill\s*,\s*$') 'no second sandbox page remains'
 
 $info = @{}
 foreach ($line in Get-Content $infoPath) { if ($line -match '^([^=]+)=(.*)$') { $info[$Matches[1]] = $Matches[2] } }
-Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,id,name') 'metadata has no extra fields'
+Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,id,incompatible,name') 'metadata has only the approved fields'
 Assert ($info.name -eq 'Survivor Leveling & Advancement' -and $info.id -eq 'SurvivorLevelingAdvancement') 'metadata name and id'
 Assert (-not $info.ContainsKey('versionMin') -and -not $info.ContainsKey('versionMax')) 'metadata does not enforce patch bounds'
 Assert ($info.description -eq 'Earn Survivor Levels through skill XP and spend Advancement Points to raise trainable skills.') 'metadata behavior description'
+Assert ($info.incompatible -eq 'RpgSkillsSystemsB42,VanillaMenu') 'metadata blocks both conflicting RPG Skills Systems mod IDs'
 
 $jsonText = Get-Content -Raw $jsonPath
 $keys = [regex]::Matches($jsonText, '(?m)"((?:[^"\\]|\\.)*)"\s*:') | ForEach-Object { $_.Groups[1].Value }
@@ -83,13 +86,17 @@ Assert ($translations.Sandbox_SLA) 'single page translation coverage'
 Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_PerSkill') 'second-page translation is absent'
 Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_PerSkill_tooltip') 'second-page tooltip translation is absent'
 Assert ($translations.Sandbox_SLA_PerSkillLimit_option1 -and $translations.Sandbox_SLA_PerSkillLimit_option12) 'shared enum translation coverage'
-Assert ($translations.Sandbox_SLA_tooltip -eq 'Control Survivor XP pacing and how many skill advancements may be active at once.') 'main page tooltip wording'
+Assert ($translations.Sandbox_SLA_tooltip -eq 'Control Survivor XP pacing, skill advancement limits, and optional Survivor Level inheritance.') 'main page tooltip wording'
 Assert ($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip -eq 'Multiplies Survivor XP gained from trainable skill XP. This does not change skill XP.') 'XP multiplier tooltip wording'
 Assert ($translations.Sandbox_SLA_FitnessStrengthContributionPercent -eq 'Fitness & Strength Survivor XP contribution percentage') 'Fitness and Strength percentage label'
 Assert ($translations.Sandbox_SLA_FitnessStrengthContributionPercent_tooltip -eq 'Sets Survivor XP from Fitness and Strength as a percentage of ordinary skill contribution before the Survivor XP multiplier. 6.7 means 6.7%%.') 'Fitness and Strength percentage tooltip wording and escaping'
 Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_FitnessStrengthContribution') 'stale raw Fitness and Strength option translation is absent'
 Assert ((@([regex]::Matches($jsonText, '%')).Count -eq 2)) 'only the escaped Fitness and Strength literal percent is present'
 Assert ($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip -eq 'Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.') 'custom skill normalization tooltip wording'
+Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance -eq 'Enable Survivor Level Inheritance') 'inheritance enabled label'
+Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance_tooltip -eq "Allows an eligible new character to inherit part of the previous character's Survivor Level for the same player profile.") 'inheritance enabled tooltip'
+Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent -eq 'Percentage of Survivor Level Retained') 'inheritance percentage label'
+Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent_tooltip -eq "Percentage of the previous character's Survivor Level inherited by an eligible new character.") 'inheritance percentage tooltip'
 Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes Advancement Slots and accounting for natural or lost skill XP.') 'allotment tooltip wording'
 Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
 Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value. Vanilla skills can override it below.') 'default limit tooltip wording'
@@ -102,7 +109,7 @@ foreach ($id in $ids) {
     if ($labels.ContainsKey($id)) { Assert ($translations.("Sandbox_" + $key) -eq $labels[$id]) "vanilla English label $id" }
 }
 
-$forbidden = 'inherit|post.?maximum|digital.?watch|admin|runtime|poll|network|ui|poster|icon|workshop|client'
+$forbidden = 'post.?maximum|digital.?watch|admin|runtime|poll|network|ui|poster|icon|workshop|client'
 Assert (-not ($text -match "(?i)$forbidden")) 'sandbox file contains no deferred settings or claims'
 Assert (-not ($info.Values -join ' ' -match "(?i)$forbidden")) 'metadata contains no deferred claims'
 
@@ -111,6 +118,7 @@ $requiredUi = [ordered]@{
     'IGUI_SLA_StatusActive' = 'Advancement Slots: %1/%2'
     'IGUI_SLA_StatusSurvivorXp' = 'Survivor XP: %1 / %2'
     'IGUI_SLA_Advance' = 'Advance to level %1 for %2 AP.'
+    'IGUI_SLA_Master' = 'Master skill for %1 AP.'
     'IGUI_SLA_PerSkillActive' = 'Advancement Slots: %1/%2.'
     'IGUI_SLA_TargetXpLeft' = '%1 natural skill XP left'
     'IGUI_SLA_TargetCatchUp' = 'Catch up to free this advancement slot.'
@@ -122,7 +130,7 @@ $requiredUi = [ordered]@{
     'IGUI_SLA_Reason_RedRecovery' = 'Recover natural XP before advancing again.'
     'IGUI_SLA_Reason_InsufficientAp' = 'Not enough AP.'
     'IGUI_SLA_Reason_AllotmentDisabled' = 'Advancement spending is disabled for this skill.'
-    'IGUI_SLA_Reason_AllotmentCapacity' = 'This skill has reached its advancement limit.'
+    'IGUI_SLA_Reason_AllotmentCapacity' = 'Advancement slot unavailable.'
     'IGUI_SLA_Admin_Button' = 'Admin'
     'IGUI_SLA_Admin_Menu' = 'Survivor progression'
     'IGUI_SLA_Admin_Title' = 'Survivor progression'
@@ -145,6 +153,12 @@ $requiredUi = [ordered]@{
     'IGUI_SLA_Admin_InvalidXp' = 'Enter a positive XP amount.'
     'IGUI_SLA_Admin_InvalidLevels' = 'Enter a positive whole level count.'
     'IGUI_SLA_Admin_PendingOther' = 'Another admin request is pending.'
+    'IGUI_SLA_LevelGain_Singular' = 'Survivor Level +%1'
+    'IGUI_SLA_LevelGain_Plural' = 'Survivor Levels +%1'
+    'IGUI_SLA_LevelGain_AP' = 'AP +%1'
+    'IGUI_SLA_ModOptions_Title' = 'Survivor Leveling & Advancement'
+    'IGUI_SLA_WatchOption' = 'Show XP %% to next level on digital watch'
+    'IGUI_SLA_WatchOption_Tooltip' = "Show XP progress to the next Survivor Level as a small percentage in the bottom-right of the digital watch. This only shows Player 1's XP %%."
 }
 Assert (Test-Path -LiteralPath $uiPath -PathType Leaf) 'Build 42 English UI JSON exists'
 Assert (-not (Test-Path -LiteralPath $obsoleteUiPath)) 'obsolete English UI text file is absent'

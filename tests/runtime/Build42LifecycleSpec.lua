@@ -30,11 +30,11 @@ local function event()
     }
 end
 
-local function fixture(server, client, configure)
+local function fixture(server, client, configure, pendingNewPlayers, pendingLocalPlayers)
     local calls = {}
     local debugCalls = 0
     local specificPlayers, specificPlayerCalls = {}, {}
-    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnMiniScoreboardUpdate = event(), OnTick = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event() }
+    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnMiniScoreboardUpdate = event(), OnTick = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event(), OnNewGame = event(), OnCharacterDeath = event() }
     local session = {
         ready = function(player) calls[#calls + 1] = { "ready", player }; return { ok = true, snapshot = { marker = player, ready = true, revision = 0 } } end,
         snapshot = function(player) calls[#calls + 1] = { "snapshot", player }; return { ok = true, snapshot = { marker = player } } end,
@@ -84,8 +84,13 @@ local function fixture(server, client, configure)
         end,
     }
     local source = { install = function() calls[#calls + 1] = { "install_source" }; return { ok = true } end }
+    local inheritanceSession = {
+        tokenNewCharacter = function(player) calls[#calls + 1] = { "inheritance_token", player }; return { ok = true } end,
+        recordDeath = function(player) calls[#calls + 1] = { "inheritance_death", player }; return { ok = true } end,
+    }
     local runtime = { catalog = {}, services = {
-        xpSource = source, ownerSession = session, advancementSession = advancementSession, adminSession = adminSession,
+        xpSource = source, ownerSession = session, inheritanceSession = inheritanceSession,
+        advancementSession = advancementSession, adminSession = adminSession,
     } }
     local localClient = {
         ready = function(slot, player) calls[#calls + 1] = { "client_ready", slot, player }; return { ok = true } end,
@@ -100,7 +105,7 @@ local function fixture(server, client, configure)
     local serverTransport = {
         handle = function(module, command, player, args) calls[#calls + 1] = { "server_handle", module, command, player, args }; return { ok = true, handled = true } end,
         clearPlayer = function() return { ok = true } end,
-        publish = function(player) calls[#calls + 1] = { "owner_publish", player }; return { ok = true } end,
+        publish = function(player, completion) calls[#calls + 1] = { "owner_publish", player, completion }; return { ok = true } end,
     }
     local advancementServer = {
         handle = function(module, command, player, args) calls[#calls + 1] = { "adv_server_handle", module, command, player, args }; return { ok = true, handled = true } end,
@@ -145,6 +150,30 @@ local function fixture(server, client, configure)
         for key, value in pairs(snapshot) do if key ~= "private" then copy[key] = value end end
         return { ok = true, snapshot = copy }
     end
+    local completion = {
+        create = function(levelsGained, apGained)
+            return { ok = true, completion = {
+                protocolVersion = 1, kind = "survivor_level_gain",
+                levelsGained = levelsGained, apGained = apGained,
+            } }
+        end,
+        validate = function(value)
+            if type(value) ~= "table" or rawget(value, "protocolVersion") ~= 1
+                or rawget(value, "kind") ~= "survivor_level_gain"
+                or type(rawget(value, "levelsGained")) ~= "number"
+                or rawget(value, "levelsGained") < 1
+                or rawget(value, "apGained") ~= rawget(value, "levelsGained") then
+                return { ok = false, code = "invalid_completion", detail = "completion" }
+            end
+            return { ok = true, completion = value }
+        end,
+    }
+    local feedback = {
+        show = function(player, value)
+            calls[#calls + 1] = { "feedback", player, value }
+            return { ok = true }
+        end,
+    }
     local modules = {
         Build42RuntimeFactory = { create = function(argument) factoryCalls = factoryCalls + 1; calls[#calls + 1] = { "factory", argument }; return { ok = true, runtime = runtime } end },
         Build42OwnerTransport = {
@@ -161,6 +190,12 @@ local function fixture(server, client, configure)
         },
         Build42AdminBoundary = {
             create = function(argument) adminBoundaryCreates = adminBoundaryCreates + 1; calls[#calls + 1] = { "create_admin_boundary", argument }; return { ok = true, boundary = adminBoundary } end,
+        },
+        LevelGainCompletion = completion,
+        Build42LevelFeedback = {
+            create = function(argument)
+                return { ok = true, presenter = feedback }
+            end,
         },
         ClientOwnerState = { create = function() end, validate = validator },
     }
@@ -183,18 +218,34 @@ local function fixture(server, client, configure)
         getPlayerByOnlineID = function() end,
         getPlayerFromUsername = function() end,
         writeLog = function(name, line) calls[#calls + 1] = { "write_log", name, line } end,
+        HaloTextHelper = {},
+        getText = function(key) return key end,
     }
-    if configure ~= nil then configure({ modules = modules, globals = globals, events = events, specificPlayers = specificPlayers, localClient = localClient, session = session, advancementSession = advancementSession, adminSession = adminSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
-    local created = Build42Lifecycle.create({ modules = modules, globals = globals })
+    if configure ~= nil then configure({ modules = modules, globals = globals, events = events, specificPlayers = specificPlayers, localClient = localClient, session = session, inheritanceSession = inheritanceSession, advancementSession = advancementSession, adminSession = adminSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
+    local created = Build42Lifecycle.create({
+        modules = modules,
+        globals = globals,
+        pendingNewPlayers = pendingNewPlayers,
+        pendingLocalPlayers = pendingLocalPlayers,
+    })
     return created, { calls = calls, events = events, modules = modules, globals = globals, session = session, source = source, runtime = runtime, localClient = localClient, serverTransport = serverTransport,
-        advancementSession = advancementSession, advancementClient = advancementClient, advancementServer = advancementServer,
+        inheritanceSession = inheritanceSession, advancementSession = advancementSession, advancementClient = advancementClient, advancementServer = advancementServer,
         adminSession = adminSession, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary,
         factoryCalls = function() return factoryCalls end, clientCreates = function() return clientCreates end, serverCreates = function() return serverCreates end,
         advancementClientCreates = function() return advancementClientCreates end, advancementServerCreates = function() return advancementServerCreates end,
         adminClientCreates = function() return adminClientCreates end, adminServerCreates = function() return adminServerCreates end,
         adminBoundaryCreates = function() return adminBoundaryCreates end,
         debugCalls = function() return debugCalls end, validator = validator,
-        specificPlayers = specificPlayers, specificPlayerCalls = specificPlayerCalls }
+        specificPlayers = specificPlayers, specificPlayerCalls = specificPlayerCalls,
+        completion = completion, feedback = feedback }
+end
+
+local function callsNamed(calls, name)
+    local result = {}
+    for index = 1, #calls do
+        if calls[index][1] == name then result[#result + 1] = calls[index] end
+    end
+    return result
 end
 
 local function acknowledge(f, localSlot, player)
@@ -219,6 +270,8 @@ do
     yes(created.owner.install().ok, "server install idempotent")
     eq(f.events.OnServerStarted.adds(), 1, "one server start callback")
     eq(f.events.OnClientCommand.adds(), 1, "one client-command callback")
+    eq(f.events.OnNewGame.adds(), 1, "server owns one new-game callback")
+    eq(f.events.OnCharacterDeath.adds(), 1, "server owns one death callback")
     eq(f.events.OnCreatePlayer.adds(), 0, "server event set has no create-player callback")
     eq(f.events.OnMiniScoreboardUpdate.adds(), 0, "server event set has no post-ack callback")
     f.events.OnServerStarted.fire()
@@ -232,6 +285,12 @@ do
     eq(f.calls[#f.calls][1], "server_handle", "server command delegated")
     f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerRefresh", {}, { correlationId = "x" })
     eq(f.calls[#f.calls][3], "ownerRefresh", "server refresh exact-dispatched")
+    local inheritedPlayer = {}
+    f.events.OnNewGame.fire(inheritedPlayer)
+    eq(f.calls[#f.calls][1], "inheritance_token", "server OnNewGame only tokens")
+    eq(f.calls[#f.calls][2], inheritedPlayer, "server token keeps exact player")
+    f.events.OnCharacterDeath.fire(inheritedPlayer)
+    eq(f.calls[#f.calls][1], "inheritance_death", "server death only records")
     yes(created.owner.status().started, "server started")
     no(created.owner.clientState(0).ok, "server has no client state")
 end
@@ -412,6 +471,8 @@ do
     eq(f.clientCreates(), 1, "client transport created at construction")
     yes(created.owner.install().ok, "client installs")
     eq(f.events.OnCreatePlayer.adds(), 0, "client owns no create-player callback")
+    eq(f.events.OnNewGame.adds(), 0, "client owns no new-game callback")
+    eq(f.events.OnCharacterDeath.adds(), 0, "client owns no death callback")
     eq(f.events.OnMiniScoreboardUpdate.adds(), 1, "client owns one post-ack callback")
     eq(f.events.OnTick.adds(), 0, "client tick callback waits for an acknowledgment")
     eq(f.events.OnServerCommand.adds(), 1, "client owns one server-command callback")
@@ -786,6 +847,8 @@ do
     yes(created.owner.install().ok, "SP installs")
     eq(f.events.OnGameStart.adds(), 1, "SP owns one game-start callback")
     eq(f.events.OnCreatePlayer.adds(), 1, "SP owns one create-player callback")
+    eq(f.events.OnNewGame.adds(), 1, "SP owns one new-game callback")
+    eq(f.events.OnCharacterDeath.adds(), 1, "SP owns one death callback")
     eq(f.events.OnMiniScoreboardUpdate.adds(), 0, "SP event set has no post-ack callback")
     eq(f.events.OnDisconnect.adds(), 0, "SP event set has no disconnect callback")
     f.events.OnCreatePlayer.fire(1, player)
@@ -799,6 +862,123 @@ do
     f.events.OnCreatePlayer.fire(3, player)
     eq(f.calls[#f.calls - 2][1], "client_reset_slot", "SP post-start resets slot")
     eq(f.calls[#f.calls - 1][1], "ready", "SP post-start direct ready")
+end
+
+do
+    local created, f = fixture(false, false)
+    local player = {}
+    yes(created.owner.install().ok, "SP early-new fixture installs")
+    f.events.OnNewGame.fire(player)
+    f.events.OnNewGame.fire(player)
+    f.events.OnCreatePlayer.fire(0, player)
+    f.events.OnGameStart.fire()
+    local tokenIndex, readyIndex, tokenCount = nil, nil, 0
+    for index = 1, #f.calls do
+        if f.calls[index][1] == "inheritance_token" then tokenIndex, tokenCount = index, tokenCount + 1 end
+        if f.calls[index][1] == "ready" then readyIndex = index end
+    end
+    eq(tokenCount, 1, "duplicate early OnNewGame issues one effective token")
+    yes(tokenIndex ~= nil and readyIndex ~= nil and tokenIndex < readyIndex,
+        "buffered token drains before pending owner readiness")
+    f.events.OnCharacterDeath.fire(player)
+    eq(f.calls[#f.calls][1], "inheritance_death", "SP post-start death records")
+end
+
+do
+    local tokenCalls, readyCalls, sourceAttempts = 0, 0, 0
+    local earlyNew, earlyLocal = {}, {}
+    local created, f = fixture(false, false, function(values)
+        values.inheritanceSession.tokenNewCharacter = function()
+            tokenCalls = tokenCalls + 1
+            return { ok = true }
+        end
+        values.session.ready = function()
+            readyCalls = readyCalls + 1
+            return { ok = true, snapshot = {} }
+        end
+        values.source.install = function()
+            sourceAttempts = sourceAttempts + 1
+            error("source startup failed")
+        end
+    end, { earlyNew }, { [1] = earlyLocal })
+    yes(created.owner.install().ok, "SP terminal-clear fixture installs")
+    f.events.OnGameStart.fire()
+    eq(created.owner.status().failure.code, "xp_source_install_invalid",
+        "XP source failure is retained")
+    for index = 1, 5 do f.events.OnNewGame.fire({}) end
+    for slot = 0, 3 do f.events.OnCreatePlayer.fire(slot, {}) end
+    f.events.OnGameStart.fire()
+    eq(sourceAttempts, 1, "terminal startup failure remains no-retry")
+    eq(tokenCalls, 0, "terminal startup failure clears and cannot repopulate pending new players")
+    eq(readyCalls, 0, "terminal startup failure clears and cannot repopulate pending local players")
+    eq(created.owner.status().failure.code, "xp_source_install_invalid",
+        "later callbacks preserve terminal startup failure")
+end
+
+do
+    local tokenCalls, readyCalls = 0, 0
+    local earlyNew, earlyLocal = {}, {}
+    local created, f = fixture(false, false, function(values)
+        values.inheritanceSession.tokenNewCharacter = function()
+            tokenCalls = tokenCalls + 1
+            return { ok = true }
+        end
+        values.session.ready = function()
+            readyCalls = readyCalls + 1
+            return { ok = true, snapshot = {} }
+        end
+    end, { earlyNew }, { [2] = earlyLocal })
+    yes(created.owner.install().ok, "SP ownership-clear fixture installs")
+    f.globals.Events.OnGameStart = event()
+    f.events.OnNewGame.fire({})
+    eq(created.owner.status().failure.code, "event_ownership_lost",
+        "pre-start ownership loss is retained")
+    f.globals.Events.OnGameStart = f.events.OnGameStart
+    for index = 1, 5 do f.events.OnNewGame.fire({}) end
+    for slot = 0, 3 do f.events.OnCreatePlayer.fire(slot, {}) end
+    f.events.OnGameStart.fire()
+    eq(tokenCalls, 0, "ownership loss clears and permanently closes pending new players")
+    eq(readyCalls, 0, "ownership loss clears and permanently closes pending local players")
+end
+
+do
+    local first, second = {}, {}
+    local handedOff = { first, second }
+    local created, f = fixture(false, false, nil, handedOff)
+    yes(created.ok, "SP handoff fixture creates")
+    handedOff[1], handedOff[2] = nil, nil
+    yes(created.owner.install().ok, "SP handoff fixture installs")
+    f.events.OnCreatePlayer.fire(0, first)
+    f.events.OnGameStart.fire()
+    local firstToken, secondToken, readyIndex = nil, nil, nil
+    for index = 1, #f.calls do
+        local call = f.calls[index]
+        if call[1] == "inheritance_token" and call[2] == first then firstToken = index end
+        if call[1] == "inheritance_token" and call[2] == second then secondToken = index end
+        if call[1] == "ready" and call[2] == first then readyIndex = index end
+    end
+    yes(firstToken ~= nil and secondToken ~= nil, "detached handoff tokens each exact player")
+    yes(firstToken < readyIndex and secondToken < readyIndex, "all handoff tokens precede pending readiness")
+end
+
+do
+    local primary, split = {}, {}
+    local handedOff = { [0] = primary, [1] = split }
+    local created, f = fixture(false, false, nil, nil, handedOff)
+    yes(created.ok, "SP pending-player handoff fixture creates")
+    handedOff[0], handedOff[1] = nil, nil
+    yes(created.owner.install().ok, "SP pending-player handoff fixture installs")
+    f.events.OnGameStart.fire()
+    local primaryReady, splitReady = 0, 0
+    for index = 1, #f.calls do
+        local call = f.calls[index]
+        if call[1] == "ready" and call[2] == primary then primaryReady = primaryReady + 1 end
+        if call[1] == "ready" and call[2] == split then splitReady = splitReady + 1 end
+    end
+    eq(primaryReady, 1, "SP handoff readies the exact initial player once")
+    eq(splitReady, 1, "SP handoff readies the exact split-screen player once")
+    yes(created.owner.refreshOwner(0).ok, "SP handed-off primary slot is refreshable")
+    yes(created.owner.refreshOwner(1).ok, "SP handed-off split slot is refreshable")
 end
 
 do
@@ -871,6 +1051,56 @@ do
     f.events.OnCreatePlayer.fire(0, {})
     f.events.OnMiniScoreboardUpdate.fire()
     eq(readyCalls, 0, "callback registered before a later Add failure remains inert")
+end
+
+do
+    local created, f = fixture(true, false)
+    f.events.OnNewGame.Add = function() error("partial inheritance add") end
+    no(created.owner.install().ok, "server new-game partial registration fails")
+    eq(f.events.OnServerStarted.adds(), 1, "server startup registered before new-game failure")
+    eq(f.events.OnClientCommand.adds(), 1, "server command registered before new-game failure")
+    f.events.OnServerStarted.fire()
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", {}, {})
+    eq(f.factoryCalls(), 0, "callbacks before new-game Add failure stay inert")
+    eq(#f.calls, 2, "partial server install touches only initial mode checks")
+end
+
+do
+    local tokenCalls, readyCalls = 0, 0
+    local pendingNew, pendingLocal = {}, {}
+    local created, f = fixture(false, false, function(values)
+        values.events.OnNewGame.Add = function() error("partial SP inheritance add") end
+        values.inheritanceSession.tokenNewCharacter = function()
+            tokenCalls = tokenCalls + 1
+            return { ok = true }
+        end
+        values.session.ready = function()
+            readyCalls = readyCalls + 1
+            return { ok = true, snapshot = {} }
+        end
+    end, { pendingNew }, { [0] = pendingLocal })
+    no(created.owner.install().ok, "partial SP event registration fails")
+    f.events.OnCreatePlayer.fire(0, {})
+    f.events.OnGameStart.fire()
+    eq(f.factoryCalls(), 0, "partial registration callbacks remain inert after reference clear")
+    eq(tokenCalls, 0, "partial registration never drains or repopulates handed-off new players")
+    eq(readyCalls, 0, "partial registration never drains or repopulates handed-off local players")
+    no(created.owner.install().ok, "partial SP registration is not retried after reference clear")
+    eq(f.events.OnGameStart.adds(), 1, "partial SP no-retry preserves one startup callback")
+    eq(f.events.OnCreatePlayer.adds(), 1, "partial SP no-retry preserves one create-player callback")
+    eq(created.owner.status().failure.code, "event_register_threw",
+        "partial SP registration retains original terminal failure")
+end
+
+do
+    local created, f = fixture(true, false)
+    f.events.OnCharacterDeath.Add = function() error("partial inheritance add") end
+    no(created.owner.install().ok, "server death partial registration fails")
+    eq(f.events.OnNewGame.adds(), 1, "new-game callback registered before death failure")
+    f.events.OnNewGame.fire({})
+    f.events.OnServerStarted.fire()
+    eq(f.factoryCalls(), 0, "callbacks before death Add failure stay inert")
+    eq(#f.calls, 2, "partial death install touches only initial mode checks")
 end
 
 do
@@ -2171,9 +2401,213 @@ do
     eq(created.owner.status().failure.code, "admin_request_invalid", "committed client request is retained")
 end
 
+do
+    local target = {}
+    local created, f = fixture(true, false)
+    created.owner.install()
+    f.events.OnServerStarted.fire()
+    local factory = callsNamed(f.calls, "factory")[1]
+    local completion = {
+        protocolVersion = 1, kind = "survivor_level_gain",
+        levelsGained = 2, apGained = 2,
+    }
+    local routed = factory[2].levelGainSink(target, completion)
+    yes(routed.ok, "server ordinary gain sink is contained")
+    local publications = callsNamed(f.calls, "owner_publish")
+    eq(#publications, 1, "server ordinary gain publishes once")
+    eq(publications[1][2], target, "server ordinary gain uses mutated target route")
+    eq(publications[1][3], completion, "server ordinary gain pairs exact completion")
+end
+
+do
+    local player = {}
+    local created, f = fixture(false, false, nil, nil, { [1] = player })
+    created.owner.install()
+    f.events.OnGameStart.fire()
+    local before = #callsNamed(f.calls, "feedback")
+    local factory = callsNamed(f.calls, "factory")[1]
+    factory[2].levelGainSink(player, {
+        protocolVersion = 1, kind = "survivor_level_gain",
+        levelsGained = 4, apGained = 4,
+    })
+    local feedback = callsNamed(f.calls, "feedback")
+    eq(#feedback, before + 1, "SP multi-level ordinary gain shows once")
+    eq(feedback[#feedback][2], player, "SP slot one targets exact retained player")
+    eq(feedback[#feedback][3].levelsGained, 4, "SP multi-level completion remains aggregated")
+end
+
+do
+    local player = {}
+    local created, f = fixture(false, false, function(values)
+        values.session.ready = function(actualPlayer)
+            values.source.marker = actualPlayer
+            return {
+                ok = true,
+                snapshot = { marker = actualPlayer, ready = true, revision = 0 },
+                completion = {
+                    protocolVersion = 1, kind = "survivor_level_gain",
+                    levelsGained = 3, apGained = 3,
+                },
+            }
+        end
+    end, nil, { [1] = player })
+    created.owner.install()
+    f.events.OnGameStart.fire()
+    local feedback = callsNamed(f.calls, "feedback")
+    eq(#feedback, 1, "positive inheritance ready shows once")
+    eq(feedback[1][2], player, "inheritance uses exact SP slot-one player")
+    eq(feedback[1][3].levelsGained, 3, "inheritance completion count")
+end
+
+do
+    local player = {}
+    local created, f = fixture(false, true, function(values)
+        values.localClient.handle = function()
+            return {
+                ok = true, handled = true, accepted = true, localSlot = 1,
+                completion = {
+                    protocolVersion = 1, kind = "survivor_level_gain",
+                    levelsGained = 2, apGained = 2,
+                },
+            }
+        end
+    end)
+    created.owner.install()
+    acknowledge(f, 1, player)
+    local before = #callsNamed(f.calls, "feedback")
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", {})
+    local feedback = callsNamed(f.calls, "feedback")
+    eq(#feedback, before + 1, "MP accepted-newer completion shows once")
+    eq(feedback[#feedback][2], player, "MP feedback uses getSpecificPlayer accepted slot")
+    eq(f.specificPlayerCalls[#f.specificPlayerCalls], 1, "MP feedback resolves exact accepted slot")
+
+    created, f = fixture(false, true, function(values)
+        values.localClient.handle = function()
+            return { ok = true, handled = true, accepted = false, code = "stale_snapshot", localSlot = 1 }
+        end
+    end)
+    created.owner.install()
+    acknowledge(f, 1, player)
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", {})
+    eq(#callsNamed(f.calls, "feedback"), 0, "stale snapshot stays silent")
+end
+
+do
+    local failureModes = {
+        {
+            label = "throwing presenter",
+            show = function() error("feedback failed") end,
+        },
+        {
+            label = "rejecting presenter",
+            show = function() return { ok = false, code = "presentation_failed" } end,
+        },
+    }
+    for index = 1, #failureModes do
+        local mode = failureModes[index]
+        local player, inbox, feedbackCalls, refreshCalls = {}, nil, 0, 0
+        local created, f = fixture(false, true, function(values)
+            values.localClient.handle = function(_, _, args)
+                local snapshot = rawget(args, "snapshot")
+                if inbox ~= nil and rawget(snapshot, "sequence") <= rawget(inbox, "sequence") then
+                    return {
+                        ok = true, handled = true, accepted = false,
+                        code = "stale_snapshot", localSlot = 1,
+                    }
+                end
+                inbox = {
+                    sequence = rawget(snapshot, "sequence"),
+                    revision = rawget(snapshot, "revision"),
+                    ready = rawget(snapshot, "ready"),
+                }
+                return {
+                    ok = true, handled = true, accepted = true, localSlot = 1,
+                    completion = {
+                        protocolVersion = 1, kind = "survivor_level_gain",
+                        levelsGained = 2, apGained = 2,
+                    },
+                }
+            end
+            values.localClient.get = function()
+                if inbox == nil then return { ok = true, present = false } end
+                return { ok = true, present = true, snapshot = inbox }
+            end
+            values.localClient.refresh = function()
+                refreshCalls = refreshCalls + 1
+                return { ok = true }
+            end
+            values.modules.Build42LevelFeedback.create = function()
+                return { ok = true, presenter = {
+                    show = function(...)
+                        feedbackCalls = feedbackCalls + 1
+                        return mode.show(...)
+                    end,
+                } }
+            end
+        end)
+        created.owner.install()
+        acknowledge(f, 1, player)
+        local envelope = { snapshot = { sequence = 7, revision = 4, ready = true } }
+        f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", envelope)
+
+        local accepted = created.owner.clientState(1)
+        yes(accepted.ok and accepted.present, mode.label .. " preserves accepted inbox")
+        eq(accepted.snapshot.sequence, 7, mode.label .. " preserves accepted sequence")
+        eq(accepted.snapshot.revision, 4, mode.label .. " preserves accepted revision")
+        eq(feedbackCalls, 1, mode.label .. " is attempted once")
+        eq(created.owner.status().failure, nil, mode.label .. " does not poison lifecycle")
+
+        f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", envelope)
+        eq(feedbackCalls, 1, mode.label .. " replay does not duplicate feedback")
+        eq(created.owner.clientState(1).snapshot.sequence, 7, mode.label .. " replay keeps current sequence")
+        yes(created.owner.refreshOwner(1).ok, mode.label .. " refresh remains available")
+        eq(refreshCalls, 1, mode.label .. " refresh sends once")
+        eq(feedbackCalls, 1, mode.label .. " refresh remains silent")
+        eq(created.owner.clientState(1).snapshot.sequence, 7, mode.label .. " refresh keeps current sequence")
+        eq(created.owner.status().failure, nil, mode.label .. " remains nonpoisoning after replay and refresh")
+    end
+end
+
+do
+    local player = {}
+    local created, f = fixture(false, false, function(values)
+        values.localClient.get = function()
+            return { ok = true, present = true, snapshot = { ready = true, revision = 0 } }
+        end
+    end, nil, { [1] = player })
+    created.owner.install()
+    f.events.OnGameStart.fire()
+    eq(#callsNamed(f.calls, "feedback"), 0, "ordinary readiness stays silent")
+    yes(created.owner.refreshOwner(1).ok, "SP refresh succeeds")
+    eq(#callsNamed(f.calls, "feedback"), 0, "manual refresh stays silent")
+    yes(created.owner.requestAdvancement(1, "Strength").ok, "SP AP spend request succeeds")
+    eq(#callsNamed(f.calls, "feedback"), 0, "AP spending stays silent")
+
+    local admin = created.owner.requestAdmin(1, {
+        operation = "awardSurvivorLevels", expectedRevision = 0, count = 2,
+    })
+    yes(admin.ok, "SP admin level award succeeds")
+    local feedback = callsNamed(f.calls, "feedback")
+    eq(#feedback, 1, "SP admin level award shows once")
+    eq(feedback[1][2], player, "SP admin targets exact slot-one player")
+    eq(feedback[1][3].levelsGained, 2, "SP admin keeps aggregate count")
+
+    f.events.OnCreatePlayer.fire(1, player)
+    eq(#callsNamed(f.calls, "feedback"), 1, "later ordinary ready stays silent")
+end
+
+do
+    local player = {}
+    local created, f = fixture(false, true)
+    created.owner.install()
+    acknowledge(f, 1, player)
+    f.events.OnDisconnect.fire()
+    eq(#callsNamed(f.calls, "feedback"), 0, "disconnect and reset stay silent")
+end
+
 local bootstrapEvidence = rawget(_G, "__C10T_BOOTSTRAP_EVIDENCE")
 if bootstrapEvidence ~= nil then
-    eq(bootstrapEvidence.phase, 18, "bootstrap harness completes every phase")
+    eq(bootstrapEvidence.phase, 24, "bootstrap harness completes every phase")
     yes(bootstrapEvidence.checks >= 75, "bootstrap harness performs exact boundary checks")
     local malformedInstall = rawget(_G, "C10TBootstrapMalformed")
     local malformedOwner = rawget(_G, "C10TBootstrapMalformedOwner")

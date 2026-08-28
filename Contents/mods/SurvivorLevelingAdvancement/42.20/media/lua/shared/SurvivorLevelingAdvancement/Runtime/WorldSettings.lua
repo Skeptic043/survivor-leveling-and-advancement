@@ -8,6 +8,8 @@ local allowedRawKeys = {
     globalLimit = true,
     perSkillDefault = true,
     perSkillOverrides = true,
+    inheritanceEnabled = true,
+    retainedRatio = true,
 }
 
 local function isFiniteNumber(value)
@@ -111,6 +113,10 @@ local function readRaw(provider)
     local globalLimit = rawget(raw, "globalLimit")
     local perSkillDefault = rawget(raw, "perSkillDefault")
     local overrides = rawget(raw, "perSkillOverrides")
+    local inheritanceEnabled = rawget(raw, "inheritanceEnabled")
+    local retainedRatio = rawget(raw, "retainedRatio")
+    if inheritanceEnabled == nil then inheritanceEnabled = false end
+    if retainedRatio == nil then retainedRatio = 0.5 end
 
     if not isFiniteNumber(survivorMultiplier)
         or survivorMultiplier < 0
@@ -121,6 +127,10 @@ local function readRaw(provider)
         or not isNonnegativeInteger(globalLimit)
         or not isNonnegativeInteger(perSkillDefault) then
         return nil, "invalid_settings", "settings contain an invalid scalar"
+    end
+    if type(inheritanceEnabled) ~= "boolean"
+        or not isFiniteNumber(retainedRatio) or retainedRatio < 0 or retainedRatio > 1 then
+        return nil, "invalid_settings", "settings contain an invalid inheritance scalar"
     end
 
     local copiedOverrides = copyOverrides(overrides)
@@ -136,6 +146,8 @@ local function readRaw(provider)
         globalLimit = globalLimit,
         perSkillDefault = perSkillDefault,
         perSkillOverrides = copiedOverrides,
+        inheritanceEnabled = inheritanceEnabled,
+        retainedRatio = retainedRatio,
     }
 end
 
@@ -237,11 +249,28 @@ function WorldSettings.create(dependencies)
         }
     end
 
+    local inheritanceSettings = {}
+
+    function inheritanceSettings.resolve(_)
+        local raw, code, detail = readRaw(provider)
+        if raw == nil then
+            return failed(code, detail)
+        end
+        return {
+            ok = true,
+            settings = {
+                enabled = raw.inheritanceEnabled,
+                retainedRatio = raw.retainedRatio,
+            },
+        }
+    end
+
     return {
         ok = true,
         accountingSettings = accountingSettings,
         awardSettings = awardSettings,
         allotmentSettings = allotmentSettings,
+        inheritanceSettings = inheritanceSettings,
     }
 end
 

@@ -111,7 +111,12 @@ local function fixture(overrides)
             return { ok = true, snapshot = { protocolVersion = 1, sequence = sequence, ready = ready, revision = actualState.revision, privateInput = actualState.private } }
         end,
     }
-    local dependencies = { store = store, recoveryService = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot }
+    local inheritanceSession = {
+        initialize = function()
+            return { ok = true, outcome = "existing", survivorLevel = 0, consumed = false }
+        end,
+    }
+    local dependencies = { store = store, recoveryService = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot, inheritanceSession = inheritanceSession }
     if overrides then overrides(dependencies, { calls = calls, loads = loads, state = state, recoveredState = recoveredState, options = options, perks = perks, player = player, store = store, recovery = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot }) end
     local created = OwnerSession.create(dependencies)
     expectEqual(created.ok, true, "session creates")
@@ -131,6 +136,67 @@ creationDependencies.catalog = { allPerks = function() end, resolver = { loadOpt
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "xpSource.initializePlayer is required")
 creationDependencies.xpSource = { initializePlayer = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "ownerSnapshot.project is required")
+creationDependencies.ownerSnapshot = { project = function() end }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "inheritanceSession.initialize is required")
+
+do
+    local session, _, values = fixture(function(dependencies, fixtureValues)
+        dependencies.inheritanceSession.initialize = function(actualPlayer)
+            fixtureValues.calls[#fixtureValues.calls + 1] = "inheritance"
+            expectEqual(actualPlayer, fixtureValues.player, "inheritance player identity")
+            return { ok = true, outcome = "existing", survivorLevel = 0, consumed = false }
+        end
+    end)
+    expectEqual(session.ready(values.player).ok, true, "inheritance-ordered ready succeeds")
+    sequenceEquals(values.calls, { "inheritance", "load", "recover", "settings", "synchronize", "catalog", "initialize", "project" },
+        "inheritance initializes before first state load")
+end
+
+do
+    local session, _, values = fixture(function(dependencies)
+        dependencies.inheritanceSession.initialize = function()
+            return { ok = true, outcome = "inherit", survivorLevel = 3, consumed = true }
+        end
+    end)
+    local ready = session.ready(values.player)
+    expectEqual(ready.ok, true, "positive inheritance ready succeeds")
+    expectEqual(ready.completion.protocolVersion, 1, "inheritance completion protocol")
+    expectEqual(ready.completion.kind, "survivor_level_gain", "inheritance completion kind")
+    expectEqual(ready.completion.levelsGained, 3, "inheritance completion levels")
+    expectEqual(ready.completion.apGained, 3, "inheritance completion AP")
+    local later = session.ready(values.player)
+    expectEqual(later.completion, nil, "later ready stays silent after positive inheritance")
+
+    local freshValues
+    session, _, freshValues = fixture(function(dependencies)
+        dependencies.inheritanceSession.initialize = function()
+            return { ok = true, outcome = "fresh", survivorLevel = 0, consumed = false }
+        end
+    end)
+    expectEqual(session.ready(freshValues.player).completion, nil, "fresh ready stays silent")
+end
+
+do
+    local session, _, values = fixture(function(dependencies, fixtureValues)
+        dependencies.inheritanceSession.initialize = function()
+            fixtureValues.calls[#fixtureValues.calls + 1] = "inheritance"
+            return { ok = false, code = "metadata_invalid", detail = "private" }
+        end
+    end)
+    failure(session.ready(values.player), "inheritance_initialize_failed", dependency("metadata_invalid", "private"))
+    sequenceEquals(values.calls, { "inheritance" }, "inheritance failure prevents ordinary load")
+end
+
+do
+    local session, _, values = fixture(function(dependencies, fixtureValues)
+        dependencies.inheritanceSession.initialize = function()
+            fixtureValues.calls[#fixtureValues.calls + 1] = "inheritance"
+            return { ok = true, outcome = "existing", survivorLevel = 0, consumed = "no" }
+        end
+    end)
+    failure(session.ready(values.player), "inheritance_initialize_invalid", "inheritanceSession.initialize")
+    sequenceEquals(values.calls, { "inheritance" }, "malformed inheritance prevents ordinary load")
+end
 
 do
     local session, _, values = fixture()

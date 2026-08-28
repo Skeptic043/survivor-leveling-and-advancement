@@ -198,8 +198,8 @@ local function makeHarness(options)
     end
 
     local publisher = {}
-    function publisher.publish(receivedTarget)
-        events[#events + 1] = { name = "publish", target = receivedTarget }
+    function publisher.publish(receivedTarget, completion)
+        events[#events + 1] = { name = "publish", target = receivedTarget, completion = completion }
         if options.publishThrow then error("publisher object secret") end
         if options.publishResult ~= nil then return options.publishResult end
         return { ok = true }
@@ -220,6 +220,7 @@ local function makeHarness(options)
         adminBoundary = boundary,
         adminSession = session,
         ownerPublisher = publisher,
+        completionFactory = LevelGainCompletion,
         audit = audit,
         sendServerCommand = sender,
     })
@@ -246,11 +247,12 @@ do
         "nil construction")
     local invalidDependencies = {
         {},
-        { adminBoundary = {}, adminSession = {}, ownerPublisher = {}, audit = {}, sendServerCommand = function() end },
+        { adminBoundary = {}, adminSession = {}, ownerPublisher = {}, completionFactory = {}, audit = {}, sendServerCommand = function() end },
         {
             adminBoundary = { authorizeAndResolve = function() end },
             adminSession = { inspect = function() end, request = function() end },
             ownerPublisher = { publish = function() end },
+            completionFactory = LevelGainCompletion,
             audit = { record = function() end },
             sendServerCommand = "not callable",
         },
@@ -266,6 +268,7 @@ do
         adminBoundary = { authorizeAndResolve = function() end },
         adminSession = { inspect = function() end, request = function() end },
         ownerPublisher = { publish = function() end },
+        completionFactory = LevelGainCompletion,
         audit = { record = function() end },
         sendServerCommand = function() end,
         future = true,
@@ -516,6 +519,10 @@ do
     equal(auditEvent.operation, "awardSurvivorXp", "audit operation")
     equal(auditEvent.outcome, "committed", "audit outcome")
     check(harness.events[4].target == harness.resolvedTarget, "publisher receives target only")
+    exact(harness.events[4].completion, {
+        protocolVersion = 1, kind = "survivor_level_gain",
+        levelsGained = 1, apGained = 1,
+    }, "XP publication carries target-owner completion")
     local response = harness.events[5].envelope
     exact(response, {
         protocolVersion = 1,
@@ -541,6 +548,10 @@ do
         expectedRevision = 7,
         count = 2,
     }, "exact levels session request")
+    exact(harness.events[4].completion, {
+        protocolVersion = 1, kind = "survivor_level_gain",
+        levelsGained = 2, apGained = 2,
+    }, "level publication carries one aggregated completion")
     local response = harness.events[5].envelope
     exact(response, {
         protocolVersion = 1,
@@ -566,6 +577,7 @@ do
         expectedRevision = 7,
     }, "exact clear session request")
     equal(harness.events[3].operation, "clearAdvancementSlots", "clear audit operation")
+    equal(harness.events[4].completion, nil, "clear publication has no level completion")
     local response = harness.events[5].envelope
     exact(response, {
         protocolVersion = 1,
@@ -602,6 +614,7 @@ do
         adminBoundary = harness.boundary,
         adminSession = harness.session,
         ownerPublisher = harness.publisher,
+        completionFactory = LevelGainCompletion,
         audit = harness.audit,
         sendServerCommand = function(actor, module, command, envelope)
             harness.events[#harness.events + 1] = { name = "send", envelope = envelope }
@@ -689,6 +702,7 @@ do
         adminBoundary = harness.boundary,
         adminSession = harness.session,
         ownerPublisher = harness.publisher,
+        completionFactory = LevelGainCompletion,
         audit = harness.audit,
         sendServerCommand = function(actor, module, command, envelope)
             harness.events[#harness.events + 1] = { name = "send", envelope = envelope }

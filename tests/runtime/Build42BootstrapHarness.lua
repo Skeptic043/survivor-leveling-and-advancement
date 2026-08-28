@@ -7,10 +7,11 @@ local function check(condition, message)
     evidence.checks = evidence.checks + 1
 end
 
-local function event()
+local function event(name)
     local callbacks, adds = {}, 0
     return {
         Add = function(callback)
+            if evidence ~= nil and evidence.addFailureName == name then error("ambiguous " .. name) end
             adds = adds + 1
             callbacks[#callbacks + 1] = callback
         end,
@@ -26,7 +27,11 @@ local function event()
 end
 
 local function events()
-    return { OnGameStart = event(), OnCreatePlayer = event() }
+    return {
+        OnGameStart = event("OnGameStart"),
+        OnCreatePlayer = event("OnCreatePlayer"),
+        OnNewGame = event("OnNewGame"),
+    }
 end
 
 local function exactOwner(owner)
@@ -81,6 +86,7 @@ if evidence == nil then
         requires = {},
         creates = 0,
         installs = 0,
+        listenerSets = 0,
         serverCalls = 0,
         clientCalls = 0,
         serverValue = false,
@@ -107,6 +113,14 @@ if evidence == nil then
             end
             return { ok = true }
         end)
+        owner.setClientStateListener = function(listener)
+            evidence.listenerSets = evidence.listenerSets + 1
+            evidence.lastListener = listener
+            if listener ~= nil and type(listener) ~= "function" then
+                return { ok = false, code = "invalid_listener", detail = "listener" }
+            end
+            return { ok = true }
+        end
         owner.status = function()
             return { ok = true, mode = mode, installed = true, started = false, ready = false }
         end
@@ -116,8 +130,22 @@ if evidence == nil then
     evidence.lifecycle = {
         create = function(argument)
             evidence.creates = evidence.creates + 1
-            evidence.created = argument
-            evidence.firstCreated = evidence.firstCreated or argument
+            local recorded = {}
+            for key, value in pairs(argument) do recorded[key] = value end
+            if type(argument.pendingNewPlayers) == "table" then
+                recorded.pendingNewPlayers = {}
+                for index = 1, #argument.pendingNewPlayers do
+                    recorded.pendingNewPlayers[index] = argument.pendingNewPlayers[index]
+                end
+            end
+            if type(argument.pendingLocalPlayers) == "table" then
+                recorded.pendingLocalPlayers = {}
+                for slot = 0, 3 do
+                    recorded.pendingLocalPlayers[slot] = argument.pendingLocalPlayers[slot]
+                end
+            end
+            evidence.created = recorded
+            evidence.firstCreated = evidence.firstCreated or recorded
             if evidence.createBehavior == "throw" then error("create boom") end
             if evidence.createBehavior == "malformed_owner" then
                 return { ok = true, owner = { install = function() return { ok = true } end } }
@@ -169,6 +197,7 @@ elseif evidence.phase == 1 then
     check(evidence.serverCalls == 1 and evidence.clientCalls == 1, "first load checks each mode once")
     check(evidence.events.OnGameStart.adds() == 1, "first load adds one game-start resolver")
     check(evidence.events.OnCreatePlayer.adds() == 1, "first load adds one create-player resolver")
+    check(evidence.events.OnNewGame.adds() == 1, "first load adds one new-game resolver")
     check(sentinel.owner.status().mode == "unresolved", "first facade reports unresolved mode")
     check(sentinel.owner.status().installed == true, "first facade reports resolver installation")
     check(sentinel.owner.clientState(0).code == "lifecycle_unresolved", "unresolved facade exposes bounded views")
@@ -181,6 +210,7 @@ elseif evidence.phase == 2 then
     check(evidence.serverCalls == 2 and evidence.clientCalls == 2, "both-false reload checks each mode once")
     check(evidence.events.OnGameStart.adds() == 1, "reload does not duplicate game-start resolver")
     check(evidence.events.OnCreatePlayer.adds() == 1, "reload does not duplicate create-player resolver")
+    check(evidence.events.OnNewGame.adds() == 1, "reload does not duplicate new-game resolver")
     evidence.clientValue = true
     evidence.phase = 3
 elseif evidence.phase == 3 then
@@ -202,6 +232,7 @@ elseif evidence.phase == 3 then
     evidence.serverValue, evidence.clientValue = true, false
     evidence.events.OnGameStart.fire()
     evidence.events.OnCreatePlayer.fire(0, {})
+    evidence.events.OnNewGame.fire({})
     check(evidence.creates == creates, "resolved callbacks are inert")
     check(evidence.serverCalls == serverCalls and evidence.clientCalls == clientCalls, "resolved callbacks do not recheck mode")
     prepareUnresolved(4)
@@ -209,12 +240,48 @@ elseif evidence.phase == 4 then
     local sentinel = rawget(_G, key)
     local facade = sentinel.owner
     check(facade.status().mode == "unresolved", "SP scenario begins unresolved")
+    local firstListener = function() end
+    local liveListener = function() end
+    check(facade.setClientStateListener(firstListener).ok, "unresolved facade accepts early listener")
+    check(facade.setClientStateListener(nil).ok, "unresolved facade clears early listener")
+    local invalidListener = facade.setClientStateListener({})
+    check(invalidListener.ok == false and invalidListener.code == "invalid_listener",
+        "unresolved facade rejects nonfunction listener")
+    check(facade.setClientStateListener(liveListener).ok, "unresolved facade accepts replacement listener")
+    local listenerSets = evidence.listenerSets
     local creates = evidence.creates
-    evidence.events.OnCreatePlayer.fire(0, {})
+    local firstPlayer, livePlayer, splitPlayer = {}, {}, {}
+    evidence.events.OnCreatePlayer.fire(0, firstPlayer)
+    evidence.events.OnCreatePlayer.fire(0, livePlayer)
+    evidence.events.OnCreatePlayer.fire(1, splitPlayer)
     check(evidence.creates == creates, "both-false create-player does not resolve SP")
+    local early = { {}, {}, {}, {}, {} }
+    evidence.events.OnNewGame.fire(early[1])
+    evidence.events.OnNewGame.fire(early[1])
+    evidence.events.OnNewGame.fire(early[2])
+    evidence.events.OnNewGame.fire(early[3])
+    evidence.events.OnNewGame.fire(early[4])
+    evidence.events.OnNewGame.fire(early[5])
     evidence.events.OnGameStart.fire()
     check(evidence.creates == creates + 1, "actual game-start resolves one SP lifecycle")
     check(evidence.created.mode == "single_player", "game-start passes authoritative SP mode")
+    check(#evidence.created.pendingNewPlayers == 4, "SP handoff is capped at four exact objects")
+    check(evidence.created.pendingNewPlayers[1] == early[1]
+        and evidence.created.pendingNewPlayers[4] == early[4], "SP handoff preserves deduplicated object identity")
+    check(evidence.created.pendingLocalPlayers[0] == livePlayer,
+        "SP player handoff keeps the latest exact player per slot")
+    check(evidence.created.pendingLocalPlayers[1] == splitPlayer,
+        "SP player handoff preserves a second local slot")
+    check(evidence.created.pendingLocalPlayers[2] == nil
+        and evidence.created.pendingLocalPlayers[3] == nil,
+        "SP player handoff invents no unobserved slots")
+    check(evidence.listenerSets == listenerSets + 1 and evidence.lastListener == liveListener,
+        "SP resolution hands off the exact latest early listener once")
+    local resolvedListener = function() end
+    check(facade.setClientStateListener(resolvedListener).ok,
+        "resolved facade delegates replacement listener")
+    check(evidence.listenerSets == listenerSets + 2 and evidence.lastListener == resolvedListener,
+        "resolved listener replacement reaches concrete owner once")
     check(facade.status().mode == "single_player", "game-start selects single player")
     evidence.spFacade = facade
     evidence.serverValue, evidence.clientValue = true, false
@@ -237,6 +304,7 @@ elseif evidence.phase == 7 then
     local facade = rawget(_G, key).owner
     check(evidence.events.OnGameStart.adds() == 1 and evidence.events.OnCreatePlayer.adds() == 1,
         "ownership scenario installs exact resolver gates")
+    check(evidence.events.OnNewGame.adds() == 1, "ownership scenario installs new-game resolver gate")
     local creates, serverCalls, clientCalls = evidence.creates, evidence.serverCalls, evidence.clientCalls
     Events = events()
     evidence.clientValue = true
@@ -256,6 +324,7 @@ elseif evidence.phase == 8 then
     check(result.ok == false and result.code == "mode_invalid", "both-true top-level load fails closed")
     check(evidence.events.OnGameStart.adds() == 0 and evidence.events.OnCreatePlayer.adds() == 0,
         "both-true load installs no resolver gates")
+    check(evidence.events.OnNewGame.adds() == 0, "both-true load installs no new-game resolver")
     check(evidence.creates == evidence.createBaseline, "both-true load creates no lifecycle")
     check(evidence.serverCalls == evidence.modeBaselineServer + 1
         and evidence.clientCalls == evidence.modeBaselineClient + 1, "both-true load checks each mode once")
@@ -271,6 +340,7 @@ elseif evidence.phase == 9 then
     check(result.ok == false and result.code == "mode_invalid", "throwing mode top-level load fails closed")
     check(evidence.events.OnGameStart.adds() == 0 and evidence.events.OnCreatePlayer.adds() == 0,
         "throwing mode load installs no resolver gates")
+    check(evidence.events.OnNewGame.adds() == 0, "throwing mode load installs no new-game resolver")
     check(evidence.creates == evidence.createBaseline, "throwing mode load creates no lifecycle")
     check(evidence.serverCalls == evidence.modeBaselineServer + 1
         and evidence.clientCalls == evidence.modeBaselineClient + 1, "throwing mode load calls each resolver once")
@@ -285,6 +355,7 @@ elseif evidence.phase == 10 then
     check(result.ok == false and result.code == "mode_invalid", "malformed mode top-level load fails closed")
     check(evidence.events.OnGameStart.adds() == 0 and evidence.events.OnCreatePlayer.adds() == 0,
         "malformed mode load installs no resolver gates")
+    check(evidence.events.OnNewGame.adds() == 0, "malformed mode load installs no new-game resolver")
     check(evidence.creates == evidence.createBaseline, "malformed mode load creates no lifecycle")
     check(evidence.serverCalls == evidence.modeBaselineServer + 1
         and evidence.clientCalls == evidence.modeBaselineClient + 1, "malformed mode load calls each resolver once")
@@ -336,15 +407,78 @@ elseif evidence.phase == 16 then
     evidence.phase = 17
 elseif evidence.phase == 17 then
     check(rawget(_G, "C10TBootstrapIndexOwner").code == "lifecycle_sentinel_collision", "indexed sentinel collision")
+    prepareUnresolved(18)
+    evidence.addFailureName = "OnGameStart"
+elseif evidence.phase == 18 then
+    local result, facade = rawget(_G, "C18D2BootstrapPartialGameStart"), rawget(_G, key).owner
+    check(result.ok == false and result.code == "event_register_threw" and result.detail == "OnGameStart",
+        "first resolver Add failure is bounded")
+    check(evidence.events.OnGameStart.adds() == 0 and evidence.events.OnCreatePlayer.adds() == 0
+        and evidence.events.OnNewGame.adds() == 0, "first Add failure installs no resolver callback")
+    local creates, serverCalls, clientCalls = evidence.creates, evidence.serverCalls, evidence.clientCalls
+    evidence.clientValue = true
+    check(facade.install().code == "event_register_threw", "first Add failure is terminal")
+    check(evidence.creates == creates and evidence.serverCalls == serverCalls and evidence.clientCalls == clientCalls,
+        "first Add failure never retries resolution")
+    prepareUnresolved(19)
+    evidence.addFailureName = "OnCreatePlayer"
+elseif evidence.phase == 19 then
+    local result = rawget(_G, "C18D2BootstrapPartialCreatePlayer")
+    check(result.ok == false and result.code == "event_register_threw" and result.detail == "OnCreatePlayer",
+        "middle resolver Add failure is bounded")
+    check(evidence.events.OnGameStart.adds() == 1 and evidence.events.OnCreatePlayer.adds() == 0
+        and evidence.events.OnNewGame.adds() == 0, "middle Add failure retains only earlier callback")
+    local creates, serverCalls, clientCalls = evidence.creates, evidence.serverCalls, evidence.clientCalls
+    evidence.clientValue = true
+    evidence.events.OnGameStart.fire()
+    check(evidence.creates == creates and evidence.serverCalls == serverCalls and evidence.clientCalls == clientCalls,
+        "callback before middle Add failure is inert")
+    prepareUnresolved(20)
+    evidence.addFailureName = "OnNewGame"
+elseif evidence.phase == 20 then
+    local result = rawget(_G, "C18D2BootstrapPartialNewGame")
+    check(result.ok == false and result.code == "event_register_threw" and result.detail == "OnNewGame",
+        "last resolver Add failure is bounded")
+    check(evidence.events.OnGameStart.adds() == 1 and evidence.events.OnCreatePlayer.adds() == 1
+        and evidence.events.OnNewGame.adds() == 0, "last Add failure retains only earlier callbacks")
+    local creates, serverCalls, clientCalls = evidence.creates, evidence.serverCalls, evidence.clientCalls
+    evidence.clientValue = true
+    evidence.events.OnGameStart.fire()
+    evidence.events.OnCreatePlayer.fire(0, {})
+    check(evidence.creates == creates and evidence.serverCalls == serverCalls and evidence.clientCalls == clientCalls,
+        "callbacks before last Add failure are inert")
+    evidence.addFailureName = nil
+    evidence.phase = 21
+elseif evidence.phase == 21 then
+    prepareUnresolved(22)
+elseif evidence.phase == 22 then
+    local facade = rawget(_G, key).owner
+    local buffered = {}
+    evidence.events.OnNewGame.fire(buffered)
+    local creates, serverCalls, clientCalls = evidence.creates, evidence.serverCalls, evidence.clientCalls
+    evidence.serverValue, evidence.clientValue = true, true
+    evidence.events.OnGameStart.fire()
+    check(facade.status().failure.code == "mode_invalid", "buffered resolver mode failure is terminal")
+    evidence.serverValue, evidence.clientValue = false, true
+    evidence.events.OnGameStart.fire()
+    evidence.events.OnCreatePlayer.fire(0, buffered)
+    evidence.events.OnNewGame.fire(buffered)
+    check(facade.install().code == "mode_invalid", "terminal buffered resolver cannot retry")
+    check(evidence.creates == creates, "terminal mode failure never hands off buffered object")
+    check(evidence.serverCalls == serverCalls + 1 and evidence.clientCalls == clientCalls + 1,
+        "terminal mode failure performs no later mode or retained-reference work")
+    evidence.phase = 23
+elseif evidence.phase == 23 then
     local required = {
-        "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdminTransport", "SurvivorLevelingAdvancement/Adapters/Build42AdminBoundary", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState",
+        "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdminTransport", "SurvivorLevelingAdvancement/Adapters/Build42AdminBoundary", "SurvivorLevelingAdvancement/Adapters/Build42LevelFeedback", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState", "SurvivorLevelingAdvancement/Runtime/LevelGainCompletion",
         "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog", "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter", "SurvivorLevelingAdvancement/Adapters/Build42NormalizationSnapshot", "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider", "SurvivorLevelingAdvancement/Adapters/Build42SandboxMultiplier", "SurvivorLevelingAdvancement/Adapters/Build42XpPositionArithmetic",
-        "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/Core/PostMax", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/AccountingMode", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Runtime/AdvancementSession", "SurvivorLevelingAdvancement/Runtime/AdminSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
+        "SurvivorLevelingAdvancement/Adapters/Build42InheritanceIdentity", "SurvivorLevelingAdvancement/Adapters/Build42InheritanceWorldStore",
+        "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Persistence/CharacterInheritanceStore", "SurvivorLevelingAdvancement/Persistence/InheritanceRecordStore", "SurvivorLevelingAdvancement/Core/InheritancePolicy", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/Core/PostMax", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/AccountingMode", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Runtime/InheritanceSession", "SurvivorLevelingAdvancement/Runtime/AdvancementSession", "SurvivorLevelingAdvancement/Runtime/AdminSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
     }
     for index = 1, #required do
-        check(evidence.requires[required[index]] == 9, "exact bootstrap require count " .. index)
+        check(evidence.requires[required[index]] == 13, "exact bootstrap require count " .. index)
     end
-    evidence.phase = 18
+    evidence.phase = 24
 end
 
 return evidence.checks

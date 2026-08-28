@@ -18,15 +18,23 @@ end
 
 local function validateModules(m)
     if type(m) ~= "table" then return fail("invalid_modules", "modules must be a table") end
-    local factories = { "Build42PerkCatalog", "Build42WorldSettingsProvider", "Build42SandboxMultiplier", "Build42XpPositionArithmetic", "ServiceComposition" }
+    local factories = {
+        "Build42PerkCatalog", "Build42WorldSettingsProvider", "Build42SandboxMultiplier",
+        "Build42XpPositionArithmetic", "Build42InheritanceWorldStore",
+        "Build42InheritanceIdentity", "ServiceComposition",
+    }
     for _, name in ipairs(factories) do if not surface(m[name], { "create" }) then return fail("invalid_module_" .. name, name .. ".create is required") end end
     if not surface(m.Build42NormalizationSnapshot, { "build" }) then return fail("invalid_module_Build42NormalizationSnapshot", "Build42NormalizationSnapshot.build is required") end
     local surfaces = {
-        { "VanillaProgressionAdapter", { "build", "describe", "inspect" } }, { "StateCodec", { "decode", "encode" } },
+        { "VanillaProgressionAdapter", { "build", "describe", "inspect" } }, { "StateCodec", { "decode", "encode", "fresh" } },
+        { "InheritancePolicy", { "plan" } },
+        { "LevelGainCompletion", { "create", "validate" } },
         { "NaturalLedger", { "baseline", "inspect", "reconcileExternal", "appendTarget", "master", "applySupported" } },
         { "SurvivorEconomy", { "availableAp", "nextLevelCost", "computeAward", "applyXp", "normalizationFromCoreCurve" } }, { "Allotment", { "evaluate" } }, { "PostMax", { "apply" } },
         { "MutationScope", { "begin", "isActive", "finish" } }, { "ActualObservation", { "get", "set", "clearPlayer" } },
-        { "PlayerStateStore", { "create" } }, { "OwnerSnapshot", { "create" } }, { "ApTransaction", { "create" } }, { "SupportedAwardProcessor", { "create" } }, { "WorldSettings", { "create" } }, { "EventDerivedXpSource", { "create" } }, { "OwnerSession", { "create" } },
+        { "PlayerStateStore", { "create" } }, { "CharacterInheritanceStore", { "create" } },
+        { "InheritanceRecordStore", { "create" } }, { "InheritanceSession", { "create" } },
+        { "OwnerSnapshot", { "create" } }, { "ApTransaction", { "create" } }, { "SupportedAwardProcessor", { "create" } }, { "WorldSettings", { "create" } }, { "EventDerivedXpSource", { "create" } }, { "OwnerSession", { "create" } },
     }
     for _, item in ipairs(surfaces) do if not surface(m[item[1]], item[2]) then return fail("invalid_module_" .. item[1], item[1] .. " capabilities are required") end end
     local accounting = rawget(m, "AccountingMode")
@@ -46,7 +54,7 @@ end
 
 local function validateGlobals(g)
     if type(g) ~= "table" then return fail("invalid_globals", "globals must be a table") end
-    for _, name in ipairs({ "PerkFactory", "Perks", "SandboxOptions", "PZMath" }) do
+    for _, name in ipairs({ "PerkFactory", "Perks", "SandboxOptions", "PZMath", "ModData" }) do
         local read, owner = pcall(function() return g[name] end)
         if not read or owner == nil then return fail("missing_global_" .. name, name .. " is required") end
     end
@@ -54,7 +62,12 @@ local function validateGlobals(g)
     local perkRead, perkList = pcall(function() return g.PerkFactory.PerkList end)
     local noneRead, nonePerk = pcall(function() return g.Perks.None end)
     if not perkRead or perkList == nil or not noneRead or nonePerk == nil then return fail("missing_perk_capabilities", "PerkList and None are required") end
-    for _, name in ipairs({ "addXp", "addXpNoMultiplier", "isClient", "instanceof" }) do if type(g[name]) ~= "function" then return fail("missing_global_" .. name, name .. " is required") end end
+    for _, name in ipairs({ "addXp", "addXpNoMultiplier", "isServer", "isClient", "instanceof", "getPlayerByOnlineID" }) do if type(rawget(g, name)) ~= "function" then return fail("missing_global_" .. name, name .. " is required") end end
+    local getRead, getOrCreate = pcall(function() return g.ModData.getOrCreate end)
+    local addRead, add = pcall(function() return g.ModData.add end)
+    if not getRead or type(getOrCreate) ~= "function" or not addRead or type(add) ~= "function" then
+        return fail("missing_global_ModData", "ModData.getOrCreate and ModData.add are required")
+    end
     return nil
 end
 
@@ -70,9 +83,23 @@ end
 
 function Factory.create(dependencies)
     if type(dependencies) ~= "table" then return fail("invalid_dependencies", "dependencies must be a table") end
+    local levelGainSink = rawget(dependencies, "levelGainSink")
+    if levelGainSink ~= nil and type(levelGainSink) ~= "function" then
+        return fail("invalid_dependencies", "levelGainSink must be callable")
+    end
+    if levelGainSink == nil then levelGainSink = function() return { ok = true } end end
     local bad = validateModules(dependencies.modules); if bad then return bad end
     bad = validateGlobals(dependencies.globals); if bad then return bad end
     local m, g = dependencies.modules, dependencies.globals
+    local isServer, isClient, instanceOf = rawget(g, "isServer"), rawget(g, "isClient"), rawget(g, "instanceof")
+    local getPlayerByOnlineID = rawget(g, "getPlayerByOnlineID")
+    local modData = rawget(g, "ModData")
+    local modGetCalled, modGetOrCreate = pcall(function() return modData.getOrCreate end)
+    local modAddCalled, modAdd = pcall(function() return modData.add end)
+    if not modGetCalled or type(modGetOrCreate) ~= "function"
+        or not modAddCalled or type(modAdd) ~= "function" then
+        return fail("missing_global_ModData", "ModData.getOrCreate and ModData.add are required")
+    end
     local created, err = call("Build42PerkCatalog.create", m.Build42PerkCatalog.create, { perkRegistry = g.PerkFactory.PerkList, nonePerk = g.Perks.None, progressionAdapter = m.VanillaProgressionAdapter }); if err then return err end
     local catalog; catalog, err = resultField(created, "catalog", "catalog_create_failed"); if err then return err end
     if type(catalog) ~= "table" or type(catalog.refresh) ~= "function" then return fail("invalid_catalog", "catalog.refresh is required") end
@@ -93,20 +120,45 @@ function Factory.create(dependencies)
     end
     local snapshot; snapshot, err = call("Build42NormalizationSnapshot.build", m.Build42NormalizationSnapshot.build, { catalog = catalog, SurvivorEconomy = m.SurvivorEconomy }); if err then return err end
     local normalization; normalization, err = resultField(snapshot, "normalizationByPerk", "normalization_build_failed"); if err then return err end
-    local providerResult; providerResult, err = call("Build42WorldSettingsProvider.create", m.Build42WorldSettingsProvider.create, { readSandboxVars = function() return g.SandboxVars end }); if err then return err end
-    local provider; provider, err = resultField(providerResult, "provider", "world_provider_create_failed"); if err then return err end
     local singletonRead, singleton = pcall(function() return g.SandboxOptions.instance end)
     if not singletonRead or singleton == nil then return fail("sandbox_options_instance_missing", "SandboxOptions.instance is required") end
+    local providerResult; providerResult, err = call("Build42WorldSettingsProvider.create", m.Build42WorldSettingsProvider.create, {
+        readSandboxVars = function() return g.SandboxVars end,
+        readSandboxOption = function(name)
+            local option = singleton:getOptionByName("SurvivorLevelingAdvancement." .. name)
+            return option ~= nil and option:getValue() or nil
+        end,
+    }); if err then return err end
+    local provider; provider, err = resultField(providerResult, "provider", "world_provider_create_failed"); if err then return err end
     local resolverResult; resolverResult, err = call("Build42SandboxMultiplier.create", m.Build42SandboxMultiplier.create, { SandboxOptions = singleton, PZMath = g.PZMath }); if err then return err end
     local resolver; resolver, err = resultField(resolverResult, "resolver", "sandbox_multiplier_create_failed"); if err then return err end
     local arithmeticResult; arithmeticResult, err = call("Build42XpPositionArithmetic.create", m.Build42XpPositionArithmetic.create, { environment = { globals = g } }); if err then return err end
     local arithmetic; arithmetic, err = resultField(arithmeticResult, "arithmetic", "position_arithmetic_create_failed"); if err then return err end
-    local authority = { describe = function() local ok, client = pcall(g.isClient); if not ok or type(client) ~= "boolean" then return fail("authority_failed", "isClient must return boolean") end; return { ok = true, authoritative = not client } end }
-    local playerIdentity = { isPlayer = function(player) local ok, value = pcall(g.instanceof, player, "IsoPlayer"); return ok and type(value) == "boolean" and value or false end }
+    local authority = { describe = function()
+        local serverCalled, server = pcall(isServer)
+        local clientCalled, client = pcall(isClient)
+        if not serverCalled or not clientCalled or type(server) ~= "boolean"
+            or type(client) ~= "boolean" or (server and client) then
+            return fail("authority_failed", "isServer and isClient must identify authority")
+        end
+        return { ok = true, authoritative = not client }
+    end }
+    local playerIdentity = { isPlayer = function(player) local ok, value = pcall(instanceOf, player, "IsoPlayer"); return ok and type(value) == "boolean" and value or false end }
+    local worldResult; worldResult, err = call("Build42InheritanceWorldStore.create", m.Build42InheritanceWorldStore.create, {
+        getOrCreate = function(name) return modGetOrCreate(name) end,
+        add = function(name, value) return modAdd(name, value) end,
+    }); if err then return err end
+    local inheritanceWorldStore; inheritanceWorldStore, err = resultField(worldResult, "capabilities", "inheritance_world_store_create_failed"); if err then return err end
+    local identityResult; identityResult, err = call("Build42InheritanceIdentity.create", m.Build42InheritanceIdentity.create, {
+        isServer = isServer,
+        isClient = isClient,
+        getPlayerByOnlineID = getPlayerByOnlineID,
+    }); if err then return err end
+    local inheritanceIdentity; inheritanceIdentity, err = resultField(identityResult, "adapter", "inheritance_identity_create_failed"); if err then return err end
     local composition, compositionErr = call("ServiceComposition.create", m.ServiceComposition.create, {
-        StateCodec = m.StateCodec, PlayerStateStore = m.PlayerStateStore, NaturalLedger = m.NaturalLedger, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, PostMax = m.PostMax,
+        StateCodec = m.StateCodec, PlayerStateStore = m.PlayerStateStore, CharacterInheritanceStore = m.CharacterInheritanceStore, InheritanceRecordStore = m.InheritanceRecordStore, InheritanceSession = m.InheritanceSession, InheritancePolicy = m.InheritancePolicy, NaturalLedger = m.NaturalLedger, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, PostMax = m.PostMax, LevelGainCompletion = m.LevelGainCompletion,
         MutationScope = m.MutationScope, ActualObservation = m.ActualObservation, AccountingMode = rawget(m, "AccountingMode"), OwnerSnapshot = m.OwnerSnapshot, ApTransaction = m.ApTransaction, SupportedAwardProcessor = m.SupportedAwardProcessor, WorldSettings = m.WorldSettings, EventDerivedXpSource = m.EventDerivedXpSource, OwnerSession = m.OwnerSession, AdvancementSession = rawget(m, "AdvancementSession"), AdminSession = rawget(m, "AdminSession"),
-        catalog = catalog, worldSettingsProvider = provider, normalizationByPerk = normalization, sandboxMultiplier = resolver, positionArithmetic = arithmetic, environment = { globals = g }, authority = authority, playerIdentity = playerIdentity,
+        catalog = catalog, worldSettingsProvider = provider, normalizationByPerk = normalization, sandboxMultiplier = resolver, positionArithmetic = arithmetic, environment = { globals = g }, authority = authority, playerIdentity = playerIdentity, inheritanceWorldStore = inheritanceWorldStore, inheritanceIdentity = inheritanceIdentity, levelGainSink = levelGainSink,
     }); if compositionErr then return compositionErr end
     local services; services, compositionErr = resultField(composition, "services", "service_composition_failed"); if compositionErr then return compositionErr end
     return { ok = true, runtime = { catalog = catalog, services = services } }

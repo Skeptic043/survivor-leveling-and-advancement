@@ -6,5 +6,9 @@
             Global = 'Build42AdminTransport'
             Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Runtime/Build42AdminTransport.lua'
         }
+        [pscustomobject]@{
+            Global = 'LevelGainCompletion'
+            Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Runtime/LevelGainCompletion.lua'
+        }
     )
 }
