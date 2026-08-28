@@ -4,7 +4,7 @@ Active project folder: `E:\Projects\PZ Mods\Survivor Leveling and Advancement`
 
 ## Scope
 
-- Confine runtime and project modifications to this project folder unless explicitly authorized otherwise. Read-only access is permitted to installed Project Zomboid files and to `../pz-knowledge` for shared PZ research; other sibling mod repositories remain off-limits. Any write to `pz-knowledge` is separate work governed by that repository's own `AGENTS.md`, branch/PR, risk, and review rules and requires current authorization.
+- Confine runtime and project modifications to this project folder unless explicitly authorized otherwise. Read-only access is permitted to installed Project Zomboid files and to `../pz-knowledge` for shared PZ research; other sibling mod repositories remain off-limits. During otherwise-authorized work in this repository, the project orchestrator has standing authorization to make narrowly scoped proposals to `pz-knowledge` without a separate permission prompt, but only on a dedicated branch and under that repository's own `AGENTS.md`, validation, risk, PR, review, and merge rules; this does not authorize pushes to or merges into `pz-knowledge/main`.
 - Do not modify or borrow from `Basekeeper (shelved)` or any other mod.
 - Do not add runtime mod files until the user explicitly lifts the implementation pause.
 
@@ -16,6 +16,7 @@ Active project folder: `E:\Projects\PZ Mods\Survivor Leveling and Advancement`
 - Implementation agents do not browse unrelated executor documents, broaden scope, inspect sibling mods, commit, push, publish, or begin a dependent packet unless their work order explicitly permits it.
 - Use one branch and isolated worktree per implementation packet when Git state exists. Do not run overlapping writers against the same files.
 - The orchestrator independently reviews every returned diff and evidence before integration. A worker report is not acceptance.
+- At the end of any substantial research, debugging, implementation, compatibility, or architecture task involving Project Zomboid behavior, the orchestrator explicitly asks: "Did this work establish, refine, dispute, supersede, or revalidate any generally reusable Project Zomboid knowledge that is not already adequately represented in `pz-knowledge`?" If no, do nothing and do not manufacture a contribution. If yes, inspect the existing shared knowledge first and propose only the reusable knowledge through its governed branch/PR workflow before treating the broader task as fully wrapped up.
 
 ## Canonical documents — orchestrator only
 
