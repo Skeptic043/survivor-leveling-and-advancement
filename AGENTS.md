@@ -11,6 +11,9 @@ Active project folder: `E:\Projects\PZ Mods\Survivor Leveling and Advancement`
 ## Orchestration
 
 - The primary agent is the project orchestrator and owns `.project/`, architecture decisions, work-packet boundaries, integration, and user checkpoints.
+- Any authorized research, debugging, implementation, or validation task that can change `Contents/**` or `tests/**` requires a bounded implementation executor. The primary orchestrator may inspect and review those paths but must not author their changes directly. Applying or staging an executor-returned diff is integration, not permission to revise it; conflicts or corrections in protected paths go back to an executor.
+- A general session default that discourages delegation does not override this repository's explicit executor requirement. Before the first write to a protected path, the orchestrator must dispatch the bounded packet.
+- Keep the repository-local protected-diff hook enabled. A primary-checkout commit that stages `Contents/**` or `tests/**` requires an exact receipt naming a distinct executor and reviewer for that staged diff; never bypass the hook with `--no-verify`.
 - Implementation agents receive one bounded packet with named scope, permitted paths, prerequisites, validation commands, and a factual handoff contract.
 - Implementation agents never read or edit `.project/`. They begin with their named `.agents/packets/<packet-id>.md` brief and follow only the reusable `.agents/contracts/` references named there.
 - Implementation agents do not browse unrelated executor documents, broaden scope, inspect sibling mods, commit, push, publish, or begin a dependent packet unless their work order explicitly permits it.
