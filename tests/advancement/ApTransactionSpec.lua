@@ -60,7 +60,7 @@ end
 
 local function newState(level, spent)
     return {
-        schemaVersion = 1,
+        schemaVersion = 3,
         accountingMode = "Tracked",
         revision = 0,
         survivor = { level = level or 3, xpIntoLevel = 0, spent = spent or 0 },
@@ -81,6 +81,7 @@ local function newPerk(natural, high, targets, perkId)
         highWaterPosition = high or 0,
         activeTargets = targets or {},
         postMaxFullRateUsed = 0,
+        observedPosition = natural or 0,
     }
 end
 
@@ -408,6 +409,7 @@ do
     assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "fresh_one")
     assertEqual(store.current.perks.Axe.naturalPosition, 0)
     assertEqual(store.current.perks.Axe.highWaterPosition, 0)
+    assertEqual(store.current.perks.Axe.observedPosition, 100, "AP commit persists final actual position")
     assertEqual(ActualObservation.get(player, "Axe").position, 100)
     assertSame(request, requestBefore, "request immutable")
     assertSame(globalThree, configBefore, "config immutable")
@@ -460,6 +462,7 @@ do
     assertEqual(player.skills.Axe.position, 450)
     assertEqual(store.current.perks.Axe.naturalPosition, 450)
     assertEqual(store.current.perks.Axe.highWaterPosition, 450)
+    assertEqual(store.current.perks.Axe.observedPosition, 450, "mastery commit persists final actual position")
     assertEqual(#store.current.perks.Axe.activeTargets, 0)
     assertEqual(store.current.survivor.xpIntoLevel, 33)
     assertEqual(store.current.perks.Axe.postMaxFullRateUsed, 12)
@@ -821,6 +824,7 @@ do
     assertFalse(result.addedTarget)
     assertEqual(result.spent, 2)
     assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertEqual(store.current.perks.Axe.observedPosition, 100, "existing-target AP commit persists final actual position")
     assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "original_target")
 end
 
@@ -1036,6 +1040,7 @@ do
     assertEqual(store.current.revision, 1)
     assertEqual(store.current.survivor.spent, 1)
     assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertEqual(store.current.perks.Axe.observedPosition, 100, "crash recovery commit persists final actual position")
     assertFalse(MutationScope.isActive(player, "Axe"))
 end
 
@@ -1062,6 +1067,7 @@ do
     assertEqual(store.current.revision, 1)
     assertEqual(store.current.perks.Axe.naturalPosition, 450)
     assertEqual(store.current.perks.Axe.highWaterPosition, 450)
+    assertEqual(store.current.perks.Axe.observedPosition, 450, "mastery recovery persists final actual position")
     assertEqual(#store.current.perks.Axe.activeTargets, 0)
     assertEqual(store.current.inFlightAdvancement, nil)
     local repeated = service.recover(player)

@@ -367,6 +367,8 @@ do
     assertSame(fixture.arguments.session.accountingMode, fixture.accountingMode, "session accounting-mode identity")
     assertSame(fixture.arguments.session.accountingSettings, fixture.worldSettings.accountingSettings, "session accounting-settings identity")
     assertSame(fixture.arguments.session.catalog, dependencies.catalog, "session catalog identity")
+    assertSame(fixture.arguments.session.NaturalLedger, dependencies.NaturalLedger, "session ledger identity")
+    assertSame(fixture.arguments.session.ActualObservation, dependencies.ActualObservation, "session observation identity")
     assertSame(fixture.arguments.session.xpSource, fixture.source, "session XP source identity")
     assertSame(fixture.arguments.session.ownerSnapshot, fixture.ownerSnapshot, "session snapshot identity")
     assertSame(fixture.arguments.session.inheritanceSession, fixture.inheritanceSession, "owner inheritance-session identity")

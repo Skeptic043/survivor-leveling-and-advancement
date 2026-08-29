@@ -21,10 +21,11 @@ end
 local function validPerk(seed)
     return { adapterId = "adapter", adapterVersion = 1, curveFingerprint = "curve-" .. seed,
         effectiveMaximum = 10, naturalPosition = 4.5, highWaterPosition = 5,
-        activeTargets = { { targetId = "target-1", targetLevel = 6, targetPosition = 5.5 } }, postMaxFullRateUsed = 0 }
+        activeTargets = { { targetId = "target-1", targetLevel = 6, targetPosition = 5.5 } },
+        postMaxFullRateUsed = 0, observedPosition = 5 }
 end
 local function validState()
-    return { schemaVersion = 2, accountingMode = "Tracked", revision = 4, survivor = { level = 2, xpIntoLevel = 3.5, spent = 1 }, perks = { Axe = validPerk("a") }, orphanedPerks = {} }
+    return { schemaVersion = 3, accountingMode = "Tracked", revision = 4, survivor = { level = 2, xpIntoLevel = 3.5, spent = 1 }, perks = { Axe = validPerk("a") }, orphanedPerks = {} }
 end
 local function orphanedState()
     local state = validState()
@@ -49,7 +50,7 @@ local function withReservation(targetLevel, maximum, spent)
     return state
 end
 
-local fresh = C.decode(nil); expect(fresh.ok and fresh.state.schemaVersion == 2 and fresh.state.accountingMode == "Tracked" and fresh.state.revision == 0 and fresh.state.survivor.level == 0 and fresh.state.survivor.earned == nil and fresh.state.writerVersion == nil, "fresh approved shape")
+local fresh = C.decode(nil); expect(fresh.ok and fresh.state.schemaVersion == 3 and fresh.state.accountingMode == "Tracked" and fresh.state.revision == 0 and fresh.state.survivor.level == 0 and fresh.state.survivor.earned == nil and fresh.state.writerVersion == nil, "fresh approved shape")
 local input = validState(); local decoded = C.decode(input); expect(decoded.ok, "decode valid"); decoded.state.perks.Axe.adapterId = "changed"; expect(input.perks.Axe.adapterId == "adapter", "decode deep copy")
 local original = validState(); local encoded = C.encode(original); expect(encoded.ok, "encode valid"); encoded.state.survivor.level = 99; expect(original.survivor.level == 2 and original.perks.Axe.activeTargets[1].targetId == "target-1", "encode retained input deep copy"); local roundTrip = C.decode(original); expect(roundTrip.ok and same(roundTrip.state, C.encode(original).state), "round trip preserves structure")
 bad(12, "invalid_state"); bad({}, "unversioned_state"); local nonempty = { foo = true }; bad(nonempty, "unversioned_state")
@@ -65,11 +66,15 @@ local removedEpoch = validState(); removedEpoch.perks.Axe.postMaxEpoch = 0; bad(
 local schemaString = validState(); schemaString.schemaVersion = "0"; bad(schemaString, "invalid_state")
 local schemaFraction = validState(); schemaFraction.schemaVersion = 0.5; bad(schemaFraction, "invalid_state")
 local schemaNegative = validState(); schemaNegative.schemaVersion = -1; bad(schemaNegative, "invalid_state")
-local newer = validState(); newer.schemaVersion = 3; local newerResult = C.decode(newer); expect(not newerResult.ok and newerResult.code == "newer_schema" and newer.schemaVersion == 3, "newer schema preserves raw")
-local legacy = validState(); legacy.schemaVersion = 0; legacy.accountingMode = nil; legacy.old = true; local migrated = C.decode(legacy, { schemaMigrations = { [0] = function(raw) raw.schemaVersion = 1; raw.old = nil; return raw end } }); expect(migrated.ok and migrated.state.accountingMode == "Tracked" and migrated.state.schemaVersion == 2, "consecutive migration")
+local newer = validState(); newer.schemaVersion = 4; local newerResult = C.decode(newer); expect(not newerResult.ok and newerResult.code == "newer_schema" and newer.schemaVersion == 4, "newer schema preserves raw")
+local legacy = validState(); legacy.schemaVersion = 0; legacy.accountingMode = nil; legacy.old = true; local migrated = C.decode(legacy, { schemaMigrations = { [0] = function(raw) raw.schemaVersion = 1; raw.old = nil; return raw end } }); expect(migrated.ok and migrated.state.accountingMode == "Tracked" and migrated.state.schemaVersion == 3, "consecutive migration")
 bad(legacy, "missing_schema_migration"); local skip = C.decode(legacy, { schemaMigrations = { [0] = function(raw) raw.schemaVersion = 2; return raw end } }); expect(not skip.ok and skip.code == "schema_migration_not_consecutive", "skip migration")
 
 local v1 = validState(); v1.schemaVersion = 1; v1.accountingMode = nil; local v1Migrated = C.decode(v1); expect(v1Migrated.ok and v1Migrated.state.accountingMode == "Tracked" and v1Migrated.state.perks.Axe.adapterId == "adapter" and v1.accountingMode == nil, "v1 migration is internal and detached")
+local v2 = validState(); v2.schemaVersion = 2; v2.perks.Axe.observedPosition = nil
+local v2Migrated = C.decode(v2)
+expect(v2Migrated.ok and v2Migrated.state.schemaVersion == 3 and v2Migrated.state.perks.Axe.observedPosition == nil
+    and v2.schemaVersion == 2, "v2 migration is detached and does not invent an observation")
 local invalidMode = validState(); invalidMode.accountingMode = "Global"; bad(invalidMode, "invalid_state")
 local missingMode = validState(); missingMode.accountingMode = nil; bad(missingMode, "invalid_state")
 local freeWithPerks = validState(); freeWithPerks.accountingMode = "Free"; local freeRoundTrip = C.decode(freeWithPerks); expect(freeRoundTrip.ok and freeRoundTrip.state.accountingMode == "Free" and freeRoundTrip.state.perks.Axe ~= nil, "free state retains frozen maps")
@@ -98,6 +103,8 @@ local levelOrder = validState(); levelOrder.perks.Axe.activeTargets[2] = { targe
 local positionOrder = validState(); positionOrder.perks.Axe.activeTargets[2] = { targetId = "target-2", targetLevel = 7, targetPosition = 5.5 }; bad(positionOrder, "invalid_perk")
 local aboveMaximum = validState(); aboveMaximum.perks.Axe.activeTargets[1].targetLevel = 11; bad(aboveMaximum, "invalid_target")
 local high = validState(); high.perks.Axe.highWaterPosition = 4; bad(high, "invalid_perk")
+local negativeObservation = validState(); negativeObservation.perks.Axe.observedPosition = -1; bad(negativeObservation, "invalid_perk")
+local missingObservation = validState(); missingObservation.perks.Axe.observedPosition = nil; expect(C.decode(missingObservation).ok, "observation remains optional")
 local orderedA = validState(); orderedA.perks.B = validPerk("b"); local orderedB = validState(); orderedB.perks = {}; orderedB.perks.B = validPerk("b"); orderedB.perks.Axe = validPerk("a"); expect(same(C.encode(orderedA).state, C.encode(orderedB).state), "map insertion order preserves structure")
 local negativeZero = validState(); negativeZero.perks.Axe.postMaxFullRateUsed = -0.0; local positiveZero = validState(); positiveZero.perks.Axe.postMaxFullRateUsed = 0; expect(C.encode(negativeZero).state.perks.Axe.postMaxFullRateUsed == C.encode(positiveZero).state.perks.Axe.postMaxFullRateUsed, "signed zero preserves numeric equality")
 local ordinaryReserved = withReservation(6, 10, 2); expect(C.decode(ordinaryReserved).ok, "ordinary reservation accepts preSpent plus one")
@@ -107,6 +114,6 @@ local masteryWrongSpent = withReservation(10, 10, 2); bad(masteryWrongSpent, "in
 local freeFinal = withReservation(10, 10, 3); freeFinal.accountingMode = "Free"; expect(C.decode(freeFinal).ok, "free final reservation costs two")
 local freeFinalWrongSpent = withReservation(10, 10, 2); freeFinalWrongSpent.accountingMode = "Free"; bad(freeFinalWrongSpent, "invalid_in_flight_advancement")
 local noCostField = withReservation(10, 10, 1); noCostField.inFlightAdvancement.apCost = 2; bad(noCostField, "invalid_in_flight_advancement")
-expect(C.SCHEMA_VERSION == 2, "accounting mode publishes schema v2")
+expect(C.SCHEMA_VERSION == 3, "mod-off reconciliation publishes schema v3")
 
 return assertions

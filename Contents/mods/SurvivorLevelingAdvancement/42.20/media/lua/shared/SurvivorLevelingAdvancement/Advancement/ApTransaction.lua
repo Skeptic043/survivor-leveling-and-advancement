@@ -296,6 +296,7 @@ local function synchronizeObservation(deps, player, perkId, state, record, actua
     end
     local nextRecord, recordError = applyLedger(record, reconciled.state)
     if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
+    nextRecord.observedPosition = actualPosition
     local nextState, stateError = cloneValue(state)
     if not nextState then return failure("invalid_state", stateError) end
     nextState.perks[perkId] = nextRecord
@@ -477,6 +478,7 @@ local function recoverLoaded(deps, player, state)
     if not free then
         local committedRecord, recordError = applyLedger(record, ledgerResult.state)
         if not committedRecord then return failure("recovery_quarantined", "record_" .. recordError) end
+        committedRecord.observedPosition = reservation.targetPosition
         committed.perks[reservation.perkId] = committedRecord
     end
     committed.survivor.spent = reservation.preSpent + apCost
@@ -796,6 +798,7 @@ function ApTransaction.create(dependencies)
         if not committed then return failure("commit_save_failed", commitError) end
         local committedRecord, recordError = applyLedger(record, ledgerResult.state)
         if not committedRecord then return failure("commit_save_failed", recordError) end
+        committedRecord.observedPosition = actual.nextTargetPosition
         committed.perks[request.perkId] = committedRecord
         committed.survivor.spent = state.survivor.spent + apCost
         committed.revision = state.revision + 1
