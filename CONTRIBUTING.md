@@ -2,7 +2,7 @@
 
 Thank you for helping improve Survivor Leveling & Advancement.
 
-The project is still in pre-implementation preparation. Contribution guidance will expand once the first testable build exists.
+The project is in release preparation. Contributions should preserve the documented progression contracts and include deterministic coverage at the narrowest useful unit and integration boundaries.
 
 ## Expectations
 

@@ -411,7 +411,7 @@ local function recoverLoaded(deps, player, state)
 
     local free = state.accountingMode == "Free"
     local record
-    local mastered = false
+    local mastered = reservation.targetLevel == reservation.effectiveMaximum
     local ledgerResult
     local addedTarget = false
     if not free then
@@ -427,7 +427,6 @@ local function recoverLoaded(deps, player, state)
             record = perkFromBaseline(identity, baseline.state)
         end
 
-        mastered = reservation.targetLevel == reservation.effectiveMaximum
         if mastered then
             local ledgerInspection = deps.NaturalLedger.inspect(ledgerFromPerk(record))
             if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
@@ -499,7 +498,7 @@ local function recoverLoaded(deps, player, state)
         apCost = apCost,
         mastered = mastered,
         addedTarget = addedTarget,
-        clearedTargetIds = mastered and ledgerResult.effect.clearedTargetIds or {},
+        clearedTargetIds = not free and mastered and ledgerResult.effect.clearedTargetIds or {},
         xpWriteInvoked = ensured.xpWriteInvoked,
         levelWriteInvoked = ensured.levelWriteInvoked,
     }
@@ -673,7 +672,7 @@ function ApTransaction.create(dependencies)
                 spent = committed.survivor.spent,
                 availableAp = committed.survivor.level - committed.survivor.spent,
                 apCost = apCost,
-                mastered = false,
+                mastered = apCost == 2,
                 addedTarget = false,
                 clearedTargetIds = {},
                 xpWriteInvoked = ensured.xpWriteInvoked,
