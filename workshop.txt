@@ -1,4 +1,5 @@
 version=1
+id=3792412209
 title=Survivor Leveling & Advancement [B42]
 description=[h1]Survivor Leveling & Advancement[/h1]
 description=Level your skills through normal play while at the same time progressing your Survivor Level, acquiring Advancement Points to boost your progress while keeping natural skill progression important.
@@ -55,5 +56,5 @@ description=Mod ID: SurvivorLevelingAdvancement
 description=Target: Project Zomboid Build 42.20 content track
 description=License: MIT
 description=[url=https://github.com/Skeptic043/survivor-leveling-and-advancement]Source and issue tracker[/url]
-tags=Build 42;Interface;Multiplayer;Skills
+tags=Build 42;Balance;Interface;Multiplayer;Skills
 visibility=friendsOnly
