@@ -1,7 +1,7 @@
 local InheritanceSession = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
-local STATE_SCHEMA_VERSION = 2
+local STATE_SCHEMA_VERSION = 3
 
 local function failure(code, detail, committed)
     local result = { ok = false, code = code, detail = detail }

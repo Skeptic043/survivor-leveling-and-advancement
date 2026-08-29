@@ -40,7 +40,7 @@ end
 
 local function freshState()
     return {
-        schemaVersion = 1,
+        schemaVersion = 3,
         accountingMode = "Tracked",
         revision = 0,
         survivor = { level = 0, xpIntoLevel = 0, spent = 0 },
@@ -64,6 +64,7 @@ local function perkRecord(natural, highWater, targets, postMaxUsed, overrides)
         highWaterPosition = highWater,
         activeTargets = targets or {},
         postMaxFullRateUsed = postMaxUsed or 0,
+        observedPosition = natural,
     }
     if overrides then
         for key, value in pairs(overrides) do record[key] = value end
@@ -585,6 +586,7 @@ do
     expect(result.stateWritten, "fresh bootstrap writes")
     equal(env.store.state.perks.Aiming.naturalPosition, 10, "fresh bootstrap natural position")
     equal(env.store.state.perks.Aiming.highWaterPosition, 10, "fresh bootstrap high water")
+    equal(env.store.state.perks.Aiming.observedPosition, 10, "fresh bootstrap persists final actual position")
     equal(env.store.state.revision, 0, "fresh bootstrap does not increment revision")
     equal(env.observation.peek(env.player, "Aiming"), 10, "fresh bootstrap sets observation")
     expect(result.state == nil and result.perkState == nil, "result omits persisted state")
@@ -605,6 +607,7 @@ do
     equal(result.naturalEligibleBase, 2, "first supported award after clear remains naturally eligible")
     equal(env.store.state.perks.Aiming.naturalPosition, 720.5, "post-clear award advances natural position")
     equal(env.store.state.perks.Aiming.highWaterPosition, 720.5, "post-clear award advances high water")
+    equal(env.store.state.perks.Aiming.observedPosition, 720.5, "supported movement persists final actual position")
     equal(env.observation.peek(env.player, "Aiming"), 720.5, "post-clear award establishes new observation")
 end
 
@@ -646,6 +649,7 @@ do
     equal(#crossingResult.clearedTargetIds, 1, "external crossing reports cleared target")
     equal(crossingResult.clearedTargetIds[1], "boost-1", "external crossing target order")
     equal(crossingResult.survivorXp, 0, "external crossing grants no Survivor XP")
+    equal(crossing.store.state.perks.Aiming.observedPosition, 10, "external reconciliation persists current actual position")
 
     state = freshState()
     state.perks.Aiming = perkRecord(20, 20)

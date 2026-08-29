@@ -46,8 +46,18 @@ local function contains(value, sought, seen)
     return false
 end
 
+local function trackedRecord(observedPosition, targets)
+    local record = {
+        adapterId = "fixture", adapterVersion = 1, curveFingerprint = "curve",
+        effectiveMaximum = 10, naturalPosition = 10, highWaterPosition = 10,
+        activeTargets = targets or {}, postMaxFullRateUsed = 0,
+    }
+    if observedPosition ~= nil then record.observedPosition = observedPosition end
+    return record
+end
+
 local function fixture(overrides)
-    local calls, loads = {}, {}
+    local calls, loads, saves, positions, observations = {}, {}, {}, {}, {}
     local state = { accountingMode = "Tracked", revision = 3, survivor = { level = 0, xpIntoLevel = 0, spent = 0, private = "private survivor" }, perks = { Axe = { private = "private perk" } }, private = "private root" }
     local recoveredState = { accountingMode = "Tracked", revision = 4, survivor = { level = 0, xpIntoLevel = 0, spent = 0 }, perks = {}, private = "recovered private" }
     local options = { loadedPerks = { Axe = { private = "compatibility" } } }
@@ -58,6 +68,11 @@ local function fixture(overrides)
             calls[#calls + 1] = "load"
             loads[#loads + 1] = { player = actualPlayer, options = actualOptions }
             return { ok = true, state = state }
+        end,
+        save = function(actualPlayer, actualState)
+            calls[#calls + 1] = "save"
+            saves[#saves + 1] = { player = actualPlayer, state = actualState }
+            return { ok = true }
         end,
     }
     local recovery = {
@@ -92,6 +107,14 @@ local function fixture(overrides)
     end
     local catalog = {
         resolver = { loadOptions = options },
+        positionReader = {
+            read = function(actualPlayer, perkId)
+                calls[#calls + 1] = "read:" .. tostring(perkId)
+                local position = positions[perkId]
+                if position == nil then return { ok = false, code = "unresolved", detail = "fixture" } end
+                return { ok = true, position = position }
+            end,
+        },
         allPerks = function()
             calls[#calls + 1] = "catalog"
             return { ok = true, perks = perks }
@@ -116,23 +139,35 @@ local function fixture(overrides)
             return { ok = true, outcome = "existing", survivorLevel = 0, consumed = false }
         end,
     }
-    local dependencies = { store = store, recoveryService = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot, inheritanceSession = inheritanceSession }
-    if overrides then overrides(dependencies, { calls = calls, loads = loads, state = state, recoveredState = recoveredState, options = options, perks = perks, player = player, store = store, recovery = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot }) end
+    local actualObservation = {
+        set = function(actualPlayer, perkId, position)
+            calls[#calls + 1] = "observe:" .. tostring(perkId)
+            observations[perkId] = position
+            return { ok = true }
+        end,
+    }
+    local dependencies = { store = store, recoveryService = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, NaturalLedger = NaturalLedger, ActualObservation = actualObservation, xpSource = xpSource, ownerSnapshot = ownerSnapshot, inheritanceSession = inheritanceSession }
+    local values = { calls = calls, loads = loads, saves = saves, positions = positions, observations = observations, state = state, recoveredState = recoveredState, options = options, perks = perks, player = player, store = store, recovery = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot, ActualObservation = actualObservation }
+    if overrides then overrides(dependencies, values) end
     local created = OwnerSession.create(dependencies)
     expectEqual(created.ok, true, "session creates")
-    return created.session, dependencies, { calls = calls, loads = loads, state = state, recoveredState = recoveredState, options = options, perks = perks, player = player, store = store, recovery = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot }
+    return created.session, dependencies, values
 end
 
 failure(OwnerSession.create(nil), "invalid_dependencies", "dependencies must be a table")
 failure(OwnerSession.create({}), "invalid_dependencies", "store.load is required")
-failure(OwnerSession.create({ store = { load = function() end } }), "invalid_dependencies", "recoveryService.recoverLoadedState is required")
-local creationDependencies = { store = { load = function() end }, recoveryService = { recoverLoadedState = function() end } }
+failure(OwnerSession.create({ store = { load = function() end } }), "invalid_dependencies", "store.save is required")
+local creationDependencies = { store = { load = function() end, save = function() end }, recoveryService = { recoverLoadedState = function() end } }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingMode.synchronizeLoaded is required")
 creationDependencies.accountingMode = { synchronizeLoaded = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingSettings.resolve is required")
 creationDependencies.accountingSettings = { resolve = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "catalog capabilities are required")
-creationDependencies.catalog = { allPerks = function() end, resolver = { loadOptions = {} } }
+creationDependencies.catalog = { allPerks = function() end, resolver = { loadOptions = {} }, positionReader = { read = function() end } }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "NaturalLedger.reconcileExternal is required")
+creationDependencies.NaturalLedger = { reconcileExternal = function() end }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "ActualObservation.set is required")
+creationDependencies.ActualObservation = { set = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "xpSource.initializePlayer is required")
 creationDependencies.xpSource = { initializePlayer = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "ownerSnapshot.project is required")
@@ -224,6 +259,138 @@ do
     expectEqual(snapshot.snapshot.sequence, 2, "subsequent sequence")
     expectEqual(snapshot.recovered, nil, "subsequent result has no recovery field")
     expectEqual(snapshot.initialized, nil, "subsequent result has no initialization field")
+end
+
+
+do
+    local session, _, values = fixture(function(dependencies, fixtureValues)
+        fixtureValues.recoveredState.perks.Axe = trackedRecord(nil, {
+            { targetId = "one", targetLevel = 2, targetPosition = 20 },
+        })
+        fixtureValues.positions.Axe = 25
+        dependencies.ownerSnapshot.project = function(actualState, sequence, ready)
+            fixtureValues.calls[#fixtureValues.calls + 1] = "project"
+            local record = actualState.perks.Axe
+            return { ok = true, snapshot = {
+                protocolVersion = 1, sequence = sequence, ready = ready,
+                observedPosition = record.observedPosition, naturalPosition = record.naturalPosition,
+                highWaterPosition = record.highWaterPosition, activeCount = #record.activeTargets,
+                survivorXp = actualState.survivor.xpIntoLevel,
+            } }
+        end
+    end)
+    local ready = session.ready(values.player)
+    expectEqual(ready.ok, true, "migrated first readiness succeeds")
+    sequenceEquals(values.calls, {
+        "load", "recover", "settings", "synchronize", "catalog", "read:Axe", "save", "observe:Axe", "initialize", "project",
+    }, "readiness reconciliation precedes XP initialization and publication")
+    expectEqual(#values.saves, 1, "first observation writes once")
+    expectEqual(values.saves[1].state.perks.Axe.observedPosition, 25, "first observation establishes current baseline")
+    expectEqual(values.saves[1].state.perks.Axe.naturalPosition, 10, "first observation does not move natural ledger")
+    expectEqual(values.saves[1].state.perks.Axe.highWaterPosition, 10, "first observation does not move high water")
+    expectEqual(#values.saves[1].state.perks.Axe.activeTargets, 1, "first observation clears no target")
+    expectEqual(ready.snapshot.activeCount, 1, "first baseline is reflected in immediate snapshot")
+    expectEqual(ready.snapshot.survivorXp, 0, "first baseline grants no Survivor XP")
+    expectEqual(ready.completion, nil, "first baseline emits no completion")
+end
+
+do
+    local session, _, values = fixture(function(dependencies, fixtureValues)
+        fixtureValues.recoveredState.perks.Axe = trackedRecord(10, {
+            { targetId = "one", targetLevel = 2, targetPosition = 20 },
+            { targetId = "two", targetLevel = 3, targetPosition = 30 },
+        })
+        fixtureValues.recoveredState.perks.Axe.postMaxFullRateUsed = 7
+        fixtureValues.positions.Axe = 35
+        dependencies.ownerSnapshot.project = function(actualState, sequence, ready)
+            fixtureValues.calls[#fixtureValues.calls + 1] = "project"
+            local record = actualState.perks.Axe
+            return { ok = true, snapshot = {
+                protocolVersion = 1, sequence = sequence, ready = ready,
+                naturalPosition = record.naturalPosition, highWaterPosition = record.highWaterPosition,
+                activeCount = #record.activeTargets, survivorXp = actualState.survivor.xpIntoLevel,
+            } }
+        end
+    end)
+    local ready = session.ready(values.player)
+    expectEqual(ready.ok, true, "positive mod-off reconciliation succeeds")
+    local record = values.saves[1].state.perks.Axe
+    expectEqual(record.naturalPosition, 35, "positive mod-off delta advances natural position")
+    expectEqual(record.highWaterPosition, 35, "positive mod-off delta advances high water")
+    expectEqual(record.observedPosition, 35, "positive mod-off delta persists observation")
+    expectEqual(#record.activeTargets, 0, "positive mod-off delta clears every crossed target")
+    expectEqual(record.postMaxFullRateUsed, 7, "positive mod-off delta grants no post-maximum credit")
+    expectEqual(ready.snapshot.activeCount, 0, "cleared targets reach immediate snapshot")
+    expectEqual(ready.snapshot.survivorXp, 0, "positive mod-off delta grants no Survivor XP")
+    expectEqual(ready.completion, nil, "positive mod-off delta emits no completion")
+end
+
+do
+    local session, _, values = fixture(function(_, fixtureValues)
+        local record = trackedRecord(20, {
+            { targetId = "one", targetLevel = 2, targetPosition = 30 },
+        })
+        record.naturalPosition, record.highWaterPosition = 20, 20
+        fixtureValues.recoveredState.perks.Axe = record
+        fixtureValues.positions.Axe = 10
+    end)
+    local ready = session.ready(values.player)
+    expectEqual(ready.ok, true, "negative mod-off reconciliation succeeds")
+    local record = values.saves[1].state.perks.Axe
+    expectEqual(record.naturalPosition, 10, "negative mod-off delta lowers natural position")
+    expectEqual(record.highWaterPosition, 20, "negative mod-off delta preserves high water")
+    expectEqual(record.observedPosition, 10, "negative mod-off delta persists observation")
+    expectEqual(#record.activeTargets, 1, "negative mod-off delta clears no target")
+    expectEqual(ready.completion, nil, "negative mod-off delta emits no completion")
+end
+
+do
+    local session, _, values = fixture(function(_, fixtureValues)
+        fixtureValues.recoveredState.perks.Axe = trackedRecord(10)
+        fixtureValues.positions.Axe = 10
+    end)
+    expectEqual(session.ready(values.player).ok, true, "same-position readiness succeeds")
+    expectEqual(session.ready(values.player).ok, true, "repeated same-position readiness succeeds")
+    expectEqual(#values.saves, 0, "same-position readiness avoids an unnecessary write")
+    expectEqual(values.observations.Axe, 10, "same-position readiness seeds process-local observation")
+end
+
+do
+    local session, _, values = fixture(function(dependencies, fixtureValues)
+        fixtureValues.recoveredState.perks.Axe = trackedRecord(10, {
+            { targetId = "axe", targetLevel = 2, targetPosition = 20 },
+        })
+        fixtureValues.recoveredState.perks.Fitness = trackedRecord(10, {
+            { targetId = "fitness", targetLevel = 2, targetPosition = 20 },
+        })
+        fixtureValues.positions.Fitness = 25
+        dependencies.catalog.positionReader.read = function(actualPlayer, perkId)
+            fixtureValues.calls[#fixtureValues.calls + 1] = "read:" .. tostring(perkId)
+            if perkId == "Axe" then return { ok = true, position = math.huge } end
+            return { ok = true, position = fixtureValues.positions[perkId] }
+        end
+    end)
+    expectEqual(session.ready(values.player).ok, true, "failed perk inspection is isolated")
+    expectEqual(#values.saves, 1, "mixed readiness persists valid changes once")
+    expectEqual(values.saves[1].state.perks.Axe.observedPosition, 10, "invalid perk remains unchanged")
+    expectEqual(#values.saves[1].state.perks.Axe.activeTargets, 1, "invalid perk remains uncredited")
+    expectEqual(values.saves[1].state.perks.Fitness.observedPosition, 25, "unrelated valid perk persists observation")
+    expectEqual(#values.saves[1].state.perks.Fitness.activeTargets, 0, "unrelated valid perk still reconciles")
+    expectEqual(values.observations.Axe, nil, "invalid perk does not seed an observation")
+    expectEqual(values.observations.Fitness, 25, "valid perk seeds an observation")
+end
+
+do
+    local session, _, values = fixture(function(_, fixtureValues)
+        fixtureValues.accountingSettings.mode = "Free"
+        fixtureValues.recoveredState.accountingMode = "Free"
+        fixtureValues.recoveredState.perks.Axe = trackedRecord(10)
+        fixtureValues.positions.Axe = 25
+    end)
+    expectEqual(session.ready(values.player).ok, true, "Free readiness succeeds")
+    expectEqual(#values.saves, 0, "Free readiness creates no tracked write")
+    expectEqual(values.observations.Axe, nil, "Free readiness seeds no tracked observation")
+    expectEqual(values.recoveredState.perks.Axe.observedPosition, 10, "Free readiness leaves frozen history intact")
 end
 
 do

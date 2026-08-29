@@ -623,8 +623,14 @@ function SupportedAwardProcessor.create(dependencies)
         end
         if not accounting.ok then return accounting end
         appendCleared(clearedTargetIds, accounting.clearedTargetIds)
-        state.perks[award.perkId] = accounting.record
         stateChanged = stateChanged or accounting.changed
+        if stateChanged and accounting.record.observedPosition ~= award.actualPositionAfter then
+            local observedRecord, observedError = cloneValue(accounting.record)
+            if not observedRecord then return failure("perk_quarantined", "record_" .. observedError) end
+            observedRecord.observedPosition = award.actualPositionAfter
+            accounting.record = observedRecord
+        end
+        state.perks[award.perkId] = accounting.record
 
         local survivorXp = accounting.naturalAward.survivorXp + accounting.postMaxXp
         if not isFinite(survivorXp) or survivorXp < 0 then

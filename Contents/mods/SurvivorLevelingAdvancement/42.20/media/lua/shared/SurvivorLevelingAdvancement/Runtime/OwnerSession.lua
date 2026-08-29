@@ -44,6 +44,53 @@ local function denseArray(value)
     return true
 end
 
+local function cloneValue(value, seen)
+    local valueType = type(value)
+    if valueType == "nil" or valueType == "boolean" or valueType == "number" or valueType == "string" then
+        return value
+    end
+    if valueType ~= "table" then return nil end
+    seen = seen or {}
+    if seen[value] then return nil end
+    seen[value] = true
+    local copy = {}
+    for key, child in pairs(value) do
+        local copiedKey = cloneValue(key, seen)
+        local copiedChild = cloneValue(child, seen)
+        if copiedKey == nil or copiedChild == nil then seen[value] = nil; return nil end
+        copy[copiedKey] = copiedChild
+    end
+    seen[value] = nil
+    return copy
+end
+
+local function sortedKeys(map)
+    local keys = {}
+    for key in pairs(map) do keys[#keys + 1] = key end
+    table.sort(keys)
+    return keys
+end
+
+local function ledgerFromPerk(record)
+    return {
+        naturalPosition = record.naturalPosition,
+        highWaterPosition = record.highWaterPosition,
+        activeTargets = record.activeTargets,
+    }
+end
+
+local function recordAtPosition(record, ledger, position)
+    local copy = cloneValue(record)
+    if copy == nil then return nil end
+    if ledger ~= nil then
+        copy.naturalPosition = ledger.naturalPosition
+        copy.highWaterPosition = ledger.highWaterPosition
+        copy.activeTargets = ledger.activeTargets
+    end
+    copy.observedPosition = position
+    return copy
+end
+
 local function successful(result)
     return type(result) == "table" and rawget(result, "ok") == true
 end
@@ -173,6 +220,9 @@ function OwnerSession.create(dependencies)
     if type(store) ~= "table" or type(store.load) ~= "function" then
         return failure("invalid_dependencies", "store.load is required")
     end
+    if type(store.save) ~= "function" then
+        return failure("invalid_dependencies", "store.save is required")
+    end
     local recoveryService = dependencies.recoveryService
     if type(recoveryService) ~= "table" or type(recoveryService.recoverLoadedState) ~= "function" then
         return failure("invalid_dependencies", "recoveryService.recoverLoadedState is required")
@@ -187,8 +237,17 @@ function OwnerSession.create(dependencies)
     end
     local catalog = dependencies.catalog
     if type(catalog) ~= "table" or type(catalog.allPerks) ~= "function"
-        or type(catalog.resolver) ~= "table" or type(catalog.resolver.loadOptions) ~= "table" then
+        or type(catalog.resolver) ~= "table" or type(catalog.resolver.loadOptions) ~= "table"
+        or type(catalog.positionReader) ~= "table" or type(catalog.positionReader.read) ~= "function" then
         return failure("invalid_dependencies", "catalog capabilities are required")
+    end
+    local NaturalLedger = dependencies.NaturalLedger
+    if type(NaturalLedger) ~= "table" or type(NaturalLedger.reconcileExternal) ~= "function" then
+        return failure("invalid_dependencies", "NaturalLedger.reconcileExternal is required")
+    end
+    local ActualObservation = dependencies.ActualObservation
+    if type(ActualObservation) ~= "table" or type(ActualObservation.set) ~= "function" then
+        return failure("invalid_dependencies", "ActualObservation.set is required")
     end
     local xpSource = dependencies.xpSource
     if type(xpSource) ~= "table" or type(xpSource.initializePlayer) ~= "function" then
@@ -228,6 +287,71 @@ function OwnerSession.create(dependencies)
             return nil, failure("snapshot_invalid", "ownerSnapshot.project")
         end
         return projected.snapshot
+    end
+
+    local function reconcileReadiness(player, state)
+        if state.accountingMode ~= "Tracked" then return state, nil end
+
+        local candidate = state
+        local changed = false
+        local seeds = {}
+        local perkIds = sortedKeys(state.perks)
+        for index = 1, #perkIds do
+            local perkId = perkIds[index]
+            local record = state.perks[perkId]
+            local readCalled, readResult = pcall(catalog.positionReader.read, player, perkId)
+            if readCalled and successful(readResult) and finiteNonnegative(rawget(readResult, "position"))
+                and type(record) == "table"
+                and (record.observedPosition == nil or finiteNonnegative(record.observedPosition)) then
+                local position = readResult.position
+                local nextRecord
+                if record.observedPosition == nil then
+                    nextRecord = recordAtPosition(record, nil, position)
+                elseif record.observedPosition ~= position then
+                    local reconciledCalled, reconciled = pcall(
+                        NaturalLedger.reconcileExternal,
+                        ledgerFromPerk(record),
+                        position - record.observedPosition,
+                        position
+                    )
+                    if reconciledCalled and successful(reconciled) and type(reconciled.state) == "table" then
+                        nextRecord = recordAtPosition(record, reconciled.state, position)
+                    end
+                end
+
+                if nextRecord ~= nil then
+                    if not changed then
+                        candidate = cloneValue(state)
+                        if candidate == nil then return nil, failure("readiness_reconciliation_invalid", "state clone") end
+                        changed = true
+                    end
+                    candidate.perks[perkId] = nextRecord
+                end
+                if nextRecord ~= nil or record.observedPosition == position then
+                    seeds[#seeds + 1] = { perkId = perkId, position = position }
+                end
+            end
+        end
+
+        if changed then
+            local saved, saveFailure, saveResult = call(store.save, player, candidate)
+            if saved == nil then
+                return nil, dependencyFailure("readiness_reconciliation_save", saveFailure, saveResult)
+            end
+        end
+        for index = 1, #seeds do
+            local seed = seeds[index]
+            local observed, observationFailure, observationResult = call(
+                ActualObservation.set,
+                player,
+                seed.perkId,
+                seed.position
+            )
+            if observed == nil then
+                return nil, dependencyFailure("readiness_observation", observationFailure, observationResult)
+            end
+        end
+        return candidate, nil
     end
 
     function session.ready(player)
@@ -271,6 +395,10 @@ function OwnerSession.create(dependencies)
         local catalogResult, catalogFailure, failedCatalogResult = call(catalog.allPerks)
         if catalogResult == nil then return dependencyFailure("catalog", catalogFailure, failedCatalogResult) end
         if not denseArray(catalogResult.perks) then return failure("catalog_invalid", "catalog.allPerks") end
+
+        local reconciledState, reconciliationFailure = reconcileReadiness(player, synchronizedState)
+        if reconciledState == nil then return reconciliationFailure end
+        synchronizedState = reconciledState
 
         local initialized, initializationFailure, initializationResult = call(xpSource.initializePlayer, player, catalogResult.perks)
         if initialized == nil then return dependencyFailure("xp_initialize", initializationFailure, initializationResult) end

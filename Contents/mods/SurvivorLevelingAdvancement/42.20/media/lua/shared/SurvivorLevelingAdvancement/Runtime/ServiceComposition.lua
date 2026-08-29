@@ -515,6 +515,8 @@ function ServiceComposition.create(dependencies)
             accountingMode = accountingMode,
             accountingSettings = worldSettings.accountingSettings,
             catalog = dependencies.catalog,
+            NaturalLedger = dependencies.NaturalLedger,
+            ActualObservation = dependencies.ActualObservation,
             xpSource = xpSource,
             ownerSnapshot = ownerSnapshot,
             inheritanceSession = inheritanceSession,

@@ -1,12 +1,12 @@
 local Codec = {}
 
-Codec.SCHEMA_VERSION = 2
+Codec.SCHEMA_VERSION = 3
 local ROOT_FIELDS = { schemaVersion = true, revision = true, survivor = true, perks = true, orphanedPerks = true, inFlightAdvancement = true, accountingMode = true }
 local SURVIVOR_FIELDS = { level = true, xpIntoLevel = true, spent = true }
 local PERK_FIELDS = {
     adapterId = true, adapterVersion = true, curveFingerprint = true,
     effectiveMaximum = true, naturalPosition = true, highWaterPosition = true,
-    activeTargets = true, postMaxFullRateUsed = true,
+    activeTargets = true, postMaxFullRateUsed = true, observedPosition = true,
 }
 local TARGET_FIELDS = { targetId = true, targetLevel = true, targetPosition = true }
 local IN_FLIGHT_FIELDS = {
@@ -106,6 +106,10 @@ local function validatePerk(perk)
     if not (isFiniteNumber(perk.naturalPosition) and perk.naturalPosition >= 0) then return nil, failure("invalid_perk", "naturalPosition") end
     if not (isFiniteNumber(perk.highWaterPosition) and perk.highWaterPosition >= perk.naturalPosition) then return nil, failure("invalid_perk", "highWaterPosition") end
     if not (isFiniteNumber(perk.postMaxFullRateUsed) and perk.postMaxFullRateUsed >= 0) then return nil, failure("invalid_perk", "postMaxFullRateUsed") end
+    if perk.observedPosition ~= nil
+        and not (isFiniteNumber(perk.observedPosition) and perk.observedPosition >= 0) then
+        return nil, failure("invalid_perk", "observedPosition")
+    end
     if type(perk.activeTargets) ~= "table" then return nil, failure("invalid_perk", "activeTargets") end
     local targets, targetIds, lastLevel, lastPosition = {}, {}, 0, -1
     for index = 1, #perk.activeTargets do
@@ -125,12 +129,14 @@ local function validatePerk(perk)
             return nil, failure("invalid_perk", "activeTargets_shape")
         end
     end
-    return {
+    local result = {
         adapterId = perk.adapterId, adapterVersion = perk.adapterVersion,
         curveFingerprint = perk.curveFingerprint, effectiveMaximum = perk.effectiveMaximum,
         naturalPosition = perk.naturalPosition, highWaterPosition = perk.highWaterPosition,
         activeTargets = targets, postMaxFullRateUsed = perk.postMaxFullRateUsed,
     }
+    if perk.observedPosition ~= nil then result.observedPosition = perk.observedPosition end
+    return result
 end
 
 local function validateInFlight(record)
@@ -175,7 +181,7 @@ local function validateMap(map, label)
     return result
 end
 
-local function validateV2(raw)
+local function validateV3(raw)
     if type(raw) ~= "table" then return nil, failure("invalid_state", "not_table") end
     local fields, key = hasOnlyFields(raw, ROOT_FIELDS)
     if not fields then return nil, failure("invalid_state", "unknown_field:" .. tostring(key)) end
@@ -311,6 +317,11 @@ function Codec.decode(raw, options)
                 value.accountingMode = "Tracked"
                 return value
             end
+        elseif schema == 2 then
+            migration = function(value)
+                value.schemaVersion = 3
+                return value
+            end
         else
             local migrations = options and options.schemaMigrations
             migration = migrations and migrations[schema]
@@ -323,7 +334,7 @@ function Codec.decode(raw, options)
         if cloned.schemaVersion ~= schema + 1 then return failure("schema_migration_not_consecutive", schema, raw) end
         schema = cloned.schemaVersion
     end
-    local state, err = validateV2(cloned)
+    local state, err = validateV3(cloned)
     if not state then return err end
     if state.accountingMode == "Free" then return { ok = true, state = state } end
     local compatible, compatibilityError = applyCompatibility(state, options)
@@ -332,7 +343,7 @@ function Codec.decode(raw, options)
 end
 
 function Codec.encode(state)
-    local checked, err = validateV2(state)
+    local checked, err = validateV3(state)
     if not checked then return err end
     return { ok = true, state = checked }
 end

@@ -34,7 +34,7 @@ end
 
 local function validState()
     return {
-        schemaVersion = 2, accountingMode = "Tracked", revision = 3,
+        schemaVersion = 3, accountingMode = "Tracked", revision = 3,
         survivor = { level = 2, xpIntoLevel = 100, spent = 1 },
         perks = { Axe = validPerk() }, orphanedPerks = {},
     }
