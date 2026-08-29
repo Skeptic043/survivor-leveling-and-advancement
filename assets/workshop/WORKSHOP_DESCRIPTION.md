@@ -37,13 +37,13 @@ Authorized administrators can open "Admin Panel > Mini Scoreboard", right-click 
 
 ## Compatibility
 
-- **Incompatible — [RPG Skills Systems B42 / RPGMenu](https://steamcommunity.com/sharedfiles/filedetails/?id=3666281346)**
+- **Incompatible: [RPG Skills Systems B42 / RPGMenu](https://steamcommunity.com/sharedfiles/filedetails/?id=3666281346)**
 
-- **Unsupported currently — [Beyond Ten - Level 15 Skills](https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705) and [Seesaw Game](https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643)**. These mods directly replace progression rules that SLA relies on.
+- **Unsupported currently: [Beyond Ten - Level 15 Skills](https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705) and [Seesaw Game](https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643)**. These mods directly replace progression rules that SLA relies on.
 
-- **Load-order dependent — [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242)**. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
+- **Load-order dependent: [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242)**. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
 
-- **Tested together — [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242), [Toughness Skill](https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939), and [Show Skill XP Gain B42.20](https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883)**. This combination worked without issue, but compatibility with every interface or custom-skill mod cannot be guaranteed.
+- **Tested together: [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242), [Toughness Skill](https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939), and [Show Skill XP Gain B42.20](https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883)**. This combination worked without issue, but compatibility with every interface or custom-skill mod cannot be guaranteed.
 
 ## Current limits
 
@@ -51,10 +51,12 @@ Authorized administrators can open "Admin Panel > Mini Scoreboard", right-click 
 - Direct skill setters or third-party progression routes that emit no supported XP event do not generate Survivor XP.
 - Only English text is currently included.
 
+## Support
+
+Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are strictly optional and no mod features are locked behind a paywall.
+
 ## Mod information
 
-- Mod ID: `SurvivorLevelingAdvancement`
-- Target: Project Zomboid Build 42.20 content track
+- Target version: Project Zomboid Build 42.20
 - License: MIT
 - [Source and issue tracker](https://github.com/Skeptic043/survivor-leveling-and-advancement)
-- Optional support: [Ko-fi](https://ko-fi.com/skeptic043). The mod and its features will not be gated behind donations.

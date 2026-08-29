@@ -66,6 +66,24 @@ foreach ($entry in $linkedMods.GetEnumerator()) {
 }
 Assert-ReleaseCondition ($descriptionText.Contains('[Ko-fi](https://ko-fi.com/skeptic043)')) 'Markdown Ko-fi link'
 Assert-ReleaseCondition ($workshopText.Contains('[url=https://ko-fi.com/skeptic043]Ko-fi[/url]')) 'Workshop Ko-fi link'
+Assert-ReleaseCondition ($descriptionText.Contains('Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are strictly optional and no mod features are locked behind a paywall.')) 'Markdown support copy'
+Assert-ReleaseCondition ($workshopText.Contains('description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. All donations are strictly optional and no mod features are locked behind a paywall.')) 'Workshop support copy'
+$markdownSupportIndex = $descriptionText.IndexOf('## Support')
+$markdownModInfoIndex = $descriptionText.IndexOf('## Mod information')
+$workshopSupportIndex = $workshopText.IndexOf('description=[h2]Support[/h2]')
+$workshopModInfoIndex = $workshopText.IndexOf('description=[h2]Mod information[/h2]')
+Assert-ReleaseCondition ($markdownSupportIndex -ge 0 -and $markdownSupportIndex -lt $markdownModInfoIndex) 'Markdown support section before mod information'
+Assert-ReleaseCondition ($workshopSupportIndex -ge 0 -and $workshopSupportIndex -lt $workshopModInfoIndex) 'Workshop support section before mod information'
+Assert-ReleaseCondition ($descriptionText.Contains('- Target version: Project Zomboid Build 42.20')) 'Markdown target version'
+Assert-ReleaseCondition ($workshopLines -contains 'description=Target version: Project Zomboid Build 42.20') 'Workshop target version'
+Assert-ReleaseCondition (-not $descriptionText.Contains('content track')) 'Markdown omits content-track wording'
+Assert-ReleaseCondition (-not $workshopText.Contains('content track')) 'Workshop omits content-track wording'
+Assert-ReleaseCondition (-not $descriptionText.Contains('Mod ID:')) 'Markdown leaves generated Mod ID to PZ'
+Assert-ReleaseCondition (-not $descriptionText.Contains('Workshop ID:')) 'Markdown leaves generated Workshop ID to PZ'
+Assert-ReleaseCondition (-not $workshopText.Contains('description=Mod ID:')) 'Workshop leaves generated Mod ID to PZ'
+Assert-ReleaseCondition (-not $workshopText.Contains('description=Workshop ID:')) 'Workshop leaves generated Workshop ID to PZ'
+Assert-ReleaseCondition (-not $descriptionText.Contains('—')) 'Markdown compatibility labels use colons'
+Assert-ReleaseCondition (-not $workshopText.Contains('—')) 'Workshop compatibility labels use colons'
 
 $modInfoLines = @(Get-Content -LiteralPath $modInfoPath)
 Assert-ReleaseCondition ($modInfoLines -contains 'id=SurvivorLevelingAdvancement') 'mod ID'
