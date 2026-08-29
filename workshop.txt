@@ -36,13 +36,12 @@ description=[h2]Multiplayer administration[/h2]
 description=Authorized administrators can open "Admin Panel > Mini Scoreboard", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel.
 description=
 description=[h2]Compatibility[/h2]
-description=[b]Incompatible:[/b] [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3666281346]RPG Skills Systems B42 / RPGMenu[/url].
-description=
-description=[b]Unsupported currently:[/b] [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705]Beyond Ten - Level 15 Skills[/url] and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643]Seesaw Game[/url] directly replace progression rules that SLA relies on.
-description=
-description=[b][url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url]:[/b] Load-order dependent. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
-description=
-description=Detailed Skill Tooltips, [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939]Toughness Skill[/url], and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883]Show Skill XP Gain B42.20[/url] were tested together and worked without issue, but compatibility with every interface or custom-skill mod cannot be guaranteed.
+description=[list]
+description=[*][b]Incompatible — [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3666281346]RPG Skills Systems B42 / RPGMenu[/url][/b]
+description=[*][b]Unsupported currently — [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705]Beyond Ten - Level 15 Skills[/url] and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643]Seesaw Game[/url][/b]. These mods directly replace progression rules that SLA relies on.
+description=[*][b]Load-order dependent — [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url][/b]. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
+description=[*][b]Tested together — [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url], [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939]Toughness Skill[/url], and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883]Show Skill XP Gain B42.20[/url][/b]. This combination worked without issue, but compatibility with every interface or custom-skill mod cannot be guaranteed.
+description=[/list]
 description=
 description=[h2]Current limits[/h2]
 description=[list]
@@ -56,5 +55,6 @@ description=Mod ID: SurvivorLevelingAdvancement
 description=Target: Project Zomboid Build 42.20 content track
 description=License: MIT
 description=[url=https://github.com/Skeptic043/survivor-leveling-and-advancement]Source and issue tracker[/url]
+description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. The mod and its features will not be gated behind donations.
 tags=Build 42;Balance;Interface;Multiplayer;Skills
 visibility=friendsOnly
