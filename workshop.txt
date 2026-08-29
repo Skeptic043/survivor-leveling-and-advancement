@@ -56,4 +56,4 @@ description=Target: Project Zomboid Build 42.20 content track
 description=License: MIT
 description=[url=https://github.com/Skeptic043/survivor-leveling-and-advancement]Source and issue tracker[/url]
 tags=Build 42;Interface;Multiplayer;Skills
-visibility=unlisted
+visibility=friendsOnly

@@ -45,7 +45,7 @@ $workshopLines = @(Get-Content -LiteralPath $workshopPath)
 Assert-ReleaseCondition ($workshopLines[0] -eq 'version=1') 'workshop version'
 Assert-ReleaseCondition ($workshopLines -contains 'title=Survivor Leveling & Advancement [B42]') 'workshop title'
 Assert-ReleaseCondition ($workshopLines -contains 'tags=Build 42;Interface;Multiplayer;Skills') 'workshop tags'
-Assert-ReleaseCondition ($workshopLines -contains 'visibility=unlisted') 'initial visibility'
+Assert-ReleaseCondition ($workshopLines -contains 'visibility=friendsOnly') 'initial friends-only visibility'
 Assert-ReleaseCondition (-not ($workshopLines -match '^id=')) 'source metadata has no preassigned Workshop ID'
 Assert-ReleaseCondition (@($workshopLines -match '^description=').Count -ge 30) 'substantial Workshop description'
 
