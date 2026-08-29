@@ -43,7 +43,7 @@ dist/
 out/
 artifacts/
 local/
-release/
+/release/
 sandbox/
 steamcmd/
 _staging/

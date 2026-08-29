@@ -4,7 +4,7 @@ A Project Zomboid mod in active development that turns ordinary skill activity i
 
 ## Status
 
-Active development. The core XP, Survivor Level, Advancement Point, persistence, multiplayer-authority, sandbox-settings, and Skills-screen integration are implemented. Live UI validation and release preparation remain before the first public build.
+Release preparation. The core XP, Survivor Level, Advancement Point, persistence, multiplayer-authority, sandbox-settings, Skills-screen integration, representative custom-skill compatibility, and representative Skills-tooltip compatibility are implemented and live-validated. The Workshop source package is prepared and locally verified. A clean-profile package launch and the final different-owner dedicated-server session remain before the first public build.
 
 Development and current testing target Project Zomboid 42.20.4. The internal mod ID is `SurvivorLevelingAdvancement`. The mod does not enforce exact patch-version bounds, and compatibility will be claimed only for versions and integrations that have been tested.
 

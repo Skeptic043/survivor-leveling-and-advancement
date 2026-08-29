@@ -1,0 +1,59 @@
+version=1
+title=Survivor Leveling & Advancement [B42]
+description=[h1]Survivor Leveling & Advancement[/h1]
+description=Level your skills through normal play while at the same time progressing your Survivor Level, acquiring Advancement Points to boost your progress while keeping natural skill progression important.
+description=
+description=[h2]How it works[/h2]
+description=Trainable skill XP also earns you Survivor XP, with each Survivor Level granting one Advancement Point, or AP. The AP can then be spent in the vanilla Skills panel to raise the level of a selected skill, consuming the needed AP and occupying the needed Advancement Slot capacity to do so. By default, you are limited to 3 Advancement Slots across all skills. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies towards your next level.
+description=
+description=Losing levels or XP (Fitness/Strength) puts you into a recovery state that grants no Survivor XP from that skill until the lost progress is recovered.
+description=
+description=Going from level 9 to level 10 requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost.
+description=
+description=Optionally, there is also a sandbox Inheritance feature and a small digital watch integration in the settings. Inheritance allows the host to set a percentage of a deceased character's Survivor Level that passes to that player's next eligible survivor. The digital watch feature setting simply shows a small percentage on the watch interface that indicates how far into your current Survivor Level you are.
+description=
+description=[h2]Features[/h2]
+description=[list]
+description=[*]Integrated directly into the vanilla Skills panel
+description=[*]Global, Per Skill, and Free advancement slot modes
+description=[*]Configurable Survivor XP settings
+description=[*]Server-authoritative multiplayer progression and administration
+description=[*]Full controller support for spending AP
+description=[*]Split-screen compatible
+description=[*]Optional Survivor Level inheritance after death
+description=[*]Optional Player 1 Survivor XP percentage inside the digital watch
+description=[/list]
+description=
+description=[h2]Adding or removing SLA[/h2]
+description=SLA is designed to be safely added and removed from existing saves. Existing skills are preserved and historical progression is not converted into retroactive Survivor Levels.
+description=
+description=Disabling SLA removes its interface while leaving skill levels already gained through AP in place. Re-enabling SLA restores its private state and reconciles supported skill progression that occurred while it was absent.
+description=
+description=I always recommend backing up your save before making any modlist changes to an ongoing world regardless.
+description=
+description=[h2]Multiplayer administration[/h2]
+description=Authorized administrators can open "Admin Panel > Mini Scoreboard", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel.
+description=
+description=[h2]Compatibility[/h2]
+description=[b]Incompatible:[/b] [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3666281346]RPG Skills Systems B42 / RPGMenu[/url].
+description=
+description=[b]Unsupported currently:[/b] [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705]Beyond Ten - Level 15 Skills[/url] and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643]Seesaw Game[/url] directly replace progression rules that SLA relies on.
+description=
+description=[b][url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url]:[/b] Load-order dependent. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
+description=
+description=Detailed Skill Tooltips, [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939]Toughness Skill[/url], and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883]Show Skill XP Gain B42.20[/url] were tested together and worked without issue, but compatibility with every interface or custom-skill mod cannot be guaranteed.
+description=
+description=[h2]Current limits[/h2]
+description=[list]
+description=[*]A skill at its effective maximum does not generate additional Survivor XP.
+description=[*]Direct skill setters or third-party progression routes that emit no supported XP event do not generate Survivor XP.
+description=[*]Only English text is currently included.
+description=[/list]
+description=
+description=[h2]Mod information[/h2]
+description=Mod ID: SurvivorLevelingAdvancement
+description=Target: Project Zomboid Build 42.20 content track
+description=License: MIT
+description=[url=https://github.com/Skeptic043/survivor-leveling-and-advancement]Source and issue tracker[/url]
+tags=Build 42;Interface;Multiplayer;Skills
+visibility=unlisted
