@@ -19,7 +19,16 @@ local function exact(value, fields)
     return true
 end
 
+local function rootScreenX(element)
+    local current = element
+    while type(current) == "table" and rawget(current, "parent") ~= nil do
+        current = rawget(current, "parent")
+    end
+    return type(current) == "table" and rawget(current, "x") or nil
+end
+
 local translations = {
+    IGUI_SLA_StatusLevel = "Survivor Level: %1",
     IGUI_SLA_StatusAP = "AP: %1",
     IGUI_SLA_StatusActive = "Advancement Slots: %1/%2",
     IGUI_SLA_StatusSurvivorXp = "Survivor XP: %1 / %2",
@@ -144,6 +153,14 @@ local function makeEnvironment(options)
         xpForNextLevel = options.xpForNextLevel,
         drawOrder = {},
         buildArguments = {},
+        vanillaRootXs = {},
+        progressRootXs = {},
+        adminRootXs = {},
+        survivorLevel = options.survivorLevel,
+        spentAp = options.spentAp,
+        availableAp = options.availableAp,
+        omitSurvivorLevel = false,
+        malformedSurvivorLevel = false,
     }
 
     local CharacterInfo = {}
@@ -161,6 +178,7 @@ local function makeEnvironment(options)
 
     function CharacterInfo.render(self)
         evidence.priorRender = evidence.priorRender + 1
+        evidence.vanillaRootXs[#evidence.vanillaRootXs + 1] = rootScreenX(self)
         if self.throwRender then error("vanilla render") end
         if self.pendingBars ~= nil then
             self.progressBars = self.pendingBars
@@ -215,6 +233,7 @@ local function makeEnvironment(options)
     function CharacterInfo.onLoseJoypadFocus() evidence.priorJoypadLose = evidence.priorJoypadLose + 1 end
     function ProgressBar.renderPerkRect(self)
         evidence.priorOverlay = evidence.priorOverlay + 1
+        evidence.progressRootXs[#evidence.progressRootXs + 1] = rootScreenX(self)
         evidence.drawOrder[#evidence.drawOrder + 1] = "gold"
         self.level = self.perk.level
     end
@@ -267,6 +286,11 @@ local function makeEnvironment(options)
         function button:setY(value) self.y = value end
         function button:click()
             if self.enabled and self.onclick ~= nil then self.onclick(self.target, self) end
+        end
+        function button:render()
+            if self.title == "Admin" then
+                evidence.adminRootXs[#evidence.adminRootXs + 1] = rootScreenX(self)
+            end
         end
         return setmetatable(button, { __index = {
             setJoypadFocused = function(self, value) self.joypadFocused = value end,
@@ -422,20 +446,24 @@ local function makeEnvironment(options)
                 allotment.activeCount = 2
                 allotment.limit = input.allotment.globalLimit
             end
+            local survivorLevel = evidence.survivorLevel or 5
+            local spentAp = evidence.spentAp or 2
             local result = {
                 sequence = 1,
                 revision = 2,
                 survivor = {
-                    level = 5,
+                    level = survivorLevel,
                     xpIntoLevel = evidence.xpIntoLevel or 10,
                     xpForNextLevel = evidence.xpForNextLevel or 100,
-                    spent = 2,
-                    availableAp = 3,
+                    spent = spentAp,
+                    availableAp = evidence.availableAp or survivorLevel - spentAp,
                 },
                 allotment = allotment,
                 pending = input.pending,
                 rows = rows,
             }
+            if evidence.omitSurvivorLevel then result.survivor.level = nil end
+            if evidence.malformedSurvivorLevel then result.survivor.level = "five" end
             if evidence.privateModelField then result.private = true end
             evidence.lastModelView = result
             return { ok = true, view = result }
@@ -541,7 +569,31 @@ local function makeParent(width, height, ancestor, x, y)
     function parent:getY() return self.y end
     function parent:getWidth() return self.width end
     function parent:getHeight() return self.height end
-    function parent:setWidth(value) self.width = value end
+    function parent:setX(value)
+        if self.keepOnScreen then
+            value = math.max(0, math.min(value, self.screenWidth - self.width))
+        end
+        self.x = value
+    end
+    function parent:setWidth(value)
+        if self.throwSetWidth then
+            local child = self.children[1]
+            local childVisible, childEnabled = nil, nil
+            if type(child) == "table" then
+                childVisible = child.visible
+                childEnabled = child.enabled
+            end
+            self.throwSetWidthObservation = {
+                visible = childVisible,
+                enabled = childEnabled,
+            }
+            error("parent setWidth")
+        end
+        self.width = value
+        if self.keepOnScreen then
+            self.x = math.max(0, math.min(self.x, self.screenWidth - self.width))
+        end
+    end
     function parent:setHeight(value) self.height = value end
     function parent:addChild(child)
         self.children[#self.children + 1] = child
@@ -552,6 +604,12 @@ local function makeParent(width, height, ancestor, x, y)
             if self.children[index] == child then table.remove(self.children, index) end
         end
     end
+    function parent:canRouteMouseTo(child)
+        return child.parent == self and child.visible ~= false and child.enabled ~= false
+            and child.x >= 0 and child.y >= 0
+            and child.x + child.width <= self.width
+            and child.y + child.height <= self.height
+    end
     function parent:drawText(text, drawX, drawY, r, g, b, a, font)
         if self.throwDraw then error("parent draw boom") end
         self.statusDraws[#self.statusDraws + 1] = {
@@ -561,6 +619,7 @@ local function makeParent(width, height, ancestor, x, y)
             y = drawY,
             screenX = self.x + drawX - self.xScroll,
             screenY = self.y + drawY - self.yScroll,
+            rootX = rootScreenX(self),
             font = font,
         }
     end
@@ -573,6 +632,7 @@ local function makeParent(width, height, ancestor, x, y)
             y = drawY,
             screenX = self.x + drawX - self.xScroll,
             screenY = self.y + drawY - self.yScroll,
+            rootX = rootScreenX(self),
             font = font,
         }
     end
@@ -697,6 +757,7 @@ local function makeView(environment, slot, bars, delayed)
         if environment.vanillaRenderClampsScroll then self.yScroll = 0 end
     end
     setmetatable(view, { __index = environment.CharacterInfo })
+    for index = 1, #bars do bars[index].parent = view end
     return view
 end
 
@@ -1391,7 +1452,7 @@ local rowScreenY = view.parent.y + view.y + view:getYScroll() + axe.y
 view:setYScroll(-60)
 local statusDrawsBeforeScroll = #view.statusDraws
 view:render()
-equal(#view.statusDraws, statusDrawsBeforeScroll + 3,
+equal(#view.statusDraws, statusDrawsBeforeScroll + 4,
     "ordinary containing parent receives both fixed status rows")
 equal(view.statusDraws[#view.statusDraws].screenY, stableStatusY,
     "status screen position stays fixed while skill rows scroll")
@@ -1413,28 +1474,36 @@ equal(environment.refresh[1], readsBeforeStable[1], "render stability sends no r
 equal(environment.stateReads[1], readsBeforeStable[2], "render stability reads no owner state")
 equal(environment.settingsReads, readsBeforeStable[3], "render stability reads no settings")
 equal(environment.buttonCreates, buttonsBeforeRepeatedRender, "repeated renders create no duplicate buttons")
-equal(lastDrawText(view.statusDraws, "AP: 3").x, 4,
+equal(lastDrawText(view.statusDraws, "Survivor Level: 5").x, 4,
     "repeated renders keep the first left label at the fixed window margin")
-equal(lastDrawText(view.statusDraws, "Survivor XP: 10 / 100").x, 4,
+equal(lastDrawText(view.statusDraws, "Advancement Slots: 2/6").x, 4,
     "repeated renders keep the second left label at the fixed window margin")
 equal(view.width - (axe.x + axe.width), 100, "expanded bar preserves measured vanilla right gutter")
 equal(view.parent.width, view.x + view.width, "view width propagates absolutely to parent")
 equal(view.outer.width, view.parent.x + view.parent.width, "width propagates through every ancestor")
 expect(#view.statusDraws > 0, "status draws on first category row")
-equal(lastDrawText(view.statusDraws, "AP: 3").y, 18,
+equal(lastDrawText(view.statusDraws, "Survivor Level: 5").y, 18,
     "first status row uses fixed parent-local coordinates")
-local globalLeft = lastDrawText(view.statusDraws, "AP: 3")
-local globalRight = lastDraw(view.statusDraws, "right")
-local survivorXp = lastDrawText(view.statusDraws, "Survivor XP: 10 / 100")
-equal(globalLeft.text, "AP: 3", "Global status binds compact AP left")
-equal(globalLeft.x, 4, "Global AP binds four logical pixels from containing window left edge")
-equal(globalRight.text, "Advancement Slots: 2/6", "Global status binds slots right")
-equal(globalRight.x, view.parent.width - 4,
-    "Global slots bind four logical pixels from containing window right edge")
-expect(survivorXp ~= nil, "second row binds exact cached Survivor XP")
-equal(survivorXp.x, 4, "Survivor XP binds four logical pixels from containing window left edge")
-equal(survivorXp.y, 38, "Survivor XP uses the second native-height row")
+do
+    local survivorLevel = lastDrawText(view.statusDraws, "Survivor Level: 5")
+    local availableAp = lastDrawText(view.statusDraws, "AP: 3")
+    local advancementSlots = lastDrawText(view.statusDraws, "Advancement Slots: 2/6")
+    local survivorXp = lastDrawText(view.statusDraws, "Survivor XP: 10 / 100")
+    equal(survivorLevel.text, "Survivor Level: 5", "ready snapshot binds exact Survivor Level")
+    equal(survivorLevel.x, 4, "Survivor Level binds four logical pixels from the left edge")
+    equal(availableAp.kind, "right", "AP binds to the first-row right edge")
+    equal(availableAp.x, view.parent.width - 4,
+        "AP binds four logical pixels from the containing-window right edge")
+    equal(advancementSlots.kind, "left", "Global slots bind to the second-row left edge")
+    equal(advancementSlots.x, 4, "Global slots bind four logical pixels from the left edge")
+    expect(survivorXp ~= nil, "second row binds exact cached Survivor XP")
+    equal(survivorXp.kind, "right", "Survivor XP binds to the second-row right edge")
+    equal(survivorXp.x, view.parent.width - 4,
+        "Survivor XP binds four logical pixels from containing window right edge")
+    equal(survivorXp.y, 38, "Survivor XP uses the second native-height row")
+end
 
+do
 local narrowEnvironment = makeEnvironment()
 narrowEnvironment.measureScale = 10
 expect(narrowEnvironment.integration.install().ok, "narrow-view integration installs")
@@ -1445,15 +1514,25 @@ narrowView.vanillaWidth = 200
 narrowView.parent.width = 220
 narrowView:prerender()
 narrowView:render()
-local narrowStatus = lastDraw(narrowView.statusDraws, "right")
-local requiredWindowWidth = 4 + (#"AP: 3" * 10) + (#"  " * 10)
-    + (#"Advancement Slots: 2/6" * 10) + 4
-equal(narrowStatus.x, narrowView.parent.width - 4,
-    "Global labels retain the four-pixel containing-window right margin")
-equal(narrowView.width, requiredWindowWidth,
-    "Global width uses the collision-safe header minimum with symmetric outer margins")
-expect(narrowView.width > 200 and narrowView.parent.width > 220,
-    "narrow view and containing window widen for measured copy")
+    local narrowAp = lastDrawText(narrowView.statusDraws, "AP: 3")
+    local requiredFirstRow = 4 + (#"Survivor Level: 5" * 10) + (#"  " * 10)
+        + (#"AP: 3" * 10) + 4
+    local requiredSecondRow = 4 + (#"Advancement Slots: 2/6" * 10) + (#"  " * 10)
+        + (#"Survivor XP: 10 / 100" * 10) + 4
+    local requiredWindowWidth = math.max(requiredFirstRow, requiredSecondRow)
+    equal(narrowAp.x, narrowView.parent.width - 4,
+        "Global right labels retain the four-pixel containing-window margin")
+    equal(narrowView.width, requiredWindowWidth,
+        "both Global rows use the collision-safe measured minimum")
+    expect(narrowView.width > 200 and narrowView.parent.width > 220,
+        "narrow view and containing window widen for measured copy")
+    local narrowLevel = lastDrawText(narrowView.statusDraws, "Survivor Level: 5")
+    local narrowSlots = lastDrawText(narrowView.statusDraws, "Advancement Slots: 2/6")
+    local narrowXp = lastDrawText(narrowView.statusDraws, "Survivor XP: 10 / 100")
+    expect(narrowLevel.x + #narrowLevel.text * 10 + #"  " * 10
+        <= narrowAp.x - #narrowAp.text * 10, "minimum-width first row does not overlap")
+    expect(narrowSlots.x + #narrowSlots.text * 10 + #"  " * 10
+        <= narrowXp.x - #narrowXp.text * 10, "minimum-width second row does not overlap")
 
 local originalSecondRowCopy = translations.IGUI_SLA_StatusSurvivorXp
 translations.IGUI_SLA_StatusSurvivorXp = string.rep("W", 500) .. " %1 / %2"
@@ -1464,9 +1543,52 @@ local wideSecondRowView = makeView(wideSecondRowEnvironment, 0, { wideSecondRowB
 wideSecondRowView:prerender()
 wideSecondRowView:render()
 local wideSecondRowText = formatText("IGUI_SLA_StatusSurvivorXp", 10, 100)
-equal(wideSecondRowView.width, 4 + #wideSecondRowText + 4,
-    "wider second row remains the collision-safe header minimum in Global mode")
+    equal(wideSecondRowView.width,
+        4 + #"Advancement Slots: 2/6" + #"  " + #wideSecondRowText + 4,
+        "wider right-aligned XP remains collision-safe beside Global slots")
 translations.IGUI_SLA_StatusSurvivorXp = originalSecondRowCopy
+
+local largeHeaderEnvironment = makeEnvironment({
+    survivorLevel = 123456,
+    spentAp = 111111,
+    availableAp = 12345,
+    xpIntoLevel = 987654.3,
+    xpForNextLevel = 999999,
+})
+largeHeaderEnvironment.measureScale = 4
+expect(largeHeaderEnvironment.integration.install().ok, "large header integration installs")
+local largeHeaderBar = makeBar(largeHeaderEnvironment, "Axe", { x = 50, width = 100 })
+local largeHeaderView = makeView(largeHeaderEnvironment, 0, { largeHeaderBar })
+largeHeaderView.width = 200
+largeHeaderView.vanillaWidth = 200
+largeHeaderView:prerender()
+largeHeaderView:render()
+local largeLevel = lastDrawText(largeHeaderView.statusDraws, "Survivor Level: 123456")
+local largeAp = lastDrawText(largeHeaderView.statusDraws, "AP: 12345")
+local largeSlots = lastDrawText(largeHeaderView.statusDraws, "Advancement Slots: 2/6")
+local largeXp = lastDrawText(largeHeaderView.statusDraws, "Survivor XP: 987654.3 / 999999")
+expect(largeLevel ~= nil and largeAp ~= nil and largeSlots ~= nil and largeXp ~= nil,
+    "large representative values render on their exact rows")
+expect(largeLevel.x + #largeLevel.text * 4 + #"  " * 4 <= largeAp.x - #largeAp.text * 4,
+    "large first-row values do not overlap")
+expect(largeSlots.x + #largeSlots.text * 4 + #"  " * 4 <= largeXp.x - #largeXp.text * 4,
+    "large second-row values do not overlap")
+
+for _, malformedLevelCase in ipairs({ "missing", "malformed" }) do
+    local malformedLevelEnvironment = makeEnvironment()
+    malformedLevelEnvironment.omitSurvivorLevel = malformedLevelCase == "missing"
+    malformedLevelEnvironment.malformedSurvivorLevel = malformedLevelCase == "malformed"
+    expect(malformedLevelEnvironment.integration.install().ok,
+        malformedLevelCase .. " Survivor Level integration installs")
+    local malformedLevelBar = makeBar(malformedLevelEnvironment, "Axe")
+    local malformedLevelView = makeView(malformedLevelEnvironment, 0, { malformedLevelBar })
+    malformedLevelView:prerender()
+    equal(#malformedLevelView.statusDraws, 0,
+        malformedLevelCase .. " Survivor Level renders no partial header")
+    expect(not malformedLevelBar.children[1].enabled,
+        malformedLevelCase .. " Survivor Level fails presentation closed")
+end
+end
 
 local resolutionEnvironment = makeEnvironment()
 expect(resolutionEnvironment.integration.install().ok, "resolution integration installs")
@@ -1512,7 +1634,7 @@ equal(view.width, stableViewWidth, "torn-off reconciliation remains non-cumulati
 equal(view.y, 66, "torn-off view rebases two header rows from its new vanilla position")
 equal(tornParent.height, 316, "torn-off parent preserves its rebased bottom edge")
 equal(tornOuter.height, 340, "torn-off outer window preserves its rebased bottom edge")
-equal(lastDrawText(tornParent.statusDraws, "AP: 3").y, 26,
+equal(lastDrawText(tornParent.statusDraws, "Survivor Level: 5").y, 26,
     "torn-off first status row uses the new parent-local position")
 equal(lastDrawText(tornParent.statusDraws, "Survivor XP: 10 / 100").y, 46,
     "torn-off second status row follows one native row below")
@@ -1621,11 +1743,18 @@ for index = 1, #modes do
         equal(modeBar.message, "Vanilla tooltip", "Free skill tooltip appends no accounting copy")
     end
     modeView:render()
+    expect(lastDrawText(modeView.statusDraws, "Survivor Level: 5") ~= nil,
+        modes[index] .. " first row includes Survivor Level")
     expect(lastDrawText(modeView.statusDraws, "AP: 3") ~= nil,
         modes[index] .. " first row includes AP")
     expect(lastDrawText(modeView.statusDraws, "Survivor XP: 10 / 100") ~= nil,
         modes[index] .. " second row includes exact Survivor XP")
-    equal(lastDraw(modeView.statusDraws, "right"), nil, modes[index] .. " header makes no right draw")
+    equal(lastDrawText(modeView.statusDraws, "Advancement Slots: 2/6"), nil,
+        modes[index] .. " header omits a nonexistent global slot total")
+    equal(lastDrawText(modeView.statusDraws, "AP: 3").kind, "right",
+        modes[index] .. " AP stays right aligned")
+    equal(lastDrawText(modeView.statusDraws, "Survivor XP: 10 / 100").kind, "right",
+        modes[index] .. " Survivor XP stays right aligned")
     equal(modeView.width, 420, modes[index] .. " width uses max control edge plus captured gutter")
 end
 
@@ -2138,18 +2267,27 @@ local adminView = makeView(adminEnvironment, 2, { adminBar })
 adminView:prerender()
 adminView:render()
 equal(adminEnvironment.lastAdminAvailabilitySlot, 2, "launcher visibility preserves exact Skills slot")
-equal(#adminView.parent.children, 1, "one second-row admin button is created")
+equal(#adminView.parent.children, 1, "one outboard admin button is created")
 local adminButton = adminView.parent.children[1]
 equal(adminButton.title, "Admin", "admin launcher uses localized compact label")
-expect(adminButton.visible and adminButton.enabled, "debug launcher is visible and enabled")
-local adminRight = lastDraw(adminView.statusDraws, "right")
+expect(adminButton.visible and adminButton.enabled,
+    "prerender-finalized debug launcher is visible and enabled before child rendering")
+local adminAp = lastDrawText(adminView.statusDraws, "AP: 3")
 local adminXp = lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100")
-expect(adminRight ~= nil and adminRight.x == adminView.parent.width - 4,
-    "first-row Global label keeps its containing-window right margin")
-expect(adminXp ~= nil and adminXp.x == 4 and adminButton.x > adminXp.x,
-    "second-row Survivor XP and Admin keep separate left and right alignment")
-equal(adminButton.x, adminView.parent.width - 4 - adminButton.width,
-    "Admin binds four logical pixels from containing window right edge")
+expect(adminAp ~= nil and adminAp.x == adminView.x + adminView.width - 4,
+    "first-row AP stays bound to the Skills panel right edge")
+expect(adminXp ~= nil and adminXp.x == adminView.x + adminView.width - 4,
+    "second-row Survivor XP stays bound to the Skills panel right edge")
+equal(adminButton.x, adminView.x + adminView.width + 4,
+    "Admin begins four logical pixels outside the Skills panel right edge")
+expect(adminButton.x > adminXp.x and adminButton.x + adminButton.width <= adminView.parent.width,
+    "expanded parent keeps the outboard Admin unclipped and clear of header copy")
+expect(adminView.parent.width <= adminView.outer.width,
+    "outboard Admin remains inside the propagated window hierarchy")
+expect(adminView.parent.children[#adminView.parent.children] == adminButton,
+    "Admin is the containing parent's last-added child for sibling z-order")
+expect(adminView.parent:canRouteMouseTo(adminButton),
+    "expanded parent routes mouse input to the visible outboard Admin")
 equal(adminButton.y, 38, "Admin uses the second native-height row")
 local stableAdminX = adminButton.x
 adminView:render()
@@ -2159,12 +2297,20 @@ local buttonCreatesBeforeTabs = adminEnvironment.buttonCreates
 adminView:setVisible(false)
 expect(not adminButton.visible and not adminButton.enabled,
     "Admin hides at the exact Skills visibility transition")
+equal(adminView.parent.width, adminView.x + adminView.width,
+    "hiding Skills immediately releases the shared tab-panel width")
+equal(adminView.outer.width, adminView.parent.x + adminView.parent.width,
+    "hiding Skills immediately releases the containing-window width")
+expect(not adminView.parent:canRouteMouseTo(adminButton),
+    "hidden Admin is excluded from parent mouse routing")
 equal(#adminView.parent.children, 1, "leaving Skills creates no additional Admin button")
 adminButton:click()
 equal(#adminEnvironment.adminOpens, 0, "stale hidden Admin click cannot open the panel")
 adminView:setVisible(true)
 expect(adminButton.visible and adminButton.enabled,
     "Admin returns at the exact Skills visibility transition")
+equal(adminView.parent.width, adminButton.x + adminButton.width + 4,
+    "showing Skills immediately reacquires only the outboard width")
 for _, tabName in ipairs({ "Info", "Health", "Protection", "Temperature", "Custom" }) do
     adminView:setVisible(false)
     expect(not adminButton.visible and not adminButton.enabled,
@@ -2189,15 +2335,28 @@ adminView:setVisible(false)
 adminView:setVisible(true)
 expect(not adminButton.visible and not adminButton.enabled,
     "launcher disappears and disables on an authorized visibility transition")
+equal(adminView.parent.width, adminView.x + adminView.width,
+    "authorization loss immediately releases the outboard parent width")
+equal(adminView.outer.width, adminView.parent.x + adminView.parent.width,
+    "authorization loss immediately releases the outboard ancestor width")
 adminView:render()
 equal(lastDrawText(adminView.statusDraws, "AP: 3").x, visibleApX,
     "first-row label does not move when Admin disappears")
 equal(lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100").x, visibleXpX,
     "second-row label does not move when Admin disappears")
+equal(adminView.parent.width, adminView.x + adminView.width,
+    "unavailable Admin leaves no unused outboard width after layout")
 adminButton:click()
 equal(#adminEnvironment.adminOpens, 1, "hidden launcher cannot activate")
 equal(adminEnvironment.adminRequests, 0, "Skills launcher never calls lifecycle admin request")
 equal(adminEnvironment.adminStatusReads, 0, "Skills launcher never reads lifecycle admin status")
+adminEnvironment.adminAvailable = true
+adminView:setVisible(false)
+adminView:setVisible(true)
+equal(adminView.parent.width, adminButton.x + adminButton.width + 4,
+    "authorization transition immediately restores the outboard mouse-routing bounds")
+expect(adminView.parent:canRouteMouseTo(adminButton),
+    "newly authorized Admin is mouse reachable before the next render")
 adminEnvironment.adminInstalled = false
 local lostAdminHook = adminEnvironment.integration.install()
 equal(lostAdminHook.ok, false, "lost admin hook ownership fails composite closed")
@@ -2223,6 +2382,12 @@ expect(not throwingVisibilityButton.visible and not throwingVisibilityButton.ena
 equal(rawget(throwingVisibilityView, "setVisible"), vanillaSetVisible,
     "throwing visibility transition restores the exact prior seam")
 equal(throwingVisibilityView.y, 8, "throwing visibility transition restores vanilla header geometry")
+equal(throwingVisibilityView.parent.width,
+    throwingVisibilityView.x + throwingVisibilityView.width,
+    "disabled view releases the outboard parent width")
+equal(throwingVisibilityView.outer.width,
+    throwingVisibilityView.parent.x + throwingVisibilityView.parent.width,
+    "disabled view releases the outboard ancestor width")
 throwingVisibilityButton:click()
 equal(#throwingVisibilityEnvironment.adminOpens, 0,
     "throwing visibility transition leaves no stale Admin activation")
@@ -2235,13 +2400,212 @@ local lostVanillaSetVisible = rawget(lostVisibilityView, "setVisible")
 lostVisibilityView:prerender()
 lostVisibilityView:render()
 local lostVisibilityButton = lostVisibilityView.parent.children[1]
+lostVisibilityView:prerender()
+expect(lostVisibilityButton.visible and lostVisibilityButton.enabled,
+    "owned visibility launcher is live before ownership changes")
 rawset(lostVisibilityView, "setVisible", lostVanillaSetVisible)
 lostVisibilityView:render()
+expect(lostVisibilityButton.visible and lostVisibilityButton.enabled,
+    "render consumes prerender-decided visibility without mid-frame ownership cleanup")
+lostVisibilityView:prerender()
 expect(not lostVisibilityButton.visible and not lostVisibilityButton.enabled,
-    "lost visibility-wrapper ownership fails the Admin launcher closed")
+    "next prerender fails lost visibility-wrapper ownership closed before child rendering")
 lostVisibilityButton:click()
 equal(#lostVisibilityEnvironment.adminOpens, 0,
     "lost visibility-wrapper ownership leaves no stale Admin activation")
+
+do
+    local reparentEnvironment = makeEnvironment({ adminLauncher = true })
+    expect(reparentEnvironment.integration.install().ok, "reparented Admin integration installs")
+    local reparentBar = makeBar(reparentEnvironment, "Axe")
+    local reparentView = makeView(reparentEnvironment, 0, { reparentBar })
+    reparentView:prerender()
+    reparentView:render()
+    reparentView:prerender()
+    local oldParent = reparentView.parent
+    local oldButton = oldParent.children[1]
+    local newOuter = makeParent(450, 328, nil, 0, 0)
+    local newParent = makeParent(450, 308, newOuter, 0, 20)
+    reparentView.parent = newParent
+    reparentView:setY(8)
+    reparentView:render()
+    reparentView:prerender()
+    equal(#oldParent.children, 0, "parent replacement removes the old outboard Admin child")
+    equal(oldParent.width, reparentView.x + reparentView.width,
+        "next prerender restores the old shared parent's width before child rendering")
+    equal(oldParent.parent.width, oldParent.x + oldParent.width,
+        "next prerender restores the old ancestor's width before child rendering")
+    expect(not oldButton.visible and oldButton.onclick == nil and oldButton.target == nil,
+        "removed outboard Admin is hidden and has no stale callback")
+    equal(#newParent.children, 1, "parent replacement creates one outboard Admin on the live parent")
+    expect(newParent:canRouteMouseTo(newParent.children[1]),
+        "replacement parent routes mouse input only to the live Admin")
+end
+
+do
+    local edgeEnvironment = makeEnvironment({ adminLauncher = true })
+    expect(edgeEnvironment.integration.install().ok, "right-edge Admin integration installs")
+    local edgeBar = makeBar(edgeEnvironment, "Axe")
+    local edgeView = makeView(edgeEnvironment, 0, { edgeBar })
+    edgeView.outer.keepOnScreen = true
+    edgeView.outer.screenWidth = 1000
+    edgeView.outer.x = 580
+    edgeView:prerender()
+    local edgeButton = edgeView.parent.children[1]
+    equal(edgeView.outer.width, 448,
+        "first prerender leases the exact outboard width before child rendering")
+    equal(edgeView.outer.x, 552,
+        "first prerender applies vanilla keep-on-screen before child rendering")
+    expect(edgeButton.visible and edgeButton.enabled,
+        "right-edge Admin becomes visible only after prerender reserves its geometry")
+    edgeBar:renderPerkRect()
+    edgeView:render()
+    edgeButton:render()
+    equal(edgeEnvironment.progressRootXs[#edgeEnvironment.progressRootXs], 552,
+        "Java-child-shaped progress rendering retains the leased root X")
+    equal(edgeEnvironment.vanillaRootXs[#edgeEnvironment.vanillaRootXs], 552,
+        "vanilla ISCharacterInfo rendering retains the same leased root X")
+    for index = #edgeView.statusDraws - 3, #edgeView.statusDraws do
+        equal(edgeView.statusDraws[index].rootX, 552,
+            "SLA header rendering retains the same leased root X")
+    end
+    equal(edgeEnvironment.adminRootXs[#edgeEnvironment.adminRootXs], 552,
+        "Admin child rendering retains the same leased root X")
+    edgeView:prerender()
+    edgeEnvironment.adminAvailable = false
+    edgeBar:renderPerkRect()
+    edgeView:render()
+    edgeButton:render()
+    equal(edgeEnvironment.progressRootXs[#edgeEnvironment.progressRootXs], 552,
+        "post-prerender availability change cannot move the child-render root X")
+    equal(edgeEnvironment.vanillaRootXs[#edgeEnvironment.vanillaRootXs], 552,
+        "render does not release Admin geometry after availability changes")
+    for index = #edgeView.statusDraws - 3, #edgeView.statusDraws do
+        equal(edgeView.statusDraws[index].rootX, 552,
+            "availability transition leaves the current SLA header cycle at one root X")
+    end
+    equal(edgeEnvironment.adminRootXs[#edgeEnvironment.adminRootXs], 552,
+        "availability transition leaves current-cycle Admin rendering at one root X")
+    expect(edgeButton.visible and edgeButton.enabled,
+        "current frame consumes the Admin state accepted during prerender")
+    edgeView:prerender()
+    equal(edgeView.outer.width, 420,
+        "next prerender releases unavailable Admin geometry before child rendering")
+    equal(edgeView.outer.x, 580,
+        "next prerender restores unavailable Admin root X before child rendering")
+    expect(not edgeButton.visible and not edgeButton.enabled,
+        "next prerender hides unavailable Admin before geometry restoration")
+    edgeBar:renderPerkRect()
+    equal(edgeEnvironment.progressRootXs[#edgeEnvironment.progressRootXs], 580,
+        "first child render after availability release uses the restored root X")
+    edgeEnvironment.adminAvailable = true
+    edgeView:setVisible(false)
+    equal(edgeView.parent.width, 420,
+        "right-edge hide restores the shared tab-panel base width")
+    equal(edgeView.outer.width, 420,
+        "right-edge hide restores the top-level base width")
+    equal(edgeView.outer.x, 580,
+        "right-edge hide restores the lease-owned keep-on-screen shift")
+    edgeView:setVisible(true)
+    equal(edgeView.outer.width, 448,
+        "right-edge show reacquires the outboard width")
+    equal(edgeView.outer.x, 552,
+        "right-edge show deterministically reapplies vanilla keep-on-screen")
+    edgeView.outer:setWidth(500)
+    equal(edgeView.outer.x, 500,
+        "production-shaped external resize applies its own keep-on-screen shift")
+    edgeView:setVisible(false)
+    equal(edgeView.parent.width, 420,
+        "external top-level resize does not prevent child lease release")
+    equal(edgeView.outer.width, 500,
+        "lease release preserves a legitimate external top-level resize")
+    equal(edgeView.outer.x, 500,
+        "lease release preserves the external resize's keep-on-screen position")
+    expect(not edgeView.parent:canRouteMouseTo(edgeButton),
+        "right-edge hidden Admin cannot intercept mouse input")
+    edgeView:setVisible(true)
+    edgeView.parent:setWidth(470)
+    edgeView:setVisible(false)
+    equal(edgeView.parent.width, 470,
+        "lease release preserves a legitimate external shared-parent resize")
+    equal(edgeView.outer.width, 500,
+        "external shared-parent resize retains its already sufficient ancestor")
+end
+
+do
+    local widthTransitionEnvironment = makeEnvironment({ adminLauncher = true })
+    widthTransitionEnvironment.measureScale = 6
+    expect(widthTransitionEnvironment.integration.install().ok,
+        "width-transition Admin integration installs")
+    local widthTransitionBar = makeBar(widthTransitionEnvironment, "Axe")
+    local widthTransitionView = makeView(
+        widthTransitionEnvironment, 0, { widthTransitionBar })
+    widthTransitionView.outer.keepOnScreen = true
+    widthTransitionView.outer.screenWidth = 1000
+    widthTransitionView.outer.x = 580
+    widthTransitionView:prerender()
+    local widthTransitionButton = widthTransitionView.parent.children[1]
+    equal(widthTransitionView.outer.width, 448,
+        "narrow snapshot begins with the normal leased width")
+    equal(widthTransitionView.outer.x, 552,
+        "narrow snapshot begins at the normal keep-on-screen root X")
+    widthTransitionBar:renderPerkRect()
+    widthTransitionView:render()
+    widthTransitionButton:render()
+    widthTransitionEnvironment.survivorLevel = 9007199254740991
+    widthTransitionEnvironment.availableAp = 9007199254740989
+    widthTransitionEnvironment.xpIntoLevel = 9007199254740990
+    widthTransitionEnvironment.xpForNextLevel = 9007199254740991
+    widthTransitionEnvironment.now = 1000
+    widthTransitionView:prerender()
+    local expandedRootX = widthTransitionView.outer.x
+    expect(widthTransitionView.outer.width > 448 and expandedRootX < 552,
+        "larger snapshot values widen and shift the right-edge window during prerender")
+    widthTransitionBar:renderPerkRect()
+    widthTransitionView:render()
+    widthTransitionButton:render()
+    equal(widthTransitionEnvironment.progressRootXs[
+        #widthTransitionEnvironment.progressRootXs], expandedRootX,
+        "width-expanding snapshot reserves root X before progress child rendering")
+    equal(widthTransitionEnvironment.vanillaRootXs[
+        #widthTransitionEnvironment.vanillaRootXs], expandedRootX,
+        "width-expanding snapshot keeps vanilla rendering at the prerender root X")
+    for index = #widthTransitionView.statusDraws - 3,
+        #widthTransitionView.statusDraws do
+        equal(widthTransitionView.statusDraws[index].rootX, expandedRootX,
+            "width-expanding snapshot keeps SLA header rendering at the prerender root X")
+    end
+    equal(widthTransitionEnvironment.adminRootXs[
+        #widthTransitionEnvironment.adminRootXs], expandedRootX,
+        "width-expanding snapshot keeps Admin rendering at the prerender root X")
+end
+
+do
+    local releaseFailureEnvironment = makeEnvironment({ adminLauncher = true })
+    expect(releaseFailureEnvironment.integration.install().ok,
+        "release-failure Admin integration installs")
+    local releaseFailureBar = makeBar(releaseFailureEnvironment, "Axe")
+    local releaseFailureView = makeView(
+        releaseFailureEnvironment, 0, { releaseFailureBar })
+    releaseFailureView:prerender()
+    releaseFailureView:render()
+    releaseFailureView:prerender()
+    local releaseFailureButton = releaseFailureView.parent.children[1]
+    expect(releaseFailureButton.visible and releaseFailureButton.enabled,
+        "release-failure fixture begins with a live leased Admin")
+    releaseFailureView.parent.throwSetWidth = true
+    releaseFailureView:setVisible(false)
+    local cleanupObservation = releaseFailureView.parent.throwSetWidthObservation
+    expect(type(cleanupObservation) == "table"
+        and cleanupObservation.visible == false and cleanupObservation.enabled == false,
+        "Admin is hidden and disabled before a failing geometry-restoration write")
+    expect(not releaseFailureButton.visible and not releaseFailureButton.enabled
+        and releaseFailureButton.onclick == nil and releaseFailureButton.target == nil,
+        "release failure leaves no clickable Admin control")
+    releaseFailureButton:click()
+    equal(#releaseFailureEnvironment.adminOpens, 0,
+        "release failure cannot activate a stale Admin callback")
+end
 
 local offsetAdminEnvironment = makeEnvironment({ adminLauncher = true })
 expect(offsetAdminEnvironment.integration.install().ok, "offset Admin integration installs")
@@ -2250,14 +2614,15 @@ local offsetAdminView = makeView(offsetAdminEnvironment, 1, { offsetAdminBar })
 offsetAdminView.x = 23
 offsetAdminView:prerender()
 offsetAdminView:render()
+offsetAdminView:prerender()
 local offsetAdminButton = offsetAdminView.parent.children[1]
-local offsetGlobalRight = lastDraw(offsetAdminView.statusDraws, "right")
-equal(offsetGlobalRight.x, offsetAdminView.parent.width - 4,
-    "offset Global label uses the containing-window right margin")
-equal(offsetAdminButton.x, offsetAdminView.parent.width - 4 - offsetAdminButton.width,
-    "offset Admin uses the containing-window right margin")
-equal(offsetAdminView.parent.width, offsetAdminView.x + offsetAdminView.width,
-    "offset Skills view width propagates through its containing parent")
+local offsetAp = lastDrawText(offsetAdminView.statusDraws, "AP: 3")
+equal(offsetAp.x, offsetAdminView.x + offsetAdminView.width - 4,
+    "offset AP uses the live Skills-panel right margin")
+equal(offsetAdminButton.x, offsetAdminView.x + offsetAdminView.width + 4,
+    "offset Admin tracks immediately outside the live Skills-panel edge")
+equal(offsetAdminView.parent.width, offsetAdminButton.x + offsetAdminButton.width + 4,
+    "offset Admin expands its containing parent enough to remain mouse reachable")
 equal(offsetAdminView.outer.width, offsetAdminView.parent.x + offsetAdminView.parent.width,
     "offset containing-parent width propagates through its ancestor")
 local stableOffsetParentWidth = offsetAdminView.parent.width
@@ -2267,8 +2632,16 @@ equal(offsetAdminView.parent.width, stableOffsetParentWidth,
     "offset repeated render keeps propagated containing width stable")
 equal(offsetAdminButton.x, stableOffsetButtonX,
     "offset repeated render keeps Admin right-margin placement stable")
-equal(lastDraw(offsetAdminView.statusDraws, "right").x, offsetAdminView.parent.width - 4,
-    "offset repeated render keeps Global right-margin placement stable")
+equal(lastDrawText(offsetAdminView.statusDraws, "AP: 3").x,
+    offsetAdminView.x + offsetAdminView.width - 4,
+    "offset repeated render keeps AP on the Skills-panel right margin")
+offsetAdminView.x = 37
+offsetAdminView:setWidth(460)
+offsetAdminView:render()
+equal(offsetAdminButton.x, offsetAdminView.x + offsetAdminView.width + 4,
+    "Admin tracks a live Skills-panel move and resize")
+equal(offsetAdminView.parent.width, offsetAdminButton.x + offsetAdminButton.width + 4,
+    "moved Admin remains inside the expanded mouse-routing parent")
 
 equal(environment.adminRequests, 0, "Skills UI never calls admin request")
 equal(environment.adminStatusReads, 0, "Skills UI never reads admin status")

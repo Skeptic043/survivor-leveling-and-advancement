@@ -116,6 +116,7 @@ $metadataClaimValues = @($info.GetEnumerator() | Where-Object Key -ne 'poster' |
 Assert (-not ($metadataClaimValues -match "(?i)$forbidden")) 'metadata contains no deferred claims'
 
 $requiredUi = [ordered]@{
+    'IGUI_SLA_StatusLevel' = 'Survivor Level: %1'
     'IGUI_SLA_StatusAP' = 'AP: %1'
     'IGUI_SLA_StatusActive' = 'Advancement Slots: %1/%2'
     'IGUI_SLA_StatusSurvivorXp' = 'Survivor XP: %1 / %2'

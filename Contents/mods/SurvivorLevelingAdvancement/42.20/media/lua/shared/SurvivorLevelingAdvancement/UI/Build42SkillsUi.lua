@@ -3,6 +3,7 @@ local Build42SkillsUi = {}
 local MAX_SAFE_INTEGER = 9007199254740991
 local REFRESH_MILLIS = 1000
 local STATUS_LEFT_MARGIN = 4
+local ADMIN_OUTBOARD_GAP = 4
 local TARGET_R, TARGET_G, TARGET_B = 0.35, 0.72, 1.00
 local POSITION_R, POSITION_G, POSITION_B = 0.12, 0.32, 0.65
 local RECOVERY_R, RECOVERY_G, RECOVERY_B = 0.95, 0.25, 0.25
@@ -625,9 +626,10 @@ function Build42SkillsUi.create(dependencies)
             vanillaHeight = nil,
             appliedHeight = nil,
             viewportInset = nil,
-            statusLeftText = nil,
-            statusRightText = nil,
-            statusSecondText = nil,
+            statusFirstLeftText = nil,
+            statusFirstRightText = nil,
+            statusSecondLeftText = nil,
+            statusSecondRightText = nil,
             statusLeft = nil,
             statusRight = nil,
             statusFirstY = nil,
@@ -635,6 +637,9 @@ function Build42SkillsUi.create(dependencies)
             adminVisible = false,
             adminButton = nil,
             adminButtonParent = nil,
+            adminOutboardRight = nil,
+            adminGeometryLease = nil,
+            adminGeometryPrimed = false,
             joypadButton = nil,
             vanillaScrollHeight = nil,
             appliedScrollHeight = nil,
@@ -664,26 +669,22 @@ function Build42SkillsUi.create(dependencies)
 
     local restoreLayout
     local restoreAdminVisibility
+    local acquireAdminGeometry
+    local rebaseAdminGeometry
+    local releaseAdminGeometry
 
     local function disableView(state)
         if state == nil then return end
-        if restoreAdminVisibility ~= nil then pcall(restoreAdminVisibility, state) end
-        if restoreLayout ~= nil then
-            for view, candidate in pairs(views) do
-                if candidate == state then
-                    pcall(restoreLayout, view, state)
-                    break
-                end
-            end
-        end
         state.disabled = true
         state.cache = nil
-        state.statusLeftText = nil
-        state.statusRightText = nil
-        state.statusSecondText = nil
+        state.statusFirstLeftText = nil
+        state.statusFirstRightText = nil
+        state.statusSecondLeftText = nil
+        state.statusSecondRightText = nil
         state.statusLeft = nil
         state.statusRight = nil
         state.adminVisible = false
+        state.adminGeometryPrimed = false
         clearJoypadButton(state)
         if type(state.adminButton) == "table" then
             local setVisible = state.adminButton.setVisible
@@ -692,6 +693,16 @@ function Build42SkillsUi.create(dependencies)
             if callable(setEnable) then pcall(setEnable, state.adminButton, false) end
             rawset(state.adminButton, "onclick", nil)
             rawset(state.adminButton, "target", nil)
+        end
+        if releaseAdminGeometry ~= nil then pcall(releaseAdminGeometry, state) end
+        if restoreAdminVisibility ~= nil then pcall(restoreAdminVisibility, state) end
+        if restoreLayout ~= nil then
+            for view, candidate in pairs(views) do
+                if candidate == state then
+                    pcall(restoreLayout, view, state)
+                    break
+                end
+            end
         end
         for bar in pairs(state.bars) do
             local barState = bars[bar]
@@ -975,35 +986,56 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local function headerTexts(cache)
-        local left = localized("IGUI_SLA_StatusAP", cache.survivor.availableAp)
+        local firstLeft = localized("IGUI_SLA_StatusLevel", cache.survivor.level)
+        local firstRight = localized("IGUI_SLA_StatusAP", cache.survivor.availableAp)
         local current = formatSurvivorXp(cache.survivor.xpIntoLevel)
         local required = formatSurvivorXp(cache.survivor.xpForNextLevel)
-        local second = current ~= nil and required ~= nil
+        local secondRight = current ~= nil and required ~= nil
             and localized("IGUI_SLA_StatusSurvivorXp", current, required) or nil
-        if left == nil or second == nil then return nil, nil, nil end
-        if cache.allotment.mode ~= "Global" then return left, nil, second end
-        local right = localized("IGUI_SLA_StatusActive", cache.allotment.activeCount, cache.allotment.limit)
-        if right == nil then return nil, nil, nil end
-        return left, right, second
+        if firstLeft == nil or firstRight == nil or secondRight == nil then
+            return nil, nil, nil, nil
+        end
+        if cache.allotment.mode ~= "Global" then
+            return firstLeft, firstRight, nil, secondRight
+        end
+        local secondLeft = localized(
+            "IGUI_SLA_StatusActive", cache.allotment.activeCount, cache.allotment.limit)
+        if secondLeft == nil then return nil, nil, nil, nil end
+        return firstLeft, firstRight, secondLeft, secondRight
     end
 
-    local function setAdminButtonState(state, visible)
-        state.adminVisible = visible
+    local function applyAdminButtonVisibility(state, visible)
         local button = state.adminButton
         if type(button) ~= "table" then return true end
         local setVisible = button.setVisible
         local setEnable = button.setEnable
-        return callable(setVisible) and callable(setEnable)
-            and pcall(setVisible, button, visible)
-            and pcall(setEnable, button, visible)
+        local visibilityOk = callable(setVisible) and pcall(setVisible, button, visible)
+        local enableOk = callable(setEnable) and pcall(setEnable, button, visible)
+        return visibilityOk and enableOk
     end
 
-    local function updateAdminAvailability(view, state)
+    local function setAdminButtonState(state, visible, expandImmediately)
+        state.adminVisible = visible
+        if not visible then
+            state.adminGeometryPrimed = false
+            local hidden = applyAdminButtonVisibility(state, false)
+            local released = releaseAdminGeometry == nil or releaseAdminGeometry(state)
+            return hidden and released
+        elseif expandImmediately == true and acquireAdminGeometry ~= nil
+            and type(state.adminButtonParent) == "table"
+            and finite(state.adminOutboardRight) then
+            if not acquireAdminGeometry(state) then return false end
+            state.adminGeometryPrimed = false
+        end
+        return applyAdminButtonVisibility(state, visible)
+    end
+
+    local function updateAdminAvailability(view, state, expandImmediately)
         if adminLauncher == nil or state.adminVisibilityFailed or not isVisible(view) then
-            return setAdminButtonState(state, false)
+            return setAdminButtonState(state, false, false)
         end
         local called, available = pcall(adminAvailable, state.slot)
-        return setAdminButtonState(state, called and available == true)
+        return setAdminButtonState(state, called and available == true, expandImmediately)
     end
 
     local function installAdminVisibility(view, state)
@@ -1034,8 +1066,8 @@ function Build42SkillsUi.create(dependencies)
                 disableView(state)
                 error(a, 0)
             end
-            local updated, applied = pcall(updateAdminAvailability, view, state)
-            if not updated or not applied then setAdminButtonState(state, false) end
+            local updated, applied = pcall(updateAdminAvailability, view, state, true)
+            if not updated or not applied then disableView(state) end
             return a, b, c
         end
         local wrote = pcall(rawset, view, "setVisible", wrapper)
@@ -1052,8 +1084,11 @@ function Build42SkillsUi.create(dependencies)
         end
         state.adminVisibilityPrior = priorRaw
         state.adminVisibilityWrapper = wrapper
-        local updated, applied = pcall(updateAdminAvailability, view, state)
-        if not updated or not applied then setAdminButtonState(state, false) end
+        local updated, applied = pcall(updateAdminAvailability, view, state, true)
+        if not updated or not applied then
+            setAdminButtonState(state, false)
+            return false
+        end
         return true
     end
 
@@ -1093,16 +1128,25 @@ function Build42SkillsUi.create(dependencies)
     local function removeAdminButton(state)
         local button = state.adminButton
         local parent = state.adminButtonParent
+        local hidden = applyAdminButtonVisibility(state, false)
         if type(button) == "table" then
-            local setVisible = button.setVisible
-            if callable(setVisible) then pcall(setVisible, button, false) end
             rawset(button, "onclick", nil)
             rawset(button, "target", nil)
+        end
+        local released = true
+        if releaseAdminGeometry ~= nil then
+            local called, result = pcall(releaseAdminGeometry, state)
+            released = called and result == true
+        end
+        if type(button) == "table" then
             local removeChild = type(parent) == "table" and parent.removeChild or nil
             if callable(removeChild) then pcall(removeChild, parent, button) end
         end
         state.adminButton = nil
         state.adminButtonParent = nil
+        state.adminOutboardRight = nil
+        state.adminGeometryPrimed = false
+        return hidden and released
     end
 
     local function ensureAdminButton(view, state)
@@ -1110,7 +1154,7 @@ function Build42SkillsUi.create(dependencies)
         local parent = rawget(view, "parent")
         if type(parent) ~= "table" then return false end
         if state.adminButton ~= nil and state.adminButtonParent ~= parent then
-            removeAdminButton(state)
+            if not removeAdminButton(state) then return false end
         end
         if state.adminButton == nil then
             local title = localized("IGUI_SLA_Admin_Button")
@@ -1139,12 +1183,16 @@ function Build42SkillsUi.create(dependencies)
 
     local function applyCache(state)
         local cache = state.cache
-        local left, right, second = nil, nil, nil
-        if cache then left, right, second = headerTexts(cache) end
-        state.statusLeftText = left
-        state.statusRightText = right
-        state.statusSecondText = second
-        if cache and (left == nil or second == nil) then disableView(state); return false end
+        local firstLeft, firstRight, secondLeft, secondRight = nil, nil, nil, nil
+        if cache then firstLeft, firstRight, secondLeft, secondRight = headerTexts(cache) end
+        state.statusFirstLeftText = firstLeft
+        state.statusFirstRightText = firstRight
+        state.statusSecondLeftText = secondLeft
+        state.statusSecondRightText = secondRight
+        if cache and (firstLeft == nil or firstRight == nil or secondRight == nil) then
+            disableView(state)
+            return false
+        end
         for index = 1, #state.order do
             local barState = bars[state.order[index]]
             if barState and barState.supported then
@@ -1253,6 +1301,169 @@ function Build42SkillsUi.create(dependencies)
         return true
     end
 
+    releaseAdminGeometry = function(state)
+        local lease = state and state.adminGeometryLease or nil
+        if lease == nil then return true end
+        state.adminGeometryLease = nil
+        if type(lease) ~= "table" or getmetatable(lease) ~= nil then return false end
+        local child = nil
+        for index = 1, #lease do
+            local entry = rawget(lease, index)
+            local node = type(entry) == "table" and rawget(entry, "node") or nil
+            local currentWidth = readNumber(node, "getWidth")
+            local currentX = readNumber(node, "getX")
+            if currentWidth == nil or currentX == nil then return false end
+            if rawget(entry, "changed") == true
+                and currentWidth == rawget(entry, "appliedWidth") then
+                local targetWidth = rawget(entry, "baseWidth")
+                if child ~= nil then
+                    local childX = readNumber(child, "getX")
+                    local childWidth = readNumber(child, "getWidth")
+                    if childX == nil or childWidth == nil then return false end
+                    targetWidth = math.max(targetWidth, childX + childWidth)
+                end
+                local restoreX = currentX == rawget(entry, "appliedX")
+                    and targetWidth == rawget(entry, "baseWidth")
+                if targetWidth ~= currentWidth
+                    and not writeNumber(node, "setWidth", targetWidth) then return false end
+                if restoreX and currentX ~= rawget(entry, "baseX")
+                    and not writeNumber(node, "setX", rawget(entry, "baseX")) then return false end
+            end
+            child = node
+        end
+        return true
+    end
+
+    acquireAdminGeometry = function(state)
+        if state == nil or state.adminVisible ~= true
+            or type(state.adminButtonParent) ~= "table"
+            or not finite(state.adminOutboardRight) then return true end
+        local lease = state.adminGeometryLease
+        if lease ~= nil then
+            local node = state.adminButtonParent
+            for index = 1, #lease do
+                local entry = rawget(lease, index)
+                if type(entry) ~= "table" or rawget(entry, "node") ~= node then
+                    if not releaseAdminGeometry(state) then return false end
+                    lease = nil
+                    break
+                end
+                node = type(node) == "table" and rawget(node, "parent") or nil
+            end
+            if lease ~= nil and node ~= nil then
+                if not releaseAdminGeometry(state) then return false end
+                lease = nil
+            end
+        end
+        if lease == nil then
+            lease = {}
+            state.adminGeometryLease = lease
+        end
+        local node = state.adminButtonParent
+        local requiredWidth = state.adminOutboardRight
+        local index = 1
+        while node ~= nil do
+            if type(node) ~= "table" then return false end
+            local entry = rawget(lease, index)
+            local baseWidth = entry ~= nil and rawget(entry, "baseWidth")
+                or readNumber(node, "getWidth")
+            local baseX = entry ~= nil and rawget(entry, "baseX") or readNumber(node, "getX")
+            if baseWidth == nil or baseX == nil then return false end
+            local desiredWidth = math.max(baseWidth, requiredWidth)
+            local changed = desiredWidth > baseWidth
+            local currentWidth = readNumber(node, "getWidth")
+            if currentWidth == nil then return false end
+            if currentWidth ~= desiredWidth
+                and not writeNumber(node, "setWidth", desiredWidth) then return false end
+            local appliedWidth = readNumber(node, "getWidth")
+            local appliedX = readNumber(node, "getX")
+            if appliedWidth == nil or appliedX == nil then return false end
+            if entry == nil then
+                entry = { node = node }
+                lease[index] = entry
+            end
+            entry.baseWidth = baseWidth
+            entry.baseX = baseX
+            entry.appliedWidth = appliedWidth
+            entry.appliedX = appliedX
+            entry.changed = changed
+            local parent = rawget(node, "parent")
+            if parent ~= nil then
+                local nodeX = readNumber(node, "getX")
+                if nodeX == nil then return false end
+                requiredWidth = nodeX + appliedWidth
+            end
+            node = parent
+            index = index + 1
+        end
+        return true
+    end
+
+    rebaseAdminGeometry = function(state)
+        local lease = state and state.adminGeometryLease or nil
+        if lease == nil then return true end
+        for index = 1, #lease do
+            local entry = rawget(lease, index)
+            local node = type(entry) == "table" and rawget(entry, "node") or nil
+            local currentWidth = readNumber(node, "getWidth")
+            local currentX = readNumber(node, "getX")
+            if currentWidth == nil or currentX == nil then return false end
+            if currentWidth ~= rawget(entry, "appliedWidth") then
+                entry.baseWidth = currentWidth
+                entry.appliedWidth = currentWidth
+                entry.changed = false
+            end
+            if currentX ~= rawget(entry, "appliedX") then
+                entry.baseX = currentX
+                entry.appliedX = currentX
+            end
+        end
+        return true
+    end
+
+    local function primeAdminGeometry(state)
+        if state == nil or state.adminVisible ~= true
+            or state.adminGeometryPrimed ~= true
+            or state.adminGeometryLease ~= nil then return true end
+        if type(state.adminButtonParent) ~= "table"
+            or not finite(state.adminOutboardRight)
+            or not acquireAdminGeometry(state) then return false end
+        state.adminGeometryPrimed = false
+        return applyAdminButtonVisibility(state, true)
+    end
+
+    local function reapplyAdminGeometry(state)
+        local lease = state and state.adminGeometryLease or nil
+        if lease == nil or state.adminVisible ~= true
+            or not finite(state.adminOutboardRight) then return true end
+        local requiredWidth = state.adminOutboardRight
+        for index = 1, #lease do
+            local entry = rawget(lease, index)
+            local node = type(entry) == "table" and rawget(entry, "node") or nil
+            local baseWidth = type(entry) == "table" and rawget(entry, "baseWidth") or nil
+            local baseX = type(entry) == "table" and rawget(entry, "baseX") or nil
+            if not finite(baseWidth) or not finite(baseX) then return false end
+            local desiredWidth = math.max(baseWidth, requiredWidth)
+            local currentWidth = readNumber(node, "getWidth")
+            if currentWidth == nil then return false end
+            if currentWidth ~= desiredWidth
+                and not writeNumber(node, "setWidth", desiredWidth) then return false end
+            local appliedWidth = readNumber(node, "getWidth")
+            local appliedX = readNumber(node, "getX")
+            if appliedWidth == nil or appliedX == nil then return false end
+            entry.appliedWidth = appliedWidth
+            entry.appliedX = appliedX
+            entry.changed = desiredWidth > baseWidth
+            local parent = rawget(node, "parent")
+            if parent ~= nil then
+                local nodeX = readNumber(node, "getX")
+                if nodeX == nil then return false end
+                requiredWidth = nodeX + appliedWidth
+            end
+        end
+        return true
+    end
+
     local function prepareGeometry(view, state)
         local currentWidth = readNumber(view, "getWidth")
         if currentWidth == nil then return false end
@@ -1280,7 +1491,6 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local function prepareHeader(view, state)
-        if not updateAdminAvailability(view, state) then return false end
         local _, buttonY, buttonHeight = firstButtonGeometry(view)
         if buttonY == nil or buttonHeight == nil then return false end
         local viewportInset = buttonY + buttonHeight
@@ -1393,57 +1603,74 @@ function Build42SkillsUi.create(dependencies)
         if not finite(gutter) or gutter < 0 then return false end
         state.outerGutter = gutter
         local requiredRight = controlRight
-        if state.statusLeftText ~= nil and state.statusSecondText ~= nil then
+        if state.statusFirstLeftText ~= nil and state.statusFirstRightText ~= nil
+            and state.statusSecondRightText ~= nil then
             local contentLeft, y, rowHeight = firstButtonGeometry(view)
-            local leftCalled, leftWidth = pcall(measureText, state.statusLeftText)
-            local secondCalled, secondWidth = pcall(measureText, state.statusSecondText)
             local gapCalled, gapWidth = pcall(measureText, "  ")
+            local firstLeftCalled, firstLeftWidth = pcall(measureText, state.statusFirstLeftText)
+            local firstRightCalled, firstRightWidth = pcall(measureText, state.statusFirstRightText)
+            local secondRightCalled, secondRightWidth = pcall(measureText, state.statusSecondRightText)
             if contentLeft == nil or y == nil or rowHeight == nil
-                or not leftCalled or not finite(leftWidth) or leftWidth < 0
-                or not secondCalled or not finite(secondWidth) or secondWidth < 0
+                or not firstLeftCalled or not finite(firstLeftWidth) or firstLeftWidth < 0
+                or not firstRightCalled or not finite(firstRightWidth) or firstRightWidth < 0
+                or not secondRightCalled or not finite(secondRightWidth) or secondRightWidth < 0
                 or not gapCalled or not finite(gapWidth) or gapWidth < 0 then return false end
             local viewX = readNumber(view, "getX")
             if viewX == nil then return false end
-            local headerWidth = math.max(
-                STATUS_LEFT_MARGIN + leftWidth + STATUS_LEFT_MARGIN,
-                STATUS_LEFT_MARGIN + secondWidth + STATUS_LEFT_MARGIN)
-            if state.statusRightText ~= nil then
-                local rightCalled, rightWidth = pcall(measureText, state.statusRightText)
-                if not rightCalled or not finite(rightWidth) or rightWidth < 0 then return false end
-                local composedWidth = STATUS_LEFT_MARGIN + leftWidth + gapWidth + rightWidth
-                    + STATUS_LEFT_MARGIN
-                headerWidth = math.max(headerWidth, composedWidth)
+            local firstRowWidth = STATUS_LEFT_MARGIN + firstLeftWidth + gapWidth
+                + firstRightWidth + STATUS_LEFT_MARGIN
+            local secondRowWidth = STATUS_LEFT_MARGIN + secondRightWidth + STATUS_LEFT_MARGIN
+            if state.statusSecondLeftText ~= nil then
+                local secondLeftCalled, secondLeftWidth = pcall(
+                    measureText, state.statusSecondLeftText)
+                if not secondLeftCalled or not finite(secondLeftWidth)
+                    or secondLeftWidth < 0 then return false end
+                secondRowWidth = STATUS_LEFT_MARGIN + secondLeftWidth + gapWidth
+                    + secondRightWidth + STATUS_LEFT_MARGIN
             end
+            local headerWidth = math.max(firstRowWidth, secondRowWidth)
             state.contentLeft = contentLeft
             state.statusLeft = STATUS_LEFT_MARGIN
             state.statusFirstY = y
             state.statusSecondY = y + rowHeight
             local windowWidth = viewX + requiredRight + gutter
             windowWidth = math.max(windowWidth, headerWidth)
-            if adminLauncher ~= nil then
-                if not ensureAdminButton(view, state) then return false end
-                local buttonWidth = readNumber(state.adminButton, "getWidth")
-                if buttonWidth == nil or buttonWidth <= 0 then return false end
-                windowWidth = math.max(windowWidth,
-                    STATUS_LEFT_MARGIN + secondWidth + gapWidth + buttonWidth + STATUS_LEFT_MARGIN)
-            end
             requiredRight = windowWidth - viewX - gutter
-            state.statusRight = state.statusRightText ~= nil and requiredRight + gutter
-                - STATUS_LEFT_MARGIN or nil
+            state.statusRight = requiredRight + gutter - STATUS_LEFT_MARGIN
+            local desiredWidth = requiredRight + gutter
+            if not propagate(view, desiredWidth, "width") then return false end
+            state.appliedWidth = desiredWidth
             if adminLauncher ~= nil then
-                local buttonWidth = readNumber(state.adminButton, "getWidth")
-                local buttonX = requiredRight + gutter - STATUS_LEFT_MARGIN - buttonWidth
-                if not writeNumber(state.adminButton, "setX", viewX + buttonX)
-                    or not writeNumber(state.adminButton, "setY",
-                        state.baseY + state.statusSecondY) then return false end
+                local parent = rawget(view, "parent")
+                if state.adminButton ~= nil and state.adminButtonParent == parent then
+                    local buttonWidth = readNumber(state.adminButton, "getWidth")
+                    if buttonWidth == nil or buttonWidth <= 0 then return false end
+                    local buttonX = viewX + desiredWidth + ADMIN_OUTBOARD_GAP
+                    if not writeNumber(state.adminButton, "setX", buttonX)
+                        or not writeNumber(state.adminButton, "setY",
+                            state.baseY + state.statusSecondY) then return false end
+                    state.adminOutboardRight = buttonX + buttonWidth + STATUS_LEFT_MARGIN
+                    if state.adminVisible then
+                        if state.adminGeometryLease ~= nil then
+                            if not reapplyAdminGeometry(state)
+                                or not applyAdminButtonVisibility(state, true) then return false end
+                            state.adminGeometryPrimed = false
+                        else
+                            state.adminGeometryPrimed = true
+                            if not applyAdminButtonVisibility(state, false) then return false end
+                        end
+                    elseif not state.adminVisible then
+                        state.adminGeometryPrimed = false
+                    end
+                end
             end
         else
             state.statusLeft, state.statusRight = nil, nil
             state.statusFirstY, state.statusSecondY = nil, nil
+            local desiredWidth = requiredRight + gutter
+            if not propagate(view, desiredWidth, "width") then return false end
+            state.appliedWidth = desiredWidth
         end
-        local desiredWidth = requiredRight + gutter
-        if not propagate(view, desiredWidth, "width") then return false end
-        state.appliedWidth = desiredWidth
         return true
     end
 
@@ -1480,7 +1707,8 @@ function Build42SkillsUi.create(dependencies)
             disableView(state)
             return
         end
-        if state.statusLeftText ~= nil and state.statusSecondText ~= nil
+        if state.statusFirstLeftText ~= nil and state.statusFirstRightText ~= nil
+            and state.statusSecondRightText ~= nil
             and state.statusLeft ~= nil then
             local parent = rawget(view, "parent")
             local viewX = readNumber(view, "getX")
@@ -1489,15 +1717,18 @@ function Build42SkillsUi.create(dependencies)
             local firstY = state.baseY + state.statusFirstY
             local secondY = state.baseY + state.statusSecondY
             local leftOk = viewX ~= nil and callable(drawLeft)
-                and pcall(drawLeft, parent, state.statusLeftText, state.statusLeft,
+                and pcall(drawLeft, parent, state.statusFirstLeftText, state.statusLeft,
                     firstY, 1, 1, 1, 1, smallFont)
-            local rightOk = state.statusRightText == nil or (viewX ~= nil and callable(drawRight)
-                and pcall(drawRight, parent, state.statusRightText, viewX + state.statusRight,
-                    firstY, 1, 1, 1, 1, smallFont))
-            local secondOk = viewX ~= nil and callable(drawLeft)
-                and pcall(drawLeft, parent, state.statusSecondText, state.statusLeft,
+            local firstRightOk = viewX ~= nil and callable(drawRight)
+                and pcall(drawRight, parent, state.statusFirstRightText, viewX + state.statusRight,
+                    firstY, 1, 1, 1, 1, smallFont)
+            local secondLeftOk = state.statusSecondLeftText == nil or (viewX ~= nil
+                and callable(drawLeft) and pcall(drawLeft, parent, state.statusSecondLeftText,
+                    state.statusLeft, secondY, 1, 1, 1, 1, smallFont))
+            local secondRightOk = viewX ~= nil and callable(drawRight)
+                and pcall(drawRight, parent, state.statusSecondRightText, viewX + state.statusRight,
                     secondY, 1, 1, 1, 1, smallFont)
-            if not leftOk or not rightOk or not secondOk then
+            if not leftOk or not firstRightOk or not secondLeftOk or not secondRightOk then
                 disableView(state)
             end
         end
@@ -1656,13 +1887,30 @@ function Build42SkillsUi.create(dependencies)
     wrappers.prerender = function(view, ...)
         local state = viewFor(view)
         if state ~= nil and not state.disabled then
-            installAdminVisibility(view, state)
+            local visibilityReady = installAdminVisibility(view, state)
+            local availabilityReady = visibilityReady
+                and updateAdminAvailability(view, state, false)
+            local ownershipReady = availabilityReady and ensureAdminButton(view, state)
+            local geometryRebased = ownershipReady and rebaseAdminGeometry(state)
             local prepared, result = pcall(prepareHeader, view, state)
-            if not prepared or not result then disableView(state) end
+            local primed, primeResult = pcall(primeAdminGeometry, state)
+            if not visibilityReady or not availabilityReady or not ownershipReady or not geometryRebased
+                or not prepared or not result or not primed or not primeResult then
+                disableView(state)
+            end
         end
         local ok, a, b, c = pcall(priorPrerender, view, ...)
         local addonOk = pcall(onPrerender, view)
         if not addonOk then disableView(views[view]) end
+        state = views[view]
+        if addonOk and state ~= nil and not state.disabled then
+            local finalized, finalResult = pcall(function()
+                return prepareGeometry(view, state)
+                    and applyGeometry(view, state)
+                    and primeAdminGeometry(state)
+            end)
+            if not finalized or not finalResult then disableView(state) end
+        end
         if not ok then error(a, 0) end
         return a, b, c
     end
@@ -1671,17 +1919,19 @@ function Build42SkillsUi.create(dependencies)
         local preservedScroll = nil
         local restoreRenderSetters = nil
         if state ~= nil and not state.disabled then
-            preservedScroll = readNumber(view, "getYScroll")
-            installAdminVisibility(view, state)
-            local headerCalled, headerPrepared = pcall(prepareHeader, view, state)
-            local geometryCalled, geometryPrepared = pcall(prepareGeometry, view, state)
-            if not headerCalled or not headerPrepared or not geometryCalled or not geometryPrepared then
+            if not rebaseAdminGeometry(state) then
                 disableView(state)
-            end
-            if preservedScroll ~= nil and not state.disabled then
-                restoreRenderSetters = preserveScrollInsideVanillaRender(view, preservedScroll,
-                    state.appliedHeight, state.appliedScrollHeight)
-                if restoreRenderSetters == nil then disableView(state) end
+            else
+                preservedScroll = readNumber(view, "getYScroll")
+                local headerCalled, headerPrepared = pcall(prepareHeader, view, state)
+                local geometryCalled, geometryPrepared = pcall(prepareGeometry, view, state)
+                if not headerCalled or not headerPrepared
+                    or not geometryCalled or not geometryPrepared then disableView(state) end
+                if preservedScroll ~= nil and not state.disabled then
+                    restoreRenderSetters = preserveScrollInsideVanillaRender(view, preservedScroll,
+                        state.appliedHeight, state.appliedScrollHeight)
+                    if restoreRenderSetters == nil then disableView(state) end
+                end
             end
         end
         local ok, a, b, c = pcall(priorRender, view, ...)
