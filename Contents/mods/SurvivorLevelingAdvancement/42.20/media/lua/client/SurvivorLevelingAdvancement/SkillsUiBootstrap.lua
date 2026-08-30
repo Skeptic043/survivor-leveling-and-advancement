@@ -1,9 +1,11 @@
 require "XpSystem/ISUI/ISCharacterInfo"
 require "XpSystem/ISUI/ISSkillProgressBar"
 require "ISUI/ISButton"
+require "ISUI/ISPanel"
 require "ISUI/ISTextEntryBox"
 require "ISUI/ISCollapsableWindowJoypad"
 require "ISUI/AdminPanel/ISMiniScoreboardUI"
+require "ISUI/AdminPanel/ISUsersList"
 require "ISUI/ISContextMenu"
 
 local SENTINEL_KEY = "__SLA_Build42SkillsUi_42_20_v2"
@@ -67,6 +69,7 @@ local VanillaProgressionAdapter = require "SurvivorLevelingAdvancement/Adapters/
 local adminCalled, adminCreated = pcall(Build42AdminUi.create, {
     owner = lifecycle,
     ISMiniScoreboardUI = ISMiniScoreboardUI,
+    ISUsersList = ISUsersList,
     ISCollapsableWindowJoypad = ISCollapsableWindowJoypad,
     ISTextEntryBox = ISTextEntryBox,
     ISButton = ISButton,
@@ -113,6 +116,7 @@ local createCalled, created = pcall(Build42SkillsUi.create, {
     ISCharacterInfo = ISCharacterInfo,
     ISSkillProgressBar = ISSkillProgressBar,
     ISButton = ISButton,
+    ISPanel = ISPanel,
     owner = lifecycle,
     viewModel = modelResult.model,
     settingsProvider = providerResult.provider,

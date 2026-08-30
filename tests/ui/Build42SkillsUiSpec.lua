@@ -113,6 +113,8 @@ local function makeEnvironment(options)
         priorJoypadGain = 0,
         priorJoypadLose = 0,
         priorMouseUp = 0,
+        priorMouseWheel = 0,
+        wheelDeltas = {},
         refresh = { 0, 0, 0, 0 },
         stateReads = { 0, 0, 0, 0 },
         statusReads = { 0, 0, 0, 0 },
@@ -125,6 +127,7 @@ local function makeEnvironment(options)
         progressionDescribes = 0,
         progressionInspects = 0,
         buttonCreates = 0,
+        panelCreates = 0,
         adminInstalls = 0,
         adminStatusReads = 0,
         adminAvailabilityReads = 0,
@@ -166,6 +169,7 @@ local function makeEnvironment(options)
     local CharacterInfo = {}
     local ProgressBar = {}
     local Button = {}
+    local Panel = {}
 
     function CharacterInfo.prerender(self)
         evidence.priorPrerender = evidence.priorPrerender + 1
@@ -231,6 +235,12 @@ local function makeEnvironment(options)
         self.joypadIndex = nil
     end
     function CharacterInfo.onLoseJoypadFocus() evidence.priorJoypadLose = evidence.priorJoypadLose + 1 end
+    function CharacterInfo.onMouseWheel(self, delta)
+        evidence.priorMouseWheel = evidence.priorMouseWheel + 1
+        evidence.wheelDeltas[#evidence.wheelDeltas + 1] = delta
+        self:setYScroll(self:getYScroll() - delta * 30)
+        return true
+    end
     function ProgressBar.renderPerkRect(self)
         evidence.priorOverlay = evidence.priorOverlay + 1
         evidence.progressRootXs[#evidence.progressRootXs + 1] = rootScreenX(self)
@@ -296,6 +306,33 @@ local function makeEnvironment(options)
             setJoypadFocused = function(self, value) self.joypadFocused = value end,
             forceClick = function(self) self:click() end,
         } })
+    end
+
+    function Panel.new(_, x, y, width, height)
+        evidence.panelCreates = evidence.panelCreates + 1
+        local panel = {
+            x = x, y = y, width = width, height = height, visible = true,
+        }
+        function panel:initialise()
+            self.initialised = true
+            self.javaObject = {
+                setConsumeMouseEvents = function(_, value)
+                    self.javaConsumeMouseEvents = value
+                end,
+            }
+        end
+        function panel:noBackground() self.background = false end
+        function panel:setWantMouseEvents(value)
+            self.javaObject:setConsumeMouseEvents(value)
+        end
+        function panel:setVisible(value) self.visible = value end
+        function panel:getWidth() return self.width end
+        function panel:getHeight() return self.height end
+        function panel:setX(value) self.x = value end
+        function panel:setY(value) self.y = value end
+        function panel:setWidth(value) self.width = value end
+        function panel:setHeight(value) self.height = value end
+        return panel
     end
 
     local owner = {
@@ -506,6 +543,7 @@ local function makeEnvironment(options)
         ISCharacterInfo = CharacterInfo,
         ISSkillProgressBar = ProgressBar,
         ISButton = Button,
+        ISPanel = Panel,
         owner = owner,
         viewModel = model,
         settingsProvider = provider,
@@ -548,6 +586,7 @@ local function makeEnvironment(options)
     evidence.CharacterInfo = CharacterInfo
     evidence.ProgressBar = ProgressBar
     evidence.Button = Button
+    evidence.Panel = Panel
     evidence.owner = owner
     evidence.dependencies = dependencies
     return evidence
@@ -1476,7 +1515,7 @@ equal(environment.settingsReads, readsBeforeStable[3], "render stability reads n
 equal(environment.buttonCreates, buttonsBeforeRepeatedRender, "repeated renders create no duplicate buttons")
 equal(lastDrawText(view.statusDraws, "Survivor Level: 5").x, 4,
     "repeated renders keep the first left label at the fixed window margin")
-equal(lastDrawText(view.statusDraws, "Advancement Slots: 2/6").x, 4,
+equal(lastDrawText(view.statusDraws, "Survivor XP: 10 / 100").x, 4,
     "repeated renders keep the second left label at the fixed window margin")
 equal(view.width - (axe.x + axe.width), 100, "expanded bar preserves measured vanilla right gutter")
 equal(view.parent.width, view.x + view.width, "view width propagates absolutely to parent")
@@ -1494,12 +1533,13 @@ do
     equal(availableAp.kind, "right", "AP binds to the first-row right edge")
     equal(availableAp.x, view.parent.width - 4,
         "AP binds four logical pixels from the containing-window right edge")
-    equal(advancementSlots.kind, "left", "Global slots bind to the second-row left edge")
-    equal(advancementSlots.x, 4, "Global slots bind four logical pixels from the left edge")
+    equal(advancementSlots.kind, "right", "Global slots bind to the second-row right edge")
+    equal(advancementSlots.x, view.parent.width - 4,
+        "Global slots bind four logical pixels from the containing-window right edge")
     expect(survivorXp ~= nil, "second row binds exact cached Survivor XP")
-    equal(survivorXp.kind, "right", "Survivor XP binds to the second-row right edge")
-    equal(survivorXp.x, view.parent.width - 4,
-        "Survivor XP binds four logical pixels from containing window right edge")
+    equal(survivorXp.kind, "left", "Survivor XP binds to the second-row left edge")
+    equal(survivorXp.x, 4,
+        "Survivor XP binds four logical pixels from the left edge")
     equal(survivorXp.y, 38, "Survivor XP uses the second native-height row")
 end
 
@@ -1527,12 +1567,12 @@ narrowView:render()
     expect(narrowView.width > 200 and narrowView.parent.width > 220,
         "narrow view and containing window widen for measured copy")
     local narrowLevel = lastDrawText(narrowView.statusDraws, "Survivor Level: 5")
-    local narrowSlots = lastDrawText(narrowView.statusDraws, "Advancement Slots: 2/6")
     local narrowXp = lastDrawText(narrowView.statusDraws, "Survivor XP: 10 / 100")
+    local narrowSlots = lastDrawText(narrowView.statusDraws, "Advancement Slots: 2/6")
     expect(narrowLevel.x + #narrowLevel.text * 10 + #"  " * 10
         <= narrowAp.x - #narrowAp.text * 10, "minimum-width first row does not overlap")
-    expect(narrowSlots.x + #narrowSlots.text * 10 + #"  " * 10
-        <= narrowXp.x - #narrowXp.text * 10, "minimum-width second row does not overlap")
+    expect(narrowXp.x + #narrowXp.text * 10 + #"  " * 10
+        <= narrowSlots.x - #narrowSlots.text * 10, "minimum-width second row does not overlap")
 
 local originalSecondRowCopy = translations.IGUI_SLA_StatusSurvivorXp
 translations.IGUI_SLA_StatusSurvivorXp = string.rep("W", 500) .. " %1 / %2"
@@ -1545,7 +1585,7 @@ wideSecondRowView:render()
 local wideSecondRowText = formatText("IGUI_SLA_StatusSurvivorXp", 10, 100)
     equal(wideSecondRowView.width,
         4 + #"Advancement Slots: 2/6" + #"  " + #wideSecondRowText + 4,
-        "wider right-aligned XP remains collision-safe beside Global slots")
+        "wider left-aligned XP remains collision-safe beside Global slots")
 translations.IGUI_SLA_StatusSurvivorXp = originalSecondRowCopy
 
 local largeHeaderEnvironment = makeEnvironment({
@@ -1571,7 +1611,7 @@ expect(largeLevel ~= nil and largeAp ~= nil and largeSlots ~= nil and largeXp ~=
     "large representative values render on their exact rows")
 expect(largeLevel.x + #largeLevel.text * 4 + #"  " * 4 <= largeAp.x - #largeAp.text * 4,
     "large first-row values do not overlap")
-expect(largeSlots.x + #largeSlots.text * 4 + #"  " * 4 <= largeXp.x - #largeXp.text * 4,
+expect(largeXp.x + #largeXp.text * 4 + #"  " * 4 <= largeSlots.x - #largeSlots.text * 4,
     "large second-row values do not overlap")
 
 for _, malformedLevelCase in ipairs({ "missing", "malformed" }) do
@@ -1753,8 +1793,8 @@ for index = 1, #modes do
         modes[index] .. " header omits a nonexistent global slot total")
     equal(lastDrawText(modeView.statusDraws, "AP: 3").kind, "right",
         modes[index] .. " AP stays right aligned")
-    equal(lastDrawText(modeView.statusDraws, "Survivor XP: 10 / 100").kind, "right",
-        modes[index] .. " Survivor XP stays right aligned")
+    equal(lastDrawText(modeView.statusDraws, "Survivor XP: 10 / 100").kind, "left",
+        modes[index] .. " Survivor XP stays left aligned")
     equal(modeView.width, 420, modes[index] .. " width uses max control edge plus captured gutter")
 end
 
@@ -2267,28 +2307,52 @@ local adminView = makeView(adminEnvironment, 2, { adminBar })
 adminView:prerender()
 adminView:render()
 equal(adminEnvironment.lastAdminAvailabilitySlot, 2, "launcher visibility preserves exact Skills slot")
-equal(#adminView.parent.children, 1, "one outboard admin button is created")
+equal(#adminView.parent.children, 2, "one outboard Admin and one wheel surface are created")
 local adminButton = adminView.parent.children[1]
+local adminWheelSurface = adminView.parent.children[2]
 equal(adminButton.title, "Admin", "admin launcher uses localized compact label")
 expect(adminButton.visible and adminButton.enabled,
     "prerender-finalized debug launcher is visible and enabled before child rendering")
 local adminAp = lastDrawText(adminView.statusDraws, "AP: 3")
 local adminXp = lastDrawText(adminView.statusDraws, "Survivor XP: 10 / 100")
+local adminSlots = lastDrawText(adminView.statusDraws, "Advancement Slots: 2/6")
 expect(adminAp ~= nil and adminAp.x == adminView.x + adminView.width - 4,
     "first-row AP stays bound to the Skills panel right edge")
-expect(adminXp ~= nil and adminXp.x == adminView.x + adminView.width - 4,
-    "second-row Survivor XP stays bound to the Skills panel right edge")
+expect(adminXp ~= nil and adminXp.x == 4,
+    "second-row Survivor XP stays bound to the Skills panel left edge")
+expect(adminSlots ~= nil and adminSlots.x == adminView.x + adminView.width - 4,
+    "second-row Advancement Slots stay bound to the Skills panel right edge")
 equal(adminButton.x, adminView.x + adminView.width + 4,
     "Admin begins four logical pixels outside the Skills panel right edge")
-expect(adminButton.x > adminXp.x and adminButton.x + adminButton.width <= adminView.parent.width,
+expect(adminButton.x > adminAp.x and adminButton.x + adminButton.width <= adminView.parent.width,
     "expanded parent keeps the outboard Admin unclipped and clear of header copy")
 expect(adminView.parent.width <= adminView.outer.width,
     "outboard Admin remains inside the propagated window hierarchy")
-expect(adminView.parent.children[#adminView.parent.children] == adminButton,
-    "Admin is the containing parent's last-added child for sibling z-order")
 expect(adminView.parent:canRouteMouseTo(adminButton),
     "expanded parent routes mouse input to the visible outboard Admin")
-equal(adminButton.y, 38, "Admin uses the second native-height row")
+equal(adminButton.y, 18, "Admin uses the first native-height row")
+expect(adminWheelSurface.visible and adminWheelSurface.javaConsumeMouseEvents == false,
+    "transparent outboard gutter forwards wheel without consuming other mouse events")
+equal(rawget(adminWheelSurface, "setConsumeMouseEvents"), nil,
+    "production-shaped wheel surface omits the nonexistent Lua consume-events seam")
+equal(adminWheelSurface.x, adminView.x + adminView.width,
+    "wheel surface begins at the exact Skills right edge")
+equal(adminWheelSurface.y, adminButton.y + adminButton.height,
+    "wheel surface begins immediately below Admin")
+equal(adminWheelSurface.width,
+    adminButton.x + adminButton.width + 4 - adminWheelSurface.x,
+    "wheel surface covers only the leased outboard strip")
+equal(adminWheelSurface.height, adminView.parent.height - adminWheelSurface.y,
+    "wheel surface ends at the containing panel bottom")
+adminView:onMouseWheel(1)
+equal(adminEnvironment.wheelDeltas[#adminEnvironment.wheelDeltas], 1,
+    "wheel inside Skills uses the captured active scroll path")
+expect(adminWheelSurface:onMouseWheel(-2), "outboard gutter consumes a forwarded wheel event")
+equal(adminEnvironment.wheelDeltas[#adminEnvironment.wheelDeltas], -2,
+    "outboard gutter forwards the exact wheel delta")
+expect(adminButton:onMouseWheel(3), "Admin button forwards wheel to Skills")
+equal(adminEnvironment.wheelDeltas[#adminEnvironment.wheelDeltas], 3,
+    "Admin button forwards the exact wheel delta")
 local stableAdminX = adminButton.x
 adminView:render()
 equal(adminButton.x, stableAdminX, "repeated render keeps Admin right-margin placement stable")
@@ -2297,13 +2361,19 @@ local buttonCreatesBeforeTabs = adminEnvironment.buttonCreates
 adminView:setVisible(false)
 expect(not adminButton.visible and not adminButton.enabled,
     "Admin hides at the exact Skills visibility transition")
+expect(not adminWheelSurface.visible, "outboard wheel surface hides with Skills")
+local wheelReadsWhileHidden = adminEnvironment.priorMouseWheel
+expect(not adminWheelSurface:onMouseWheel(1), "hidden outboard gutter does not consume wheel")
+expect(not adminButton:onMouseWheel(1), "hidden Admin does not consume wheel")
+equal(adminEnvironment.priorMouseWheel, wheelReadsWhileHidden,
+    "hidden outboard controls restore world-wheel routing")
 equal(adminView.parent.width, adminView.x + adminView.width,
     "hiding Skills immediately releases the shared tab-panel width")
 equal(adminView.outer.width, adminView.parent.x + adminView.parent.width,
     "hiding Skills immediately releases the containing-window width")
 expect(not adminView.parent:canRouteMouseTo(adminButton),
     "hidden Admin is excluded from parent mouse routing")
-equal(#adminView.parent.children, 1, "leaving Skills creates no additional Admin button")
+equal(#adminView.parent.children, 2, "leaving Skills creates no additional outboard controls")
 adminButton:click()
 equal(#adminEnvironment.adminOpens, 0, "stale hidden Admin click cannot open the panel")
 adminView:setVisible(true)
@@ -2424,6 +2494,7 @@ do
     reparentView:prerender()
     local oldParent = reparentView.parent
     local oldButton = oldParent.children[1]
+    local oldWheelSurface = oldParent.children[2]
     local newOuter = makeParent(450, 328, nil, 0, 0)
     local newParent = makeParent(450, 308, newOuter, 0, 20)
     reparentView.parent = newParent
@@ -2437,7 +2508,10 @@ do
         "next prerender restores the old ancestor's width before child rendering")
     expect(not oldButton.visible and oldButton.onclick == nil and oldButton.target == nil,
         "removed outboard Admin is hidden and has no stale callback")
-    equal(#newParent.children, 1, "parent replacement creates one outboard Admin on the live parent")
+    expect(not oldWheelSurface.visible and oldWheelSurface.onMouseWheel == nil,
+        "removed outboard wheel surface is hidden and has no stale callback")
+    equal(#newParent.children, 2,
+        "parent replacement creates one Admin and one wheel surface on the live parent")
     expect(newParent:canRouteMouseTo(newParent.children[1]),
         "replacement parent routes mouse input only to the live Admin")
 end
@@ -2578,6 +2652,41 @@ do
     equal(widthTransitionEnvironment.adminRootXs[
         #widthTransitionEnvironment.adminRootXs], expandedRootX,
         "width-expanding snapshot keeps Admin rendering at the prerender root X")
+end
+
+do
+    local tabWidthEnvironment = makeEnvironment({ adminLauncher = true })
+    expect(tabWidthEnvironment.integration.install().ok,
+        "tab-width Admin integration installs")
+    local tabWidthBar = makeBar(tabWidthEnvironment, "Axe")
+    local tabWidthView = makeView(tabWidthEnvironment, 0, { tabWidthBar })
+    tabWidthView:prerender()
+    tabWidthView:render()
+    tabWidthView:prerender()
+    equal(tabWidthView.width, 420, "narrow-tab transition keeps vanilla Skills minimum")
+    equal(tabWidthView.parent.width, 448,
+        "narrow-tab transition adds only the exact Admin lease")
+    tabWidthView:setVisible(false)
+    equal(tabWidthView.parent.width, 420,
+        "leaving narrow Skills releases only SLA-owned width")
+    tabWidthView:setWidth(520)
+    tabWidthView.parent:setWidth(520)
+    tabWidthView.outer:setWidth(520)
+    tabWidthView:setVisible(true)
+    tabWidthView:prerender()
+    tabWidthView:render()
+    tabWidthView:prerender()
+    equal(tabWidthView.width, 540,
+        "Temperature-sized external width remains legitimate beneath the SLA plus gutter")
+    equal(tabWidthView.parent.width, 568,
+        "wider vanilla geometry receives one exact outboard lease")
+    tabWidthView:setVisible(false)
+    equal(tabWidthView.parent.width, 520,
+        "leaving wider Skills preserves the legitimate external width")
+    tabWidthView:setVisible(true)
+    tabWidthView:prerender()
+    equal(tabWidthView.parent.width, 568,
+        "returning from wider tab does not accumulate SLA width")
 end
 
 do

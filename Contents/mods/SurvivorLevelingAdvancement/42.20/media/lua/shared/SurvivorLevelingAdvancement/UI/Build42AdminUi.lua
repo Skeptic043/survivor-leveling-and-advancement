@@ -170,6 +170,7 @@ function Build42AdminUi.create(dependencies)
     local dependencyFields = {
         owner = true,
         ISMiniScoreboardUI = true,
+        ISUsersList = true,
         ISCollapsableWindowJoypad = true,
         ISTextEntryBox = true,
         ISButton = true,
@@ -189,6 +190,7 @@ function Build42AdminUi.create(dependencies)
 
     local owner = rawget(dependencies, "owner")
     local scoreboardClass = rawget(dependencies, "ISMiniScoreboardUI")
+    local usersListClass = rawget(dependencies, "ISUsersList")
     local windowClass = rawget(dependencies, "ISCollapsableWindowJoypad")
     local entryClass = rawget(dependencies, "ISTextEntryBox")
     local buttonClass = rawget(dependencies, "ISButton")
@@ -203,6 +205,7 @@ function Build42AdminUi.create(dependencies)
     local smallFont = rawget(dependencies, "smallFont")
 
     local priorScoreboardMenu = method(scoreboardClass, "doPlayerListContextMenu")
+    local priorUsersListMenu = method(usersListClass, "doContextMenu")
     local windowNew = method(windowClass, "new")
     local windowCreateChildren = method(windowClass, "createChildren")
     local priorWindowPrerender = method(windowClass, "prerender")
@@ -211,9 +214,11 @@ function Build42AdminUi.create(dependencies)
     local buttonNew = method(buttonClass, "new")
     local requestAdmin = validOwner(owner) and rawget(owner, "requestAdmin") or nil
     local adminStatus = validOwner(owner) and rawget(owner, "adminStatus") or nil
-    if type(scoreboardClass) ~= "table" or type(windowClass) ~= "table"
+    if type(scoreboardClass) ~= "table" or type(usersListClass) ~= "table"
+        or type(windowClass) ~= "table"
         or type(entryClass) ~= "table" or type(buttonClass) ~= "table"
-        or not priorScoreboardMenu or not windowNew or not windowCreateChildren
+        or not priorScoreboardMenu or not priorUsersListMenu
+        or not windowNew or not windowCreateChildren
         or not priorWindowPrerender or not callable(windowInstantiate) or not entryNew or not buttonNew
         or not requestAdmin or not adminStatus or seePlayerStats == nil
         or not callable(getPlayerContextMenu) or not callable(getSpecificPlayer) or not callable(isServer)
@@ -234,7 +239,8 @@ function Build42AdminUi.create(dependencies)
     local installed = false
     local installAttempted = false
     local retainedFailure = nil
-    local wrapper = nil
+    local scoreboardWrapper = nil
+    local usersListWrapper = nil
     local panels = {}
 
     local function retain(code, detail)
@@ -845,7 +851,31 @@ function Build42AdminUi.create(dependencies)
         pcall(addOption, menu, title, controller, controller.activate)
     end
 
-    wrapper = function(scoreboard, player, x, y, ...)
+    local function appendUsersListAction(usersList, item)
+        if mode ~= "multiplayer" or type(usersList) ~= "table" or item == nil then return end
+        local actor = rawget(usersList, "player")
+        if not actorCanInspect(actor) then return end
+        local isOnline = protectedMember(item, "isOnline")
+        local getUsername = protectedMember(item, "getUsername")
+        local getPlayerNum = protectedMember(actor, "getPlayerNum")
+        if not callable(isOnline) or not callable(getUsername) or not callable(getPlayerNum) then return end
+        local onlineCalled, online = pcall(isOnline, item)
+        local usernameCalled, username = pcall(getUsername, item)
+        local slotCalled, slot = pcall(getPlayerNum, actor)
+        if not onlineCalled or online ~= true or not usernameCalled or not boundedUsername(username)
+            or not slotCalled or not validSlot(slot) then return end
+        local menuCalled, menu = pcall(getPlayerContextMenu, slot)
+        local addOption = type(menu) == "table" and menu.addOption or nil
+        local title = localized("IGUI_SLA_Admin_Menu")
+        if not menuCalled or not callable(addOption) or title == nil then return end
+        local controller = { slot = slot, username = username }
+        controller.activate = function(target)
+            open(target.slot, target.username)
+        end
+        pcall(addOption, menu, title, controller, controller.activate)
+    end
+
+    scoreboardWrapper = function(scoreboard, player, x, y, ...)
         local ok, a, b, c = pcall(priorScoreboardMenu, scoreboard, player, x, y, ...)
         if not ok then error(a, 0) end
         local appended = pcall(appendScoreboardAction, scoreboard, player)
@@ -853,8 +883,18 @@ function Build42AdminUi.create(dependencies)
         return a, b, c
     end
 
+    usersListWrapper = function(usersList, item, x, y, ...)
+        local ok, a, b, c = pcall(priorUsersListMenu, usersList, item, x, y, ...)
+        if not ok then error(a, 0) end
+        local appended = pcall(appendUsersListAction, usersList, item)
+        if not appended then retain("users_list_append_failed", "context menu") end
+        return a, b, c
+    end
+
     local function ownsHook()
-        return mode == "singleplayer" or rawget(scoreboardClass, "doPlayerListContextMenu") == wrapper
+        return mode == "singleplayer"
+            or (rawget(scoreboardClass, "doPlayerListContextMenu") == scoreboardWrapper
+                and rawget(usersListClass, "doContextMenu") == usersListWrapper)
     end
 
     local integration = {}
@@ -862,12 +902,13 @@ function Build42AdminUi.create(dependencies)
     function integration.install()
         if installAttempted then
             if installed and ownsHook() then return { ok = true } end
-            return retain("hook_ownership_lost", "scoreboard wrapper")
+            return retain("hook_ownership_lost", "online-player menu wrappers")
         end
         installAttempted = true
         if mode == "multiplayer" then
-            rawset(scoreboardClass, "doPlayerListContextMenu", wrapper)
-            if not ownsHook() then return retain("hook_install_failed", "scoreboard wrapper") end
+            rawset(scoreboardClass, "doPlayerListContextMenu", scoreboardWrapper)
+            rawset(usersListClass, "doContextMenu", usersListWrapper)
+            if not ownsHook() then return retain("hook_install_failed", "online-player menu wrappers") end
         end
         installed = true
         return { ok = true }
@@ -878,7 +919,7 @@ function Build42AdminUi.create(dependencies)
         if retainedFailure ~= nil then
             result.failure = { code = retainedFailure.code, detail = retainedFailure.detail }
         elseif installed and not ownsHook() then
-            result.failure = { code = "hook_ownership_lost", detail = "scoreboard wrapper" }
+            result.failure = { code = "hook_ownership_lost", detail = "online-player menu wrappers" }
         end
         return result
     end
