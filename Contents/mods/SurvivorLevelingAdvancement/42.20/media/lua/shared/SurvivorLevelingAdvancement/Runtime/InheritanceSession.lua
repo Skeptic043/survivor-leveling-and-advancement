@@ -2,6 +2,7 @@ local InheritanceSession = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
 local STATE_SCHEMA_VERSION = 3
+local COMPLETED_DEATH_REPLACEMENT = "completed_death_replacement"
 
 local function failure(code, detail, committed)
     local result = { ok = false, code = code, detail = detail }
@@ -167,8 +168,8 @@ function InheritanceSession.create(dependencies)
         return metadata, nil
     end
 
-    local function markInitialized(player, committed)
-        local result, err = invoke("metadata_initialize", writeInitialized, player)
+    local function markInitialized(player, committed, intent)
+        local result, err = invoke("metadata_initialize", writeInitialized, player, intent)
         if result == nil then
             if committed ~= nil then err.committed = committed end
             return err
@@ -197,10 +198,11 @@ function InheritanceSession.create(dependencies)
         return state, nil
     end
 
-    local function saveFreshAndMark(player, level, outcome, consumed)
+    local function saveFreshAndMark(player, level, outcome, consumed, replacing)
         local state, stateFailure = fresh(level)
         if state == nil then return stateFailure end
-        local saved, saveFailure = invoke("state_save", saveState, player, state)
+        local intent = replacing and COMPLETED_DEATH_REPLACEMENT or nil
+        local saved, saveFailure = invoke("state_save", saveState, player, state, intent)
         if saved == nil then
             if consumed then saveFailure.committed = true end
             return saveFailure
@@ -211,8 +213,9 @@ function InheritanceSession.create(dependencies)
         return { ok = true, outcome = outcome, survivorLevel = level, consumed = consumed == true }
     end
 
-    local function terminalizeAndSave(player, level, outcome, consumed)
-        local markerFailure = markInitialized(player, true)
+    local function terminalizeAndSave(player, level, outcome, consumed, replacing)
+        local intent = replacing and COMPLETED_DEATH_REPLACEMENT or nil
+        local markerFailure = markInitialized(player, true, intent)
         if markerFailure ~= nil then return markerFailure end
         local state, stateFailure = fresh(level)
         if state == nil then stateFailure.committed = true; return stateFailure end
@@ -253,7 +256,7 @@ function InheritanceSession.create(dependencies)
         if settingsResult == nil then return settingsFailure end
         local settings = validateSettings(settingsResult)
         if settings == nil then return failure("inheritance_settings_invalid", "inheritanceSettings.resolve") end
-        if not settings.enabled then return saveFreshAndMark(player, 0, "fresh", false) end
+        if not settings.enabled then return saveFreshAndMark(player, 0, "fresh", false, true) end
 
         local identityResult, identityFailure = invoke("identity", resolveIdentity, player)
         if identityResult == nil then return identityFailure end
@@ -262,7 +265,7 @@ function InheritanceSession.create(dependencies)
         local peeked, peekFailure = invoke("pending_peek", peekPending, owner)
         if peeked == nil then return peekFailure end
         if exact(peeked, { ok = true, found = true }) and peeked.found == false then
-            return saveFreshAndMark(player, 0, "fresh", false)
+            return saveFreshAndMark(player, 0, "fresh", false, true)
         end
         if not exact(peeked, { ok = true, found = true, record = true }) or peeked.found ~= true
             or type(peeked.record) ~= "table" then
@@ -287,13 +290,13 @@ function InheritanceSession.create(dependencies)
         )
         if consumedResult == nil then return consumeFailure end
         if exact(consumedResult, { ok = true, consumed = true }) and consumedResult.consumed == false then
-            return terminalizeAndSave(player, 0, "fresh", false)
+            return terminalizeAndSave(player, 0, "fresh", false, true)
         end
         if not exact(consumedResult, { ok = true, consumed = true, record = true })
             or consumedResult.consumed ~= true then
             return failure("pending_consume_invalid", "recordStore.consume")
         end
-        return terminalizeAndSave(player, planned.survivorLevel, "inherit", true)
+        return terminalizeAndSave(player, planned.survivorLevel, "inherit", true, true)
     end
 
     function session.recordDeath(player)
