@@ -121,7 +121,6 @@ local function validateDependencies(dependencies)
     end
 
     local factories = {
-        "PlayerStateStore",
         "AccountingMode",
         "OwnerSnapshot",
         "ApTransaction",
@@ -129,7 +128,6 @@ local function validateDependencies(dependencies)
         "WorldSettings",
         "EventDerivedXpSource",
         "OwnerSession",
-        "CharacterInheritanceStore",
         "InheritanceRecordStore",
         "InheritanceSession",
     }
@@ -155,6 +153,14 @@ local function validateDependencies(dependencies)
     end
     if not hasFunctions(dependencies.ActualObservation, { "get", "set", "clearPlayer" }) then
         return failure("invalid_dependencies", "ActualObservation capabilities are required")
+    end
+    if not hasFunctions(dependencies.stateStore, { "load", "save" }) then
+        return failure("invalid_dependencies", "stateStore capabilities are required")
+    end
+    if not hasFunctions(dependencies.characterStore, {
+        "inspect", "tokenNewCharacter", "markInitialized", "markDeathRecorded",
+    }) then
+        return failure("invalid_dependencies", "characterStore capabilities are required")
     end
     if not hasFunctions(dependencies.worldSettingsProvider, { "read" }) then
         return failure("invalid_dependencies", "worldSettingsProvider.read is required")
@@ -308,16 +314,7 @@ function ServiceComposition.create(dependencies)
         return validated
     end
 
-    local store, storeFailure = callSingleFactory(
-        "PlayerStateStore",
-        dependencies.PlayerStateStore,
-        dependencies.StateCodec,
-        "store",
-        { "load", "save" }
-    )
-    if store == nil then
-        return storeFailure
-    end
+    local store = dependencies.stateStore
 
     local worldSettings, worldSettingsFailure = callWorldSettings(dependencies.WorldSettings, {
         provider = dependencies.worldSettingsProvider,
@@ -327,14 +324,7 @@ function ServiceComposition.create(dependencies)
         return worldSettingsFailure
     end
 
-    local characterInheritanceStore, characterStoreFailure = callSingleFactory(
-        "CharacterInheritanceStore",
-        dependencies.CharacterInheritanceStore,
-        {},
-        "store",
-        { "inspect", "tokenNewCharacter", "markInitialized", "markDeathRecorded" }
-    )
-    if characterInheritanceStore == nil then return characterStoreFailure end
+    local characterInheritanceStore = dependencies.characterStore
 
     local inheritanceRecordStore, recordStoreFailure = callSingleFactory(
         "InheritanceRecordStore",

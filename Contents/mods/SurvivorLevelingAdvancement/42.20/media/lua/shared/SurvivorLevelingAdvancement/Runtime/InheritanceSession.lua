@@ -238,7 +238,7 @@ function InheritanceSession.create(dependencies)
         if authorityFailure ~= nil then return authorityFailure end
         local metadata, metadataFailure = inspect(player)
         if metadata == nil then return metadataFailure end
-        if metadata.codecPresent or metadata.initialized then
+        if not metadata.tokenValid and (metadata.codecPresent or metadata.initialized) then
             if not metadata.initialized then
                 local markerFailure = markInitialized(player)
                 if markerFailure ~= nil then return markerFailure end

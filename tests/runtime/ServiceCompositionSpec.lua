@@ -123,6 +123,8 @@ local function makeDependencies(overrides)
             encode = function() return { ok = true } end,
             fresh = function() return {} end,
         },
+        stateStore = store,
+        characterStore = characterInheritanceStore,
         InheritancePolicy = { plan = function() return { ok = true } end },
         LevelGainCompletion = {
             create = function(levelsGained, apGained)
@@ -330,8 +332,7 @@ do
     local result = ServiceComposition.create(dependencies)
 
     assertTrue(result.ok, "composition succeeds")
-    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory order")
-    assertSame(fixture.arguments.store, dependencies.StateCodec, "codec identity")
+    sequenceEquals(fixture.calls, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory order")
     assertSame(fixture.arguments.settings.provider, dependencies.worldSettingsProvider, "provider identity")
     assertSame(fixture.arguments.record, dependencies.inheritanceWorldStore, "inheritance world capability identity")
     assertSame(fixture.arguments.inheritance.characterStore, fixture.characterInheritanceStore, "character inheritance store identity")
@@ -570,8 +571,8 @@ local function assertPreflightFailure(mutator, expectedDetail)
 end
 
 assertPreflightFailure(function(dependencies) dependencies.StateCodec = nil end, "StateCodec capabilities are required")
-assertPreflightFailure(function(dependencies) dependencies.PlayerStateStore.create = nil end, "PlayerStateStore.create is required")
-assertPreflightFailure(function(dependencies) dependencies.CharacterInheritanceStore.create = nil end, "CharacterInheritanceStore.create is required")
+assertPreflightFailure(function(dependencies) dependencies.stateStore.load = nil end, "stateStore capabilities are required")
+assertPreflightFailure(function(dependencies) dependencies.characterStore.inspect = nil end, "characterStore capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.InheritanceRecordStore.create = nil end, "InheritanceRecordStore.create is required")
 assertPreflightFailure(function(dependencies) dependencies.InheritanceSession.create = nil end, "InheritanceSession.create is required")
 assertPreflightFailure(function(dependencies) dependencies.InheritancePolicy.plan = nil end, "InheritancePolicy capabilities are required")
@@ -619,31 +620,29 @@ local function assertFactoryStops(factoryName, replacement, expectedCalls, expec
     sequenceEquals(fixture.calls, expectedCalls, factoryName .. " stops later factories")
 end
 
-assertFactoryStops("PlayerStateStore", function() return { ok = true, store = {} } end, { "store" }, "invalid_factory_result")
-assertFactoryStops("WorldSettings", function() return { ok = true, awardSettings = {} } end, { "store", "settings" }, "invalid_factory_result")
-assertFactoryStops("CharacterInheritanceStore", function() return { ok = true, store = {} } end, { "store", "settings", "character" }, "invalid_factory_result")
-assertFactoryStops("InheritanceRecordStore", function() return { ok = true, store = {} } end, { "store", "settings", "character", "record" }, "invalid_factory_result")
-assertFactoryStops("InheritanceSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance" }, "invalid_factory_result")
-assertFactoryStops("AccountingMode", function() return { ok = true, service = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting" }, "invalid_factory_result")
-assertFactoryStops("OwnerSnapshot", function() return nil end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "invalid_factory_result")
-assertFactoryStops("OwnerSnapshot", function() return { ok = true, projector = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "invalid_factory_result")
-assertFactoryStops("ApTransaction", function() return { ok = false, code = "ap_unavailable", detail = "nope" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap" }, "ap_unavailable")
+assertFactoryStops("WorldSettings", function() return { ok = true, awardSettings = {} } end, { "settings" }, "invalid_factory_result")
+assertFactoryStops("InheritanceRecordStore", function() return { ok = true, store = {} } end, { "settings", "record" }, "invalid_factory_result")
+assertFactoryStops("InheritanceSession", function() return { ok = true, session = {} } end, { "settings", "record", "inheritance" }, "invalid_factory_result")
+assertFactoryStops("AccountingMode", function() return { ok = true, service = {} } end, { "settings", "record", "inheritance", "accounting" }, "invalid_factory_result")
+assertFactoryStops("OwnerSnapshot", function() return nil end, { "settings", "record", "inheritance", "accounting", "snapshot" }, "invalid_factory_result")
+assertFactoryStops("OwnerSnapshot", function() return { ok = true, projector = {} } end, { "settings", "record", "inheritance", "accounting", "snapshot" }, "invalid_factory_result")
+assertFactoryStops("ApTransaction", function() return { ok = false, code = "ap_unavailable", detail = "nope" } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap" }, "ap_unavailable")
 assertFactoryStops("ApTransaction", function()
     return { ok = true, service = { spend = function() end, recover = function() end } }
-end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap" }, "invalid_factory_result")
-assertFactoryStops("SupportedAwardProcessor", function() return { ok = true, service = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor" }, "invalid_factory_result")
-assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, code = "source_unavailable", detail = "nope" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source" }, "source_unavailable")
-assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
-assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
-assertFactoryStops("OwnerSession", function() error("session boom") end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
-assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
-assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
-assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
-assertFactoryStops("AdminSession", function() return { ok = true, session = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
-assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end }, private = {} } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
-assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end, private = {} } } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
-assertFactoryStops("AdminSession", function() return { ok = false, code = "admin_unavailable", detail = "owner rejected" } end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "admin_unavailable")
-assertFactoryStops("AdminSession", function() error("admin boom") end, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory_threw")
+end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap" }, "invalid_factory_result")
+assertFactoryStops("SupportedAwardProcessor", function() return { ok = true, service = {} } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor" }, "invalid_factory_result")
+assertFactoryStops("EventDerivedXpSource", function() return nil, { ok = false, code = "source_unavailable", detail = "nope" } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source" }, "source_unavailable")
+assertFactoryStops("OwnerSession", function() return { ok = true, session = {} } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "invalid_factory_result")
+assertFactoryStops("OwnerSession", function() return { ok = false, code = "session_unavailable", detail = "catalog rejected" } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "session_unavailable")
+assertFactoryStops("OwnerSession", function() error("session boom") end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session" }, "factory_threw")
+assertFactoryStops("AdvancementSession", function() return { ok = true, session = {} } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "invalid_factory_result")
+assertFactoryStops("AdvancementSession", function() return { ok = false, code = "advancement_unavailable", detail = "owner rejected" } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "advancement_unavailable")
+assertFactoryStops("AdvancementSession", function() error("advancement boom") end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement" }, "factory_threw")
+assertFactoryStops("AdminSession", function() return { ok = true, session = {} } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end }, private = {} } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = true, session = { inspect = function() end, request = function() end, private = {} } } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "invalid_factory_result")
+assertFactoryStops("AdminSession", function() return { ok = false, code = "admin_unavailable", detail = "owner rejected" } end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "admin_unavailable")
+assertFactoryStops("AdminSession", function() error("admin boom") end, { "settings", "record", "inheritance", "accounting", "snapshot", "ap", "processor", "source", "session", "advancement", "admin" }, "factory_threw")
 
 do
     local dependencies, fixture = makeDependencies(function(values, returned)
@@ -656,7 +655,7 @@ do
     assertFalse(result.ok, "snapshot explicit failure returned")
     assertEqual(result.code, "snapshot_unavailable", "snapshot explicit failure code")
     assertEqual(result.detail, "catalog rejected", "snapshot explicit failure detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "snapshot explicit failure stops graph")
+    sequenceEquals(fixture.calls, { "settings", "record", "inheritance", "accounting", "snapshot" }, "snapshot explicit failure stops graph")
 end
 
 do
@@ -670,7 +669,7 @@ do
     assertFalse(result.ok, "snapshot malformed failure returned")
     assertEqual(result.code, "snapshot_unavailable", "snapshot malformed failure keeps explicit code")
     assertEqual(result.detail, "OwnerSnapshot.create failed", "snapshot malformed failure gets stable detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "snapshot malformed failure stops graph")
+    sequenceEquals(fixture.calls, { "settings", "record", "inheritance", "accounting", "snapshot" }, "snapshot malformed failure stops graph")
 end
 
 do
@@ -684,7 +683,7 @@ do
     assertFalse(result.ok, "snapshot throw contained")
     assertEqual(result.code, "factory_threw", "snapshot throw code")
     assertEqual(result.detail, "OwnerSnapshot.create threw", "snapshot throw detail")
-    sequenceEquals(fixture.calls, { "store", "settings", "character", "record", "inheritance", "accounting", "snapshot" }, "snapshot throw stops graph")
+    sequenceEquals(fixture.calls, { "settings", "record", "inheritance", "accounting", "snapshot" }, "snapshot throw stops graph")
 end
 
 do
@@ -697,7 +696,7 @@ do
     local result = ServiceComposition.create(dependencies)
     assertFalse(result.ok, "factory throw contained")
     assertEqual(result.code, "factory_threw", "factory throw code")
-    sequenceEquals(fixture.calls, { "store", "settings" }, "factory throw stops later work")
+    sequenceEquals(fixture.calls, { "settings" }, "factory throw stops later work")
 end
 
 do

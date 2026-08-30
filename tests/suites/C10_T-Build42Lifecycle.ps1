@@ -70,8 +70,11 @@ if ($postAckMentions.Count -ne 2) {
     throw 'C15-B guard: post-ack event must have one captured identity and one callback'
 }
 
-if ([regex]::IsMatch($lifecycleSource, 'EveryTenMinutes|EveryOneMinute|getOnlinePlayers|scoreboard')) {
-    throw 'C15-F guard: readiness must not add polling, online-player enumeration, or scoreboard-row dependencies'
+if ([regex]::IsMatch($lifecycleSource, 'EveryTenMinutes|EveryOneMinute|scoreboard')) {
+    throw 'C15-F guard: readiness must not add polling or scoreboard-row dependencies'
+}
+if ([regex]::Matches($lifecycleSource, 'getOnlinePlayers').Count -ne 4) {
+    throw 'C43 guard: online-player enumeration must exist only as the captured admin-boundary dependency'
 }
 
 $oneShotTickPattern = '(?ms)^\s*callbacks\.OnTick = function\(\)\s*\r?\n\s*if not tickRegistered then return end\s*\r?\n\s*tickRegistered = false\s*\r?\n\s*local called = pcall\(events\.OnTick\.Remove, callbacks\.OnTick\)'

@@ -124,7 +124,7 @@ function Build42AdminBoundary.create(dependencies)
     local dependencyCount = 0
     for key in pairs(dependencies) do
         if key ~= "Capability" and key ~= "getPlayerByOnlineID"
-            and key ~= "getPlayerFromUsername" then
+            and key ~= "getOnlinePlayers" then
             return constructionFailure("dependencies must be an exact plain table")
         end
         dependencyCount = dependencyCount + 1
@@ -135,18 +135,15 @@ function Build42AdminBoundary.create(dependencies)
 
     local capabilityFound, Capability = readMember(dependencies, "Capability")
     local lookupFound, getPlayerByOnlineID = readMember(dependencies, "getPlayerByOnlineID")
-    local usernameLookupFound, getPlayerFromUsername = readMember(
-        dependencies,
-        "getPlayerFromUsername"
-    )
+    local onlinePlayersFound, getOnlinePlayers = readMember(dependencies, "getOnlinePlayers")
     if not capabilityFound or Capability == nil then
         return constructionFailure("Capability is required")
     end
     if not lookupFound or type(getPlayerByOnlineID) ~= "function" then
         return constructionFailure("getPlayerByOnlineID must be a function")
     end
-    if not usernameLookupFound or type(getPlayerFromUsername) ~= "function" then
-        return constructionFailure("getPlayerFromUsername must be a function")
+    if not onlinePlayersFound or type(getOnlinePlayers) ~= "function" then
+        return constructionFailure("getOnlinePlayers must be a function")
     end
 
     local inspectFound, inspectCapability = readMember(Capability, "CanSeePlayersStats")
@@ -211,7 +208,31 @@ function Build42AdminBoundary.create(dependencies)
             then
                 lookupOk, target = true, actor
             else
-                lookupOk, target = pcall(getPlayerFromUsername, selector.username)
+                local collectionOk, onlinePlayers = pcall(getOnlinePlayers)
+                if not collectionOk or onlinePlayers == nil then
+                    return fail("target_unavailable")
+                end
+                local sizeOk, size = callMethod(onlinePlayers, "size")
+                if not sizeOk or not isSafeOnlineId(size) or size > 32768 then
+                    return fail("target_unavailable")
+                end
+                local matches = 0
+                for index = 0, size - 1 do
+                    local elementOk, candidate = callMethod(onlinePlayers, "get", index)
+                    if not elementOk or candidate == nil then
+                        return fail("target_unavailable")
+                    end
+                    local candidateUsernameOk, candidateUsername = callMethod(candidate, "getUsername")
+                    if not candidateUsernameOk or not isPrintableUsername(candidateUsername) then
+                        return fail("target_mismatch")
+                    end
+                    if candidateUsername == selector.username then
+                        matches = matches + 1
+                        target = candidate
+                    end
+                end
+                if matches ~= 1 then return fail("target_unavailable") end
+                lookupOk = true
             end
         else
             lookupOk, target = pcall(getPlayerByOnlineID, selector.onlineId)

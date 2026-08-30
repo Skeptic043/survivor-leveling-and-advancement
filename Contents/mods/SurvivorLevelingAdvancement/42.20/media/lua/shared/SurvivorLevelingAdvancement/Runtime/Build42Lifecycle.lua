@@ -568,7 +568,7 @@ function Build42Lifecycle.create(dependencies)
     local validateSnapshot = rawget(clientState, "validate")
     local Capability = rawget(globals, "Capability")
     local getPlayerByOnlineID = rawget(globals, "getPlayerByOnlineID")
-    local getPlayerFromUsername = rawget(globals, "getPlayerFromUsername")
+    local getOnlinePlayers = rawget(globals, "getOnlinePlayers")
     local writeLog = rawget(globals, "writeLog")
     local isServer, isClient = rawget(globals, "isServer"), rawget(globals, "isClient")
     local getSpecificPlayer = rawget(globals, "getSpecificPlayer")
@@ -861,7 +861,7 @@ function Build42Lifecycle.create(dependencies)
             local boundaryCalled, boundaryCreated = pcall(createAdminBoundary, {
                 Capability = Capability,
                 getPlayerByOnlineID = getPlayerByOnlineID,
-                getPlayerFromUsername = getPlayerFromUsername,
+                getOnlinePlayers = getOnlinePlayers,
             })
             local boundaryEndpoint = boundaryCalled and service(boundaryCreated, "boundary", { "authorizeAndResolve" }) or nil
             if boundaryEndpoint == nil then return startupFailure(boundaryCreated, "admin_boundary_invalid", "Build42AdminBoundary.create") end

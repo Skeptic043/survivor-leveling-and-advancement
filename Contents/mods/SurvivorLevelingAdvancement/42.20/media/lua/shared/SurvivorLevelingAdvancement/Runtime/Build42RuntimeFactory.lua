@@ -33,6 +33,7 @@ local function validateModules(m)
         { "SurvivorEconomy", { "availableAp", "nextLevelCost", "computeAward", "applyXp", "normalizationFromCoreCurve" } }, { "Allotment", { "evaluate" } }, { "PostMax", { "apply" } },
         { "MutationScope", { "begin", "isActive", "finish" } }, { "ActualObservation", { "get", "set", "clearPlayer" } },
         { "PlayerStateStore", { "create" } }, { "CharacterInheritanceStore", { "create" } },
+        { "ServerPlayerRecordStore", { "create" } },
         { "InheritanceRecordStore", { "create" } }, { "InheritanceSession", { "create" } },
         { "OwnerSnapshot", { "create" } }, { "ApTransaction", { "create" } }, { "SupportedAwardProcessor", { "create" } }, { "WorldSettings", { "create" } }, { "EventDerivedXpSource", { "create" } }, { "OwnerSession", { "create" } },
     }
@@ -100,6 +101,13 @@ function Factory.create(dependencies)
         or not modAddCalled or type(modAdd) ~= "function" then
         return fail("missing_global_ModData", "ModData.getOrCreate and ModData.add are required")
     end
+    local serverCalled, serverMode = pcall(isServer)
+    local clientCalled, clientMode = pcall(isClient)
+    if not serverCalled or not clientCalled or type(serverMode) ~= "boolean"
+        or type(clientMode) ~= "boolean" or (serverMode and clientMode) then
+        return fail("invalid_mode", "isServer and isClient must identify one authoritative mode")
+    end
+    if clientMode then return fail("invalid_mode", "multiplayer clients do not construct authority") end
     local created, err = call("Build42PerkCatalog.create", m.Build42PerkCatalog.create, { perkRegistry = g.PerkFactory.PerkList, nonePerk = g.Perks.None, progressionAdapter = m.VanillaProgressionAdapter }); if err then return err end
     local catalog; catalog, err = resultField(created, "catalog", "catalog_create_failed"); if err then return err end
     if type(catalog) ~= "table" or type(catalog.refresh) ~= "function" then return fail("invalid_catalog", "catalog.refresh is required") end
@@ -155,8 +163,27 @@ function Factory.create(dependencies)
         getPlayerByOnlineID = getPlayerByOnlineID,
     }); if err then return err end
     local inheritanceIdentity; inheritanceIdentity, err = resultField(identityResult, "adapter", "inheritance_identity_create_failed"); if err then return err end
+    local legacyStateResult; legacyStateResult, err = call("PlayerStateStore.create", m.PlayerStateStore.create, m.StateCodec); if err then return err end
+    local legacyStateStore; legacyStateStore, err = resultField(legacyStateResult, "store", "player_state_store_create_failed"); if err then return err end
+    local legacyCharacterResult; legacyCharacterResult, err = call("CharacterInheritanceStore.create", m.CharacterInheritanceStore.create); if err then return err end
+    local legacyCharacterStore; legacyCharacterStore, err = resultField(legacyCharacterResult, "store", "character_store_create_failed"); if err then return err end
+    local stateStore, characterStore = legacyStateStore, legacyCharacterStore
+    if serverMode then
+        local serverStoreResult
+        serverStoreResult, err = call("ServerPlayerRecordStore.create", m.ServerPlayerRecordStore.create, {
+            codec = m.StateCodec,
+            identity = inheritanceIdentity,
+            legacyStateStore = legacyStateStore,
+            legacyCharacterStore = legacyCharacterStore,
+            getOrCreate = function(name) return modGetOrCreate(name) end,
+            add = function(name, value) return modAdd(name, value) end,
+        })
+        if err then return err end
+        stateStore, err = resultField(serverStoreResult, "stateStore", "server_player_store_create_failed"); if err then return err end
+        characterStore, err = resultField(serverStoreResult, "characterStore", "server_character_store_create_failed"); if err then return err end
+    end
     local composition, compositionErr = call("ServiceComposition.create", m.ServiceComposition.create, {
-        StateCodec = m.StateCodec, PlayerStateStore = m.PlayerStateStore, CharacterInheritanceStore = m.CharacterInheritanceStore, InheritanceRecordStore = m.InheritanceRecordStore, InheritanceSession = m.InheritanceSession, InheritancePolicy = m.InheritancePolicy, NaturalLedger = m.NaturalLedger, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, PostMax = m.PostMax, LevelGainCompletion = m.LevelGainCompletion,
+        StateCodec = m.StateCodec, stateStore = stateStore, characterStore = characterStore, InheritanceRecordStore = m.InheritanceRecordStore, InheritanceSession = m.InheritanceSession, InheritancePolicy = m.InheritancePolicy, NaturalLedger = m.NaturalLedger, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, PostMax = m.PostMax, LevelGainCompletion = m.LevelGainCompletion,
         MutationScope = m.MutationScope, ActualObservation = m.ActualObservation, AccountingMode = rawget(m, "AccountingMode"), OwnerSnapshot = m.OwnerSnapshot, ApTransaction = m.ApTransaction, SupportedAwardProcessor = m.SupportedAwardProcessor, WorldSettings = m.WorldSettings, EventDerivedXpSource = m.EventDerivedXpSource, OwnerSession = m.OwnerSession, AdvancementSession = rawget(m, "AdvancementSession"), AdminSession = rawget(m, "AdminSession"),
         catalog = catalog, worldSettingsProvider = provider, normalizationByPerk = normalization, sandboxMultiplier = resolver, positionArithmetic = arithmetic, environment = { globals = g }, authority = authority, playerIdentity = playerIdentity, inheritanceWorldStore = inheritanceWorldStore, inheritanceIdentity = inheritanceIdentity, levelGainSink = levelGainSink,
     }); if compositionErr then return compositionErr end
