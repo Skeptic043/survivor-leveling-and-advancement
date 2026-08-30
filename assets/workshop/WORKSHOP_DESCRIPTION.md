@@ -33,7 +33,7 @@ Regardless, I recommend backing up your save before changing the mod list of an 
 
 ## Multiplayer administration
 
-Authorized administrators can open "Admin Panel > Mini Scoreboard", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel.
+Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Panel > Users List", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel.
 
 ## Compatibility
 
@@ -49,6 +49,7 @@ Authorized administrators can open "Admin Panel > Mini Scoreboard", right-click 
 
 - A skill at its effective maximum does not generate additional Survivor XP.
 - Direct skill setters or third-party progression routes that emit no supported XP event do not generate Survivor XP.
+- Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonzero value. Abrupt termination can lose SLA progression written after the last successful server save; a shorter interval reduces that window.
 - Only English text is currently included.
 
 ## AI Use
