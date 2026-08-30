@@ -6,7 +6,7 @@ A Project Zomboid Build 42 release candidate that turns ordinary skill activity 
 
 The 1.0 release candidate is feature-complete. Core XP, Survivor Levels, Advancement Points, persistence, multiplayer authority, sandbox settings, Skills-screen integration, representative custom-skill compatibility, and representative Skills-tooltip compatibility are implemented and live-validated.
 
-An earlier staged candidate passed a clean-profile load, progression, AP-spend, and reload smoke. The current candidate includes later release-review corrections and passes the complete deterministic and public-source gates. Before public release, it still needs one friends-only Workshop-subscription smoke combined with the final different-owner dedicated-server session.
+The current friends-only Workshop candidate passes clean-profile and Workshop-only loads, progression, AP spending, reload persistence, cross-version AP/XP retention, the complete deterministic gate, and the public-source gates. Before public release, it still needs the final different-owner dedicated-server session covering remote administration and restart persistence.
 
 Development and current testing target Project Zomboid 42.20.4. The internal mod ID is `SurvivorLevelingAdvancement`. The mod does not enforce exact patch-version bounds, and compatibility will be claimed only for versions and integrations that have been tested.
 
