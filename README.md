@@ -30,7 +30,7 @@ Development and current testing target Project Zomboid 42.20.4. The internal mod
 
 ## AI Use
 
-AI was used for all actual code writing in this project - this does not mean SLA is 'AI slop'. I spent a lot of hours personally testing and debugging issues to make sure things work as expected. While AI wrote the code, I thought up the original idea for SLA and act as the designer/director. I'm grateful to have AI tools to help create cool things like SLA to share with the community, but if you have an anti AI stance, that's perfectly okay. You're free to move on and find a mod that doesn't use AI tooling, and I wish you the best in doing so.
+AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. I'm grateful that AI tools helped me turn the idea into something I can share with the community. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.
 
 ## License
 
