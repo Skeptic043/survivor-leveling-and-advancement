@@ -166,7 +166,10 @@ function EventDerivedXpSource.create(dependencies)
     local installed = false
     local capturing = false
     local observerState = "not_attempted"
+    local cleanupState = "not_attempted"
+    local cleanupAttempted = false
     local registrationAddXpEvent = nil
+    local registrationRemove = nil
     local anchorAddXpEvent = type(initialAddXpEvent) == "table" and initialAddXpEvent or nil
     local priorAddXp = nil
     local priorAddXpNoMultiplier = nil
@@ -578,33 +581,67 @@ function EventDerivedXpSource.create(dependencies)
             type(events) == "table" and events.AddXP == registrationAddXpEvent
     end
 
+    local function cleanupOwnedSeams()
+        if cleanupAttempted or not installed then
+            return
+        end
+        cleanupAttempted = true
+
+        if globals.addXp == wrappedAddXp then
+            globals.addXp = priorAddXp
+        end
+        if globals.addXpNoMultiplier == wrappedAddXpNoMultiplier then
+            globals.addXpNoMultiplier = priorAddXpNoMultiplier
+        end
+
+        if registrationRemove == nil then
+            cleanupState = "observer_remove_unavailable"
+            return
+        end
+        local removed = callSafely(registrationRemove, observe)
+        if not removed[1] then
+            cleanupState = "observer_remove_ambiguous"
+            return
+        end
+        observerState = "removed"
+        cleanupState = "observer_removed"
+    end
+
+    local function loseOwnership(reason)
+        if ownershipReason == nil then
+            ownershipReason = reason
+            capturing = false
+            cleanupOwnedSeams()
+        end
+        setLast("ownership_lost")
+        return result(false, "ownership_lost", ownershipReason)
+    end
+
     function instance.verifyOwnership()
         if not installed then
             setLast("not_installed")
             return result(false, "not_installed", nil)
         end
         if ownershipReason then
-            setLast("ownership_lost")
-            return result(false, "ownership_lost", ownershipReason)
+            return loseOwnership(ownershipReason)
         end
 
         local ownsGlobalsSentinel, ownsEventSentinel, ownsAddXp, ownsNoMultiplier,
             ownsAddXpEvent = ownershipDetail()
+        local lostReason = nil
         if not ownsGlobalsSentinel then
-            ownershipReason = "reloadRegistry.globals"
+            lostReason = "reloadRegistry.globals"
         elseif not ownsEventSentinel then
-            ownershipReason = "reloadRegistry.Events.AddXP"
+            lostReason = "reloadRegistry.Events.AddXP"
         elseif not ownsAddXp then
-            ownershipReason = "addXp"
+            lostReason = "addXp"
         elseif not ownsNoMultiplier then
-            ownershipReason = "addXpNoMultiplier"
+            lostReason = "addXpNoMultiplier"
         elseif not ownsAddXpEvent then
-            ownershipReason = "Events.AddXP"
+            lostReason = "Events.AddXP"
         end
-        if ownershipReason then
-            capturing = false
-            setLast("ownership_lost")
-            return result(false, "ownership_lost", ownershipReason)
+        if lostReason then
+            return loseOwnership(lostReason)
         end
 
         setLast("ownership_verified")
@@ -705,6 +742,7 @@ function EventDerivedXpSource.create(dependencies)
             return callPrior(priorAddXpNoMultiplier, "no_multiplier", ...)
         end
         registrationAddXpEvent = addXpEvent
+        registrationRemove = type(addXpEvent.Remove) == "function" and addXpEvent.Remove or nil
         observerState = "registered"
         globals.addXp = wrappedAddXp
         globals.addXpNoMultiplier = wrappedAddXpNoMultiplier
@@ -715,6 +753,12 @@ function EventDerivedXpSource.create(dependencies)
     end
 
     function instance.initializePlayer(player, perks)
+        if installed then
+            local verified = instance.verifyOwnership()
+            if not verified.ok then
+                return verified
+            end
+        end
         local eligible, playerFailure = playerIsEligible(player)
         if not eligible then
             setLast(playerFailure)
@@ -831,6 +875,7 @@ function EventDerivedXpSource.create(dependencies)
             installed = installed,
             capturing = capturing,
             observerRegistration = observerState,
+            ownershipCleanup = cleanupState,
             ownsGlobalsReloadSentinel = ownsGlobalsSentinel,
             ownsEventReloadSentinel = ownsEventSentinel,
             ownsAddXp = ownsAddXp,

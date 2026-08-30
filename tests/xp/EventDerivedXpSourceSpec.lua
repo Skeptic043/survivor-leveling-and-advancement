@@ -20,13 +20,27 @@ local function equal(actual, expected, message)
 end
 
 local function makeEvent(options)
-    local event = { callbacks = {}, attempts = 0 }
+    local event = { callbacks = {}, attempts = 0, removeAttempts = 0 }
     event.Add = function(callback)
         event.attempts = event.attempts + 1
         if options and options.throwOnAdd then
             error("registration failed", 0)
         end
         event.callbacks[#event.callbacks + 1] = callback
+    end
+    if not options or not options.noRemove then
+        event.Remove = function(callback)
+            event.removeAttempts = event.removeAttempts + 1
+            if options and options.throwOnRemove then
+                error("removal failed", 0)
+            end
+            for index = 1, #event.callbacks do
+                if event.callbacks[index] == callback then
+                    table.remove(event.callbacks, index)
+                    return
+                end
+            end
+        end
     end
     event.fire = function(...)
         for index = 1, #event.callbacks do
@@ -315,6 +329,108 @@ end
 
 do
     local h = makeHarness()
+    local source = h.createAndInstall()
+    local player = {}
+    local axe = { id = "Axe" }
+    h.setPosition(player, axe, 0)
+    expect(source.initializePlayer(player, { axe }).ok, "ownership fixture initializes")
+    h.emit(player, axe, 2)
+    equal(#h.awards, 1, "ordinary award is captured before ownership loss")
+
+    local replacementEvent = makeEvent()
+    h.globals.Events.AddXP = replacementEvent
+    local failed = source.initializePlayer(player, { axe })
+    equal(failed.code, "ownership_lost", "player initialization is an ownership gate")
+    equal(failed.detail, "reloadRegistry.Events.AddXP", "event replacement failure is bounded")
+    equal(#h.addXpEvent.callbacks, 0, "finite gate removes the exact old observer")
+    equal(#replacementEvent.callbacks, 0, "finite gate never registers on the replacement event")
+    h.emit(player, axe, 2)
+    replacementEvent.fire(player, axe, 2)
+    equal(#h.awards, 1, "neither old nor replacement event awards after loss")
+end
+
+do
+    local shouldThrow = false
+    local h = makeHarness({
+        prior = function()
+            if shouldThrow then error("nested failure", 0) end
+            return nil, "native-result", 9
+        end,
+    })
+    local source = h.createAndInstall()
+    local player = {}
+    local axe = { id = "Axe" }
+    h.setPosition(player, axe, 0)
+    source.initializePlayer(player, { axe })
+    local slaWrapper = h.globals.addXp
+    local thirdParty = function(...) return slaWrapper(...) end
+    h.globals.addXp = thirdParty
+    equal(source.verifyOwnership().detail, "addXp", "chaining replacement is detected")
+    equal(h.globals.addXp, thirdParty, "cleanup retains the later third-party cell")
+    equal(h.globals.addXpNoMultiplier, h.originalNoMultiplier,
+        "cleanup restores the surviving exact SLA sibling")
+    local first, second, third = h.globals.addXp(player, axe, 2)
+    equal(first, nil, "nested inert wrapper preserves nil return")
+    equal(second, "native-result", "nested inert wrapper preserves later return")
+    equal(third, 9, "nested inert wrapper preserves multiple returns")
+    equal(#h.awards, 0, "nested retained SLA wrapper is accounting-inert")
+    shouldThrow = true
+    local called = pcall(h.globals.addXp, player, axe, 1)
+    equal(called, false, "nested inert wrapper preserves prior errors")
+    equal(#h.awards, 0, "nested error path remains accounting-inert")
+end
+
+do
+    local h = makeHarness({ addXpEvent = { throwOnRemove = true } })
+    local source = h.createAndInstall()
+    local player = {}
+    local axe = { id = "Axe" }
+    h.setPosition(player, axe, 0)
+    source.initializePlayer(player, { axe })
+    h.globals.addXp = h.originalAddXp
+    equal(source.verifyOwnership().code, "ownership_lost", "throwing removal still fails closed")
+    equal(source.status().capturing, false, "capture disables before throwing removal")
+    equal(source.status().ownershipCleanup, "observer_remove_ambiguous",
+        "throwing removal records bounded ambiguity")
+    equal(h.addXpEvent.removeAttempts, 1, "throwing removal is attempted once")
+    h.emit(player, axe, 2)
+    equal(#h.awards, 0, "ambiguously retained callback is inert")
+    source.verifyOwnership()
+    source.install()
+    source.initializePlayer(player, { axe })
+    equal(h.addXpEvent.removeAttempts, 1, "ambiguous removal is never retried")
+end
+
+do
+    local h = makeHarness({ addXpEvent = { noRemove = true } })
+    local source = h.createAndInstall()
+    h.globals.addXp = h.originalAddXp
+    source.verifyOwnership()
+    equal(source.status().ownershipCleanup, "observer_remove_unavailable",
+        "missing removal capability is bounded")
+    equal(#h.addXpEvent.callbacks, 1, "unremovable observer remains registered")
+    h.addXpEvent.fire({}, { id = "Axe" }, 1)
+    equal(#h.awards, 0, "unremovable observer remains inert")
+end
+
+do
+    local h = makeHarness()
+    local source = h.createAndInstall()
+    local player = {}
+    local axe, sprint = { id = "Axe" }, { id = "Sprinting" }
+    h.setPosition(player, axe, 0)
+    h.setPosition(player, sprint, 0)
+    source.initializePlayer(player, { axe, sprint })
+    equal(source.status().cursorCount, 2, "two cursors exist before finite gate")
+    h.globals.addXpNoMultiplier = h.originalNoMultiplier
+    local failed = source.initializePlayer(player, { axe })
+    equal(failed.code, "ownership_lost", "initialization fails bounded after wrapper loss")
+    equal(failed.detail, "addXpNoMultiplier", "lost wrapper identity is bounded")
+    equal(source.status().cursorCount, 2, "ownership verification precedes cursor mutation")
+end
+
+do
+    local h = makeHarness()
     local first = assert(EventDerivedXpSource.create(h.dependencies))
     expect(first.install().ok, "first singleton installs")
     local sentinel = h.globals.__SLA_EventDerivedXpSource_42_20_v1_7F2C9D4A
@@ -337,7 +453,8 @@ do
     local afterLoss = assert(ReloadedEventDerivedXpSource.create(h.dependencies))
     equal(afterLoss, first, "create after loss retains failed-closed singleton")
     equal(afterLoss.install().code, "ownership_lost", "create after loss does not rehook")
-    equal(#h.addXpEvent.callbacks, 1, "ownership loss does not add observers")
+    equal(#h.addXpEvent.callbacks, 0, "ownership loss removes the exact observer")
+    equal(h.addXpEvent.removeAttempts, 1, "reload adoption does not retry observer cleanup")
 end
 
 do
@@ -370,7 +487,7 @@ do
     local replacement = assert(ReloadedEventDerivedXpSource.create(h.dependencies))
     equal(replacement, source, "event anchor recovers owner after globals replacement")
     equal(replacement.install().code, "ownership_lost", "recovered owner remains failed closed")
-    equal(#h.addXpEvent.callbacks, 1, "lost sentinel does not add another observer")
+    equal(#h.addXpEvent.callbacks, 0, "lost sentinel removes rather than replaces the observer")
 end
 
 do
@@ -382,7 +499,7 @@ do
     local failed = reloaded.install()
     equal(failed.code, "ownership_lost", "globals-anchor deletion fails install closed")
     equal(failed.detail, "reloadRegistry.globals", "globals deletion reports exact anchor")
-    equal(#h.addXpEvent.callbacks, 1, "globals deletion adds no observer")
+    equal(#h.addXpEvent.callbacks, 0, "globals deletion removes the exact observer")
 end
 
 do
@@ -394,7 +511,7 @@ do
     local failed = reloaded.install()
     equal(failed.code, "ownership_lost", "event-anchor deletion fails install closed")
     equal(failed.detail, "reloadRegistry.Events.AddXP", "event deletion reports exact anchor")
-    equal(#h.addXpEvent.callbacks, 1, "event deletion adds no observer")
+    equal(#h.addXpEvent.callbacks, 0, "event deletion removes the exact observer")
 end
 
 do
@@ -406,7 +523,7 @@ do
     local failed = reloaded.install()
     equal(failed.code, "ownership_lost", "event-anchor replacement fails install closed")
     equal(failed.detail, "reloadRegistry.Events.AddXP", "event replacement reports exact anchor")
-    equal(#h.addXpEvent.callbacks, 1, "event replacement adds no observer")
+    equal(#h.addXpEvent.callbacks, 0, "event replacement removes the exact old observer")
 end
 
 do

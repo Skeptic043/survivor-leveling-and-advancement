@@ -646,6 +646,7 @@ function Build42Lifecycle.create(dependencies)
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
     local ownerPublisher
     local ownerSessionReady, ownerSessionSnapshot, advancementRequest
+    local xpSourceVerifyOwnership, xpSourceOwnershipFailure
     local tokenNewCharacter, recordDeath
     local adminSessionInspect, adminSessionRequest
     local readyPlayers, observedPlayers, observedSlots = {}, {}, {}
@@ -756,6 +757,25 @@ function Build42Lifecycle.create(dependencies)
         return true
     end
 
+    local function verifyXpSourceOwnership()
+        if xpSourceOwnershipFailure ~= nil then
+            return xpSourceOwnershipFailure
+        end
+        if xpSourceVerifyOwnership == nil then
+            return { ok = true }
+        end
+        local called, verified = pcall(xpSourceVerifyOwnership)
+        if not called or type(verified) ~= "table" or rawget(verified, "ok") ~= true then
+            xpSourceOwnershipFailure = retain(
+                verified,
+                "xp_source_ownership_invalid",
+                "xpSource.verifyOwnership"
+            )
+            return xpSourceOwnershipFailure
+        end
+        return { ok = true }
+    end
+
     local function trusted(callableValue, code, detail, ...)
         local called, result = pcall(callableValue, ...)
         if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
@@ -824,6 +844,8 @@ function Build42Lifecycle.create(dependencies)
         if not sourceCalled or type(sourceResult) ~= "table" or rawget(sourceResult, "ok") ~= true then
             return startupFailure(sourceResult, "xp_source_install_invalid", "xpSource.install")
         end
+        local sourceVerifier = rawget(xpSource, "verifyOwnership")
+        if callable(sourceVerifier) then xpSourceVerifyOwnership = sourceVerifier end
         if mode == "server" then
             local ownerCalled, ownerCreated = pcall(createOwnerServer, {
                 ownerSession = ownerSession, snapshotValidator = { validate = validateSnapshot },
@@ -1276,6 +1298,10 @@ function Build42Lifecycle.create(dependencies)
     function owner.install()
         if installAttempted then
             if not ownEvents() then return retainedFailure end
+            if installed and xpSourceVerifyOwnership ~= nil then
+                local verified = verifyXpSourceOwnership()
+                if not verified.ok then return verified end
+            end
             return installed and { ok = true } or retainedFailure or failure("install_failed", "event registration")
         end
         installAttempted = true
