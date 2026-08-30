@@ -287,12 +287,13 @@ function ServerPlayerRecordStore.create(dependencies)
             local _, stateFailure = decodeRecord(current)
             if stateFailure ~= nil then return stateFailure end
         end
+        local replacing = current ~= nil and issued[player] == true and current.deathRecorded
         profiles, profileIndex = locate(root, owner, true)
         profiles[profileIndex] = {
             schemaVersion = RECORD_SCHEMA,
             state = encoded.state,
-            initialized = current ~= nil and issued[player] ~= true and current.initialized or false,
-            deathRecorded = current ~= nil and issued[player] ~= true and current.deathRecorded or false,
+            initialized = current ~= nil and not replacing and current.initialized or false,
+            deathRecorded = current ~= nil and not replacing and current.deathRecorded or false,
         }
         local written = writeRoot(root)
         if not written.ok then return written end
@@ -311,11 +312,15 @@ function ServerPlayerRecordStore.create(dependencies)
         if record ~= nil then
             local _, stateFailure = decodeRecord(record)
             if stateFailure ~= nil then return stateFailure end
+            local tokenPresent = issued[player] == true
+            -- Dedicated CreatePlayer also emits OnNewGame for a loaded incarnation after restart.
+            local tokenValid = tokenPresent and record.deathRecorded
+            if tokenPresent and not tokenValid then issued[player] = nil end
             return {
                 ok = true,
                 metadata = {
-                    tokenPresent = issued[player] == true,
-                    tokenValid = issued[player] == true,
+                    tokenPresent = tokenPresent,
+                    tokenValid = tokenValid,
                     initialized = record.initialized,
                     deathRecorded = record.deathRecorded,
                     codecPresent = true,
@@ -331,11 +336,14 @@ function ServerPlayerRecordStore.create(dependencies)
             deathRecorded = legacyMetadata ~= nil
                 and legacyMetadata.initialized and legacyMetadata.deathRecorded or false
         end
+        local tokenPresent = issued[player] == true
+        local tokenValid = tokenPresent and (not codecPresent or deathRecorded)
+        if tokenPresent and not tokenValid then issued[player] = nil end
         return {
             ok = true,
             metadata = {
-                tokenPresent = issued[player] == true,
-                tokenValid = issued[player] == true,
+                tokenPresent = tokenPresent,
+                tokenValid = tokenValid,
                 initialized = initialized,
                 deathRecorded = deathRecorded,
                 codecPresent = codecPresent,
