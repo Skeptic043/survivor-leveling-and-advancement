@@ -146,6 +146,24 @@ local function advancementCost(targetLevel, effectiveMaximum)
     return targetLevel == effectiveMaximum and 2 or 1
 end
 
+local function durableTargetId(requestId, preRevision)
+    return requestId .. ":revision:" .. tostring(preRevision)
+end
+
+local function hasLegacyCompletedTarget(record, reservation)
+    if type(record) ~= "table" or type(record.activeTargets) ~= "table" then return false end
+    for index = 1, #record.activeTargets do
+        local target = record.activeTargets[index]
+        if type(target) == "table"
+            and target.targetId == reservation.requestId
+            and target.targetLevel == reservation.targetLevel
+            and target.targetPosition == reservation.targetPosition then
+            return true
+        end
+    end
+    return false
+end
+
 local function ledgerFromPerk(record)
     return {
         naturalPosition = record.naturalPosition,
@@ -437,8 +455,12 @@ local function recoverLoaded(deps, player, state)
             end
             ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), reservation.targetPosition)
         else
+            local targetId = durableTargetId(reservation.requestId, reservation.preRevision)
+            if hasLegacyCompletedTarget(record, reservation) then
+                targetId = reservation.requestId
+            end
             ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
-                targetId = reservation.requestId,
+                targetId = targetId,
                 targetLevel = reservation.targetLevel,
                 targetPosition = reservation.targetPosition,
             }, reservation.effectiveMaximum)
@@ -729,7 +751,7 @@ function ApTransaction.create(dependencies)
             ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), actual.nextTargetPosition)
         else
             ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
-                targetId = request.requestId,
+                targetId = durableTargetId(request.requestId, state.revision),
                 targetLevel = actual.nextTargetLevel,
                 targetPosition = actual.nextTargetPosition,
             }, identity.effectiveMaximum)
