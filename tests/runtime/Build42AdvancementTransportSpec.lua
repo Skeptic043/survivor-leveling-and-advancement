@@ -558,6 +558,7 @@ do
     setmetatable(dependencies, {})
     local requested = created.client.request(0, {}, "Axe")
     truthy(requested.ok, "captured client request")
+    equal(requested.requestId, "advancement:1", "fresh MP module process restarts its request counter")
     equal(getCalls, 1, "original get captured")
     equal(sendCalls, 1, "original sender captured")
     truthy(created.client.handle(

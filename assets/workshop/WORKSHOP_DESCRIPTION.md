@@ -6,9 +6,9 @@ Level your skills through normal play while at the same time progressing your Su
 
 Trainable skill XP also earns you Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla Skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. By default, you are limited to 3 Advancement Slots across all skills. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level.
 
-Losing levels or XP (Fitness/Strength) puts you into a recovery state that grants no Survivor XP from that skill until the lost progress is recovered.
+In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts you into a recovery state that grants no Survivor XP from that skill until the lost progress is recovered. Free mode does not track catch-up or recovery.
 
-Going from level 9 to level 10 requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost.
+The final advancement to a skill's effective maximum, normally level 9 to level 10, requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost.
 
 Optional sandbox settings also provide Survivor Level inheritance and a small digital watch integration. Inheritance allows the host to set a percentage of a deceased character's Survivor Level that passes to that player's next eligible survivor. The digital watch setting shows how far you are into your current Survivor Level as a small percentage on the watch display.
 

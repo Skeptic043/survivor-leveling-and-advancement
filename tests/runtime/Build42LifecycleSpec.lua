@@ -1362,6 +1362,7 @@ do
     created.owner.install(); f.events.OnGameStart.fire(); f.events.OnCreatePlayer.fire(0, player)
     local result = created.owner.requestAdvancement(0, "Strength")
     yes(result.ok, "SP applied request succeeds")
+    eq(result.requestId, "advancement-local:1", "fresh SP module process restarts its request counter")
     yes(result.applied, "SP applied result")
     eq(result.apCost, 1, "SP AP cost retained")
     eq(result.snapshot, nil, "SP result omits snapshot")

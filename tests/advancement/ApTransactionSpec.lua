@@ -406,7 +406,7 @@ do
     assertEqual(store.current.survivor.spent, 1)
     assertEqual(store.current.inFlightAdvancement, nil)
     assertEqual(#store.current.perks.Axe.activeTargets, 1)
-    assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "fresh_one")
+    assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "fresh_one:revision:0")
     assertEqual(store.current.perks.Axe.naturalPosition, 0)
     assertEqual(store.current.perks.Axe.highWaterPosition, 0)
     assertEqual(store.current.perks.Axe.observedPosition, 100, "AP commit persists final actual position")
@@ -415,6 +415,29 @@ do
     assertSame(globalThree, configBefore, "config immutable")
     assertSame(store.receivedOptions, resolver.loadOptions, "resolver options reach load")
     assertEqual(store.loads, 1, "spend loads once")
+end
+
+-- A restarted process may reuse its first transport ID; the durable revision keeps the new slot distinct.
+do
+    local state = newState(4, 1)
+    state.revision = 9
+    state.perks.Axe = newPerk(0, 0, {
+        { targetId = "advancement-local:1", targetLevel = 1, targetPosition = 100 },
+    })
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    local result = service.spend(player, {
+        perkId = "Axe", requestId = "advancement-local:1", expectedRevision = 9,
+    }, globalThree)
+    assertTrue(result.ok, "post-restart advancement succeeds despite reused request ID")
+    assertEqual(result.requestId, "advancement-local:1", "transport correlation ID remains unchanged")
+    assertEqual(result.revision, 10)
+    assertEqual(result.spent, 2)
+    assertEqual(#store.current.perks.Axe.activeTargets, 2)
+    assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "advancement-local:1")
+    assertEqual(store.current.perks.Axe.activeTargets[2].targetId, "advancement-local:1:revision:9")
 end
 
 -- Final-level mastery derives a two-AP cost, reserves two slots, and collapses the full target chain.
@@ -1040,8 +1063,40 @@ do
     assertEqual(store.current.revision, 1)
     assertEqual(store.current.survivor.spent, 1)
     assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "xp_only:revision:0")
     assertEqual(store.current.perks.Axe.observedPosition, 100, "crash recovery commit persists final actual position")
     assertFalse(MutationScope.isActive(player, "Axe"))
+end
+
+-- Direct commit and interrupted recovery derive the same target identity from persisted inputs.
+do
+    local directStore = makeStore(newState(3, 0))
+    local directAdapter, directResolver = makeRuntime()
+    local directService = createService(directStore, directAdapter, directResolver)
+    local directPlayer = newPlayer("Axe", 0, 0)
+    local direct = directService.spend(directPlayer, {
+        perkId = "Axe", requestId = "path_equivalence", expectedRevision = 0,
+    }, globalThree)
+    assertTrue(direct.ok)
+
+    local recoveryStore = makeStore(newState(3, 0))
+    local recoveryAdapter, recoveryResolver = makeRuntime()
+    local recoveryService = createService(recoveryStore, recoveryAdapter, recoveryResolver)
+    local recoveryPlayer = newPlayer("Axe", 0, 0)
+    recoveryPlayer.behavior.Axe = { failAfterXp = true }
+    assertCode(recoveryService.spend(recoveryPlayer, {
+        perkId = "Axe", requestId = "path_equivalence", expectedRevision = 0,
+    }, globalThree), "engine_mutation_failed")
+    recoveryPlayer.behavior.Axe = nil
+    local recovered = recoveryService.recover(recoveryPlayer)
+    assertTrue(recovered.ok)
+    assertEqual(recovered.requestId, "path_equivalence")
+    assertEqual(
+        recoveryStore.current.perks.Axe.activeTargets[1].targetId,
+        directStore.current.perks.Axe.activeTargets[1].targetId,
+        "direct and recovery target identities match"
+    )
+    assertEqual(recoveryStore.current.perks.Axe.activeTargets[1].targetId, "path_equivalence:revision:0")
 end
 
 -- Final recovery derives two AP in reservation, engine-complete, and committed phases and remains idempotent.
@@ -1175,6 +1230,7 @@ do
     assertEqual(store.current.revision, 1)
     assertEqual(store.current.survivor.spent, 1)
     assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "recover_one", "legacy committed target identity is preserved")
     local second = service.recover(player)
     assertTrue(second.ok)
     assertFalse(second.recovered)
