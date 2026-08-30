@@ -37,6 +37,10 @@ local translations = {
     IGUI_SLA_Reason_InsufficientAp = "Not enough AP.",
     IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
     IGUI_SLA_Reason_AllotmentCapacity = "Advancement slot unavailable.",
+    IGUI_SLA_Advancement_Stale = "Survivor data changed. Refresh and try again.",
+    IGUI_SLA_Advancement_SendFailed = "The advancement request could not be sent. Try again.",
+    IGUI_SLA_Advancement_Committed = "The advancement may have applied. Refresh before trying again.",
+    IGUI_SLA_Advancement_Failed = "The advancement failed. Refresh and try again.",
     IGUI_SLA_Admin_Button = "Admin",
 }
 
@@ -125,6 +129,7 @@ local function makeEnvironment(options)
         mode = options.mode or "Global",
         fitnessStrengthNormalization = options.fitnessStrengthNormalization,
         pending = { false, false, false, false },
+        terminalResults = {},
         reason = options.reason,
         malformedSettings = false,
         modelFailure = false,
@@ -313,6 +318,9 @@ local function makeEnvironment(options)
             if evidence.statusMalformed then return { ok = true, pending = "no" } end
             if evidence.pending[slot + 1] then
                 return { ok = true, pending = true, requestId = "pending-id", perkId = "Axe" }
+            end
+            if evidence.terminalResults[slot + 1] ~= nil then
+                return { ok = true, pending = false, result = evidence.terminalResults[slot + 1] }
             end
             return { ok = true, pending = false }
         end,
@@ -1672,6 +1680,344 @@ for index = 1, #reasons do
         equal(string.find(reasonBar.message, "Not enough AP.", 1, true), nil,
             "vanilla skill tooltip omits insufficient-AP copy")
     end
+end
+
+do
+    local terminalCases = {
+        {
+            name = "no AP",
+            result = { ok = true, applied = false, requestId = "result-1", perkId = "Axe",
+                code = "no_ap", detail = "secret terminal detail" },
+            copy = "Not enough AP.",
+        },
+        {
+            name = "effective maximum",
+            result = { ok = true, applied = false, requestId = "result-2", perkId = "Axe",
+                code = "at_maximum", detail = "secret terminal detail" },
+            copy = "This skill is already at its maximum.",
+        },
+        {
+            name = "red recovery",
+            result = { ok = true, applied = false, requestId = "result-3", perkId = "Axe",
+                code = "red_recovery", detail = "secret terminal detail" },
+            copy = "Recover natural XP before advancing again.",
+        },
+        {
+            name = "stale revision",
+            result = { ok = true, applied = false, requestId = "result-4", perkId = "Axe",
+                code = "stale_revision", detail = "secret terminal detail" },
+            copy = "Survivor data changed. Refresh and try again.",
+        },
+        {
+            name = "uncommitted send failure",
+            result = { ok = false, requestId = "result-5", perkId = "Axe",
+                code = "send_failed", detail = "secret terminal detail", committed = false },
+            copy = "The advancement request could not be sent. Try again.",
+        },
+        {
+            name = "generic rejection",
+            result = { ok = true, applied = false, requestId = "result-6", perkId = "Axe",
+                code = "future_backend_code", detail = "secret terminal detail" },
+            copy = "The advancement failed. Refresh and try again.",
+        },
+        {
+            name = "committed snapshot rejection",
+            result = { ok = false, applied = true, requestId = "result-7", perkId = "Axe",
+                code = "snapshot_rejected", detail = "secret terminal detail", committed = true,
+                apCost = 1, mastered = false },
+            copy = "The advancement may have applied. Refresh before trying again.",
+        },
+        {
+            name = "uncommitted upstream snapshot failure",
+            result = { ok = false, applied = false, requestId = "result-7b", perkId = "Axe",
+                code = "snapshot_rejected", detail = "secret terminal detail", committed = false,
+                upstreamCode = "stale_revision", upstreamDetail = "secret upstream detail" },
+            copy = "The advancement failed. Refresh and try again.",
+        },
+        {
+            name = "committed precedence",
+            result = { ok = false, requestId = "result-8", perkId = "Axe",
+                code = "no_ap", detail = "secret terminal detail", committed = true },
+            copy = "The advancement may have applied. Refresh before trying again.",
+            forbidden = "Not enough AP.",
+        },
+    }
+    for index = 1, #terminalCases do
+        local terminalCase = terminalCases[index]
+        local terminalEnvironment = makeEnvironment()
+        terminalEnvironment.terminalResults[1] = terminalCase.result
+        expect(terminalEnvironment.integration.install().ok,
+            "terminal result integration installs " .. terminalCase.name)
+        local terminalBar = makeBar(terminalEnvironment, "Axe")
+        local terminalView = makeView(terminalEnvironment, 0, { terminalBar })
+        terminalView:prerender()
+        local tooltip = terminalBar.children[1].tooltip or ""
+        expect(string.find(tooltip, terminalCase.copy, 1, true) ~= nil,
+            "matching perk gets terminal copy " .. terminalCase.name)
+        equal(string.find(tooltip, "secret terminal detail", 1, true), nil,
+            "terminal detail never leaks " .. terminalCase.name)
+        equal(string.find(tooltip, "secret upstream detail", 1, true), nil,
+            "terminal upstream detail never leaks " .. terminalCase.name)
+        equal(string.find(tooltip, "future_backend_code", 1, true), nil,
+            "terminal code never leaks " .. terminalCase.name)
+        equal(string.find(tooltip, ";", 1, true), nil,
+            "terminal tooltip has no semicolon " .. terminalCase.name)
+        if terminalCase.forbidden ~= nil then
+            equal(string.find(tooltip, terminalCase.forbidden, 1, true), nil,
+                "committed copy takes precedence over code-specific copy")
+        end
+    end
+
+    local appliedEnvironment = makeEnvironment()
+    appliedEnvironment.terminalResults[1] = {
+        ok = true,
+        applied = true,
+        requestId = "result-applied",
+        perkId = "Axe",
+        apCost = 1,
+        mastered = false,
+        snapshotAccepted = true,
+    }
+    expect(appliedEnvironment.integration.install().ok, "applied terminal integration installs")
+    local appliedBar = makeBar(appliedEnvironment, "Axe")
+    local appliedView = makeView(appliedEnvironment, 0, { appliedBar })
+    appliedView:prerender()
+    equal(appliedBar.children[1].tooltip, "Advance to level 2 for 1 AP.",
+        "successful applied terminal adds no failure copy")
+
+    local appliedStaleEnvironment = makeEnvironment()
+    appliedStaleEnvironment.terminalResults[1] = {
+        ok = true,
+        applied = true,
+        requestId = "result-applied-stale",
+        perkId = "Axe",
+        apCost = 2,
+        mastered = true,
+        snapshotAccepted = false,
+        snapshotCode = "stale_snapshot",
+    }
+    expect(appliedStaleEnvironment.integration.install().ok,
+        "applied stale-snapshot terminal integration installs")
+    local appliedStaleBar = makeBar(appliedStaleEnvironment, "Axe")
+    local appliedStaleView = makeView(appliedStaleEnvironment, 0, { appliedStaleBar })
+    appliedStaleView:prerender()
+    equal(appliedStaleBar.children[1].tooltip, "Advance to level 2 for 1 AP.",
+        "applied terminal with stale snapshot acceptance remains silent")
+
+    local staleSnapshotEnvironment = makeEnvironment()
+    staleSnapshotEnvironment.terminalResults[1] = {
+        ok = true,
+        applied = false,
+        requestId = "result-stale-snapshot",
+        perkId = "Axe",
+        code = "stale_revision",
+        detail = "secret terminal detail",
+        snapshotAccepted = false,
+        snapshotCode = "stale_snapshot",
+    }
+    expect(staleSnapshotEnvironment.integration.install().ok,
+        "stale-rejection snapshot terminal integration installs")
+    local staleSnapshotBar = makeBar(staleSnapshotEnvironment, "Axe")
+    local staleSnapshotView = makeView(staleSnapshotEnvironment, 0, { staleSnapshotBar })
+    staleSnapshotView:prerender()
+    expect(string.find(staleSnapshotBar.children[1].tooltip or "",
+        "Survivor data changed. Refresh and try again.", 1, true) ~= nil,
+        "stale rejection with detached snapshot fields gets stale copy")
+
+    local malformedTerminals = {
+        {
+            name = "missing request ID",
+            result = { ok = true, applied = false, perkId = "Axe",
+                code = "no_ap", detail = "secret terminal detail" },
+        },
+        {
+            name = "missing detail",
+            result = { ok = true, applied = false, requestId = "malformed-2", perkId = "Axe",
+                code = "no_ap" },
+        },
+        {
+            name = "extra upstream detail",
+            result = { ok = false, requestId = "malformed-3", perkId = "Axe",
+                code = "send_failed", detail = "secret terminal detail", committed = false,
+                upstreamDetail = "secret upstream detail" },
+        },
+        {
+            name = "contradictory applied committed",
+            result = { ok = true, applied = true, requestId = "malformed-4", perkId = "Axe",
+                apCost = 1, mastered = false, snapshotAccepted = true, committed = true },
+        },
+        {
+            name = "contradictory accepted snapshot code",
+            result = { ok = true, applied = true, requestId = "malformed-5", perkId = "Axe",
+                apCost = 1, mastered = false, snapshotAccepted = true,
+                snapshotCode = "stale_snapshot" },
+        },
+        {
+            name = "contradictory applied mastery",
+            result = { ok = true, applied = true, requestId = "malformed-6", perkId = "Axe",
+                apCost = 2, mastered = false, snapshotAccepted = true },
+        },
+        {
+            name = "contradictory snapshot failure mastery",
+            result = { ok = false, applied = true, requestId = "malformed-7", perkId = "Axe",
+                code = "snapshot_rejected", detail = "secret terminal detail", committed = true,
+                apCost = 1, mastered = true },
+        },
+        {
+            name = "snapshot fields on non-stale rejection",
+            result = { ok = true, applied = false, requestId = "malformed-8", perkId = "Axe",
+                code = "no_ap", detail = "secret terminal detail", snapshotAccepted = false,
+                snapshotCode = "stale_snapshot" },
+        },
+        {
+            name = "unrecognized snapshot code",
+            result = { ok = true, applied = true, requestId = "malformed-9", perkId = "Axe",
+                apCost = 1, mastered = false, snapshotAccepted = false,
+                snapshotCode = "snapshot_failed" },
+        },
+        {
+            name = "nonprintable detail",
+            result = { ok = true, applied = false, requestId = "malformed-10", perkId = "Axe",
+                code = "no_ap", detail = "line one\nline two" },
+        },
+        {
+            name = "overlong detail",
+            result = { ok = true, applied = false, requestId = "malformed-11", perkId = "Axe",
+                code = "no_ap", detail = string.rep("x", 161) },
+        },
+        {
+            name = "unsafe upstream code",
+            result = { ok = false, applied = false, requestId = "malformed-12", perkId = "Axe",
+                code = "snapshot_rejected", detail = "secret terminal detail", committed = false,
+                upstreamCode = "not safe", upstreamDetail = "secret upstream detail" },
+        },
+    }
+    for index = 1, #malformedTerminals do
+        local malformedCase = malformedTerminals[index]
+        local malformedEnvironment = makeEnvironment()
+        malformedEnvironment.terminalResults[1] = malformedCase.result
+        expect(malformedEnvironment.integration.install().ok,
+            "malformed terminal integration installs " .. malformedCase.name)
+        local malformedBar = makeBar(malformedEnvironment, "Axe")
+        local malformedView = makeView(malformedEnvironment, 0, { malformedBar })
+        malformedView:prerender()
+        equal(malformedEnvironment.statusReads[1], 1,
+            "malformed terminal status is consumed once " .. malformedCase.name)
+        equal(malformedEnvironment.modelBuilds, 0,
+            "malformed terminal fails before model build " .. malformedCase.name)
+        expect(not malformedBar.children[1].enabled,
+            "malformed terminal disables SLA presentation " .. malformedCase.name)
+        equal(malformedBar.children[1].tooltip, nil,
+            "malformed terminal renders no copy " .. malformedCase.name)
+    end
+
+    local isolationEnvironment = makeEnvironment()
+    isolationEnvironment.terminalResults[1] = {
+        ok = true,
+        applied = false,
+        requestId = "result-isolation",
+        perkId = "Axe",
+        code = "stale_revision",
+        detail = "secret terminal detail",
+    }
+    expect(isolationEnvironment.integration.install().ok, "terminal isolation integration installs")
+    local matchingBar = makeBar(isolationEnvironment, "Axe")
+    local otherPerkBar = makeBar(isolationEnvironment, "Cooking")
+    local matchingView = makeView(isolationEnvironment, 0, { matchingBar, otherPerkBar })
+    matchingView:prerender()
+    expect(string.find(matchingBar.children[1].tooltip or "",
+        "Survivor data changed. Refresh and try again.", 1, true) ~= nil,
+        "matching perk receives retained terminal")
+    equal(string.find(otherPerkBar.children[1].tooltip or "",
+        "Survivor data changed. Refresh and try again.", 1, true), nil,
+        "other perk receives no retained terminal")
+    local otherSlotBar = makeBar(isolationEnvironment, "Axe")
+    local otherSlotView = makeView(isolationEnvironment, 1, { otherSlotBar })
+    otherSlotView:prerender()
+    equal(string.find(otherSlotBar.children[1].tooltip or "",
+        "Survivor data changed. Refresh and try again.", 1, true), nil,
+        "other local slot receives no retained terminal")
+
+    local listenerEnvironment = makeEnvironment()
+    expect(listenerEnvironment.integration.install().ok, "terminal listener integration installs")
+    local listenerBar = makeBar(listenerEnvironment, "Axe")
+    local listenerView = makeView(listenerEnvironment, 0, { listenerBar })
+    listenerView:prerender()
+    local readsBeforeListener = listenerEnvironment.statusReads[1]
+    listenerEnvironment.terminalResults[1] = {
+        ok = true,
+        applied = false,
+        requestId = "result-listener",
+        perkId = "Axe",
+        code = "stale_revision",
+        detail = "secret terminal detail",
+    }
+    listenerEnvironment.listener(0, "advancement_result")
+    equal(listenerEnvironment.statusReads[1], readsBeforeListener,
+        "lifecycle callback performs no advancement-status read")
+    listenerEnvironment.now = 1
+    listenerView:prerender()
+    equal(listenerEnvironment.statusReads[1], readsBeforeListener + 1,
+        "next visible prerender consumes lifecycle dirty status")
+    expect(string.find(listenerBar.children[1].tooltip or "",
+        "Survivor data changed. Refresh and try again.", 1, true) ~= nil,
+        "lifecycle dirty rebuild updates terminal tooltip")
+
+    local cadenceEnvironment = makeEnvironment()
+    expect(cadenceEnvironment.integration.install().ok, "terminal cadence integration installs")
+    local cadenceBar = makeBar(cadenceEnvironment, "Axe")
+    local cadenceView = makeView(cadenceEnvironment, 0, { cadenceBar })
+    cadenceView:prerender()
+    local cadenceReads = cadenceEnvironment.statusReads[1]
+    cadenceEnvironment.terminalResults[1] = {
+        ok = false,
+        requestId = "result-cadence",
+        perkId = "Axe",
+        code = "send_failed",
+        detail = "secret terminal detail",
+        committed = false,
+    }
+    cadenceEnvironment.now = 999
+    cadenceView:prerender()
+    equal(cadenceEnvironment.statusReads[1], cadenceReads,
+        "retained send failure waits for ordinary refresh deadline")
+    cadenceEnvironment.now = 1000
+    cadenceView:prerender()
+    equal(cadenceEnvironment.statusReads[1], cadenceReads + 1,
+        "ordinary one-second refresh consumes retained send failure")
+    expect(string.find(cadenceBar.children[1].tooltip or "",
+        "The advancement request could not be sent. Try again.", 1, true) ~= nil,
+        "retained send failure appears without a completion callback")
+
+    local retryEnvironment = makeEnvironment()
+    retryEnvironment.terminalResults[1] = {
+        ok = true,
+        applied = false,
+        requestId = "result-before-retry",
+        perkId = "Axe",
+        code = "stale_revision",
+        detail = "secret terminal detail",
+    }
+    expect(retryEnvironment.integration.install().ok, "terminal retry integration installs")
+    local retryBar = makeBar(retryEnvironment, "Axe")
+    local retryView = makeView(retryEnvironment, 0, { retryBar })
+    retryView:prerender()
+    local retryButton = retryBar.children[1]
+    expect(string.find(retryButton.tooltip or "",
+        "Survivor data changed. Refresh and try again.", 1, true) ~= nil,
+        "old terminal is visible before accepted retry")
+    local retryStatusReads = retryEnvironment.statusReads[1]
+    retryButton:click()
+    equal(retryEnvironment.requests[1], 1, "accepted retry sends once")
+    expect(not retryButton.enabled, "accepted retry immediately disables the button")
+    equal(retryEnvironment.statusReads[1], retryStatusReads,
+        "accepted retry clears presentation without another status read")
+    equal(string.find(retryButton.tooltip or "",
+        "Survivor data changed. Refresh and try again.", 1, true), nil,
+        "accepted retry synchronously clears the old terminal")
+    retryButton:click()
+    equal(retryEnvironment.requests[1], 1,
+        "new pending state still deduplicates activation after clearing old terminal")
 end
 
 local failureEnvironment = makeEnvironment()

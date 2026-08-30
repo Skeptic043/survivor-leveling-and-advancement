@@ -18,6 +18,13 @@ local REASON_KEYS = {
     allotment_capacity = "IGUI_SLA_Reason_AllotmentCapacity",
 }
 
+local ADVANCEMENT_RESULT_KEYS = {
+    no_ap = "IGUI_SLA_Reason_InsufficientAp",
+    at_maximum = "IGUI_SLA_Reason_AtMaximum",
+    red_recovery = "IGUI_SLA_Reason_RedRecovery",
+    stale_revision = "IGUI_SLA_Advancement_Stale",
+}
+
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }
 end
@@ -45,6 +52,15 @@ local function safeId(value, maximum)
             or (byte >= 97 and byte <= 122)
             or byte == 95 or byte == 46 or byte == 58 or byte == 45
         if not allowed then return false end
+    end
+    return true
+end
+
+local function safeText(value, maximum)
+    if type(value) ~= "string" or #value == 0 or #value > maximum then return false end
+    for index = 1, #value do
+        local byte = string.byte(value, index)
+        if byte < 32 or byte > 126 then return false end
     end
     return true
 end
@@ -132,6 +148,114 @@ local function validClientState(value)
     return false, nil
 end
 
+local function classifyAdvancementResult(value)
+    if type(value) ~= "table" or getmetatable(value) ~= nil
+        or not safeId(rawget(value, "requestId"), 64)
+        or not safeId(rawget(value, "perkId"), 128) then return false, nil end
+
+    local appliedFields = {
+        ok = true, applied = true, requestId = true, perkId = true,
+        apCost = true, mastered = true, snapshotAccepted = true,
+    }
+    local appliedWithSnapshotCode = {
+        ok = true, applied = true, requestId = true, perkId = true,
+        apCost = true, mastered = true, snapshotAccepted = true, snapshotCode = true,
+    }
+    local applied = exactPlainTable(value, appliedFields)
+        or exactPlainTable(value, appliedWithSnapshotCode)
+    if applied then
+        local snapshotAccepted = rawget(value, "snapshotAccepted")
+        local snapshotCode = rawget(value, "snapshotCode")
+        local snapshotShape = type(snapshotAccepted) == "boolean"
+            and (snapshotCode == nil
+                or snapshotAccepted == false and snapshotCode == "stale_snapshot")
+        local apCost = rawget(value, "apCost")
+        if rawget(value, "ok") ~= true or rawget(value, "applied") ~= true
+            or (apCost ~= 1 and apCost ~= 2)
+            or rawget(value, "mastered") ~= (apCost == 2) or not snapshotShape then
+            return false, nil
+        end
+        return true, nil
+    end
+
+    local rejectionFields = {
+        ok = true, applied = true, requestId = true, perkId = true,
+        code = true, detail = true,
+    }
+    local rejectionWithSnapshot = {
+        ok = true, applied = true, requestId = true, perkId = true,
+        code = true, detail = true, snapshotAccepted = true,
+    }
+    local rejectionWithSnapshotCode = {
+        ok = true, applied = true, requestId = true, perkId = true,
+        code = true, detail = true, snapshotAccepted = true, snapshotCode = true,
+    }
+    local rejection = exactPlainTable(value, rejectionFields)
+        or exactPlainTable(value, rejectionWithSnapshot)
+        or exactPlainTable(value, rejectionWithSnapshotCode)
+    if rejection then
+        local code = rawget(value, "code")
+        local snapshotAccepted = rawget(value, "snapshotAccepted")
+        local snapshotCode = rawget(value, "snapshotCode")
+        local snapshotShape = snapshotAccepted == nil and snapshotCode == nil
+            or code == "stale_revision" and snapshotAccepted == true and snapshotCode == nil
+            or code == "stale_revision" and snapshotAccepted == false
+                and (snapshotCode == nil or snapshotCode == "stale_snapshot")
+        if rawget(value, "ok") ~= true or rawget(value, "applied") ~= false
+            or not safeId(code, 64) or not safeText(rawget(value, "detail"), 160)
+            or not snapshotShape then return false, nil end
+        return true, {
+            perkId = rawget(value, "perkId"),
+            key = ADVANCEMENT_RESULT_KEYS[code] or "IGUI_SLA_Advancement_Failed",
+        }
+    end
+
+    if exactPlainTable(value, {
+        ok = true, requestId = true, perkId = true, code = true,
+        detail = true, committed = true,
+    }) then
+        local code = rawget(value, "code")
+        local committed = rawget(value, "committed")
+        if rawget(value, "ok") ~= false or not safeId(code, 64)
+            or not safeText(rawget(value, "detail"), 160)
+            or type(committed) ~= "boolean" then return false, nil end
+        local key = committed and "IGUI_SLA_Advancement_Committed"
+            or code == "send_failed" and "IGUI_SLA_Advancement_SendFailed"
+            or ADVANCEMENT_RESULT_KEYS[code] or "IGUI_SLA_Advancement_Failed"
+        return true, { perkId = rawget(value, "perkId"), key = key }
+    end
+
+    local appliedSnapshotFailure = exactPlainTable(value, {
+        ok = true, applied = true, requestId = true, perkId = true, code = true,
+        detail = true, committed = true, apCost = true, mastered = true,
+    })
+    local rejectedSnapshotFailure = exactPlainTable(value, {
+        ok = true, applied = true, requestId = true, perkId = true, code = true,
+        detail = true, committed = true, upstreamCode = true, upstreamDetail = true,
+    })
+    if not appliedSnapshotFailure and not rejectedSnapshotFailure then return false, nil end
+    local code = rawget(value, "code")
+    if rawget(value, "ok") ~= false or not safeId(code, 64)
+        or not safeText(rawget(value, "detail"), 160)
+        or type(rawget(value, "applied")) ~= "boolean" then return false, nil end
+    if appliedSnapshotFailure then
+        local apCost = rawget(value, "apCost")
+        if rawget(value, "applied") ~= true or rawget(value, "committed") ~= true
+            or (apCost ~= 1 and apCost ~= 2)
+            or rawget(value, "mastered") ~= (apCost == 2) then return false, nil end
+        return true, {
+            perkId = rawget(value, "perkId"),
+            key = "IGUI_SLA_Advancement_Committed",
+        }
+    end
+    if rawget(value, "applied") ~= false or rawget(value, "committed") ~= false
+        or not safeId(rawget(value, "upstreamCode"), 64)
+        or not safeText(rawget(value, "upstreamDetail"), 160) then return false, nil end
+    local key = code == "send_failed" and "IGUI_SLA_Advancement_SendFailed"
+        or ADVANCEMENT_RESULT_KEYS[code] or "IGUI_SLA_Advancement_Failed"
+    return true, { perkId = rawget(value, "perkId"), key = key }
+end
+
 local function validAdvancementStatus(value)
     if type(value) ~= "table" or getmetatable(value) ~= nil
         or rawget(value, "ok") ~= true or type(rawget(value, "pending")) ~= "boolean" then
@@ -143,10 +267,12 @@ local function validAdvancementStatus(value)
         }) and safeId(rawget(value, "requestId"), 64)
             and safeId(rawget(value, "perkId"), 128), true
     end
-    local fields = { ok = true, pending = true }
-    if rawget(value, "result") ~= nil then fields.result = true end
-    return exactPlainTable(value, fields)
-        and (rawget(value, "result") == nil or type(rawget(value, "result")) == "table"), false
+    if exactPlainTable(value, { ok = true, pending = true }) then return true, false, nil end
+    if not exactPlainTable(value, { ok = true, pending = true, result = true }) then
+        return false, nil
+    end
+    local valid, presentation = classifyAdvancementResult(rawget(value, "result"))
+    return valid, false, presentation
 end
 
 local function validAcceptedRequest(value, perkId)
@@ -484,6 +610,7 @@ function Build42SkillsUi.create(dependencies)
             barsReady = false,
             disabled = false,
             cache = nil,
+            terminalPresentation = nil,
             nextRefresh = nil,
             lastClock = nil,
             bars = weakKeys(),
@@ -807,7 +934,7 @@ function Build42SkillsUi.create(dependencies)
         return nil
     end
 
-    local function buttonTooltipFor(row)
+    local function buttonTooltipFor(row, terminalKey)
         local lines = {}
         local reason = rawget(row, "reasonCode")
         if reason ~= nil then
@@ -831,6 +958,18 @@ function Build42SkillsUi.create(dependencies)
             local value = localized("IGUI_SLA_PerSkillActive", rawget(row, "activeCount"), rawget(row, "limit"))
             if value == nil then return nil end
             lines[#lines + 1] = value
+        end
+        if terminalKey ~= nil then
+            local value = localized(terminalKey)
+            if value == nil then return nil end
+            local duplicate = false
+            for index = 1, #lines do
+                if lines[index] == value then
+                    duplicate = true
+                    break
+                end
+            end
+            if not duplicate then lines[#lines + 1] = value end
         end
         return table.concat(lines, " <LINE> ")
     end
@@ -1015,7 +1154,10 @@ function Build42SkillsUi.create(dependencies)
                 barState.row = row
                 barState.tracked = tracked
                 barState.overlayValid = overlay
-                local tooltip = row and buttonTooltipFor(row) or nil
+                local terminal = state.terminalPresentation
+                local terminalKey = terminal ~= nil and terminal.perkId == barState.perkId
+                    and terminal.key or nil
+                local tooltip = row and buttonTooltipFor(row, terminalKey) or nil
                 if row and tooltip == nil then disableView(state); return false end
                 local enabled = row ~= nil and row.enabled == true and overlay
                     and cache.pending ~= true
@@ -1032,11 +1174,14 @@ function Build42SkillsUi.create(dependencies)
         local settingsCalled, settingsResult = pcall(readSettings)
         local stateValid, snapshot = stateCalled and validClientState(stateResult) or false, nil
         if stateValid then local _, detached = validClientState(stateResult); snapshot = detached end
-        local statusValid, pending = statusCalled and validAdvancementStatus(statusResult) or false, nil
-        if statusValid then local _, value = validAdvancementStatus(statusResult); pending = value end
+        local statusValid, pending, terminalPresentation = false, nil, nil
+        if statusCalled then
+            statusValid, pending, terminalPresentation = validAdvancementStatus(statusResult)
+        end
         local allotment = settingsCalled and projectAllotment(settingsResult) or nil
         if not stateValid or snapshot == nil or not statusValid or allotment == nil then
             state.cache = nil
+            state.terminalPresentation = nil
             applyCache(state)
             return false
         end
@@ -1048,10 +1193,12 @@ function Build42SkillsUi.create(dependencies)
         })
         if not called or not exactSuccess(built, "view") or not validModelView(rawget(built, "view")) then
             state.cache = nil
+            state.terminalPresentation = nil
             applyCache(state)
             return false
         end
         state.cache = rawget(built, "view")
+        state.terminalPresentation = terminalPresentation
         state.disabled = false
         return applyCache(state)
     end
@@ -1065,9 +1212,12 @@ function Build42SkillsUi.create(dependencies)
 
     local function markSlotPending(slot)
         for view, state in pairs(views) do
-            if view ~= nil and state.slot == slot and state.cache ~= nil then
-                state.cache.pending = true
-                applyCache(state)
+            if view ~= nil and state.slot == slot then
+                state.terminalPresentation = nil
+                if state.cache ~= nil then
+                    state.cache.pending = true
+                    applyCache(state)
+                end
             end
         end
     end
