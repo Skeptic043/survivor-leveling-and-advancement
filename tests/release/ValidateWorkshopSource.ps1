@@ -49,6 +49,7 @@ Assert-ReleaseCondition ($workshopLines -contains 'tags=Build 42;Balance;Interfa
 Assert-ReleaseCondition ($workshopLines -contains 'visibility=friendsOnly') 'initial friends-only visibility'
 Assert-ReleaseCondition (@($workshopLines -match '^description=').Count -ge 30) 'substantial Workshop description'
 
+$descriptionLines = @(Get-Content -LiteralPath $descriptionPath)
 $descriptionText = Get-Content -Raw -LiteralPath $descriptionPath
 $workshopText = Get-Content -Raw -LiteralPath $workshopPath
 $linkedMods = [ordered]@{
@@ -68,10 +69,22 @@ Assert-ReleaseCondition ($descriptionText.Contains('[Ko-fi](https://ko-fi.com/sk
 Assert-ReleaseCondition ($workshopText.Contains('[url=https://ko-fi.com/skeptic043]Ko-fi[/url]')) 'Workshop Ko-fi link'
 Assert-ReleaseCondition ($descriptionText.Contains('Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are strictly optional and no mod features are locked behind a paywall.')) 'Markdown support copy'
 Assert-ReleaseCondition ($workshopText.Contains('description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. All donations are strictly optional and no mod features are locked behind a paywall.')) 'Workshop support copy'
-$markdownSupportIndex = $descriptionText.IndexOf('## Support')
-$markdownModInfoIndex = $descriptionText.IndexOf('## Mod information')
-$workshopSupportIndex = $workshopText.IndexOf('description=[h2]Support[/h2]')
-$workshopModInfoIndex = $workshopText.IndexOf('description=[h2]Mod information[/h2]')
+$aiUseDisclosure = "AI was used for all actual code writing in this project - this does not mean SLA is 'AI slop'. I spent a lot of hours personally testing and debugging issues to make sure things work as expected. While AI wrote the code, I thought up the original idea for SLA and act as the designer/director. I'm grateful to have AI tools to help create cool things like SLA to share with the community, but if you have an anti AI stance, that's perfectly okay. You're free to move on and find a mod that doesn't use AI tooling, and I wish you the best in doing so."
+$workshopAIUseDisclosure = "description=$aiUseDisclosure"
+Assert-ReleaseCondition (@($descriptionLines -ceq '## AI Use').Count -eq 1) 'exact Markdown AI Use heading'
+Assert-ReleaseCondition (@($workshopLines -ceq 'description=[h2]AI Use[/h2]').Count -eq 1) 'exact Workshop AI Use heading'
+Assert-ReleaseCondition (@($descriptionLines -ceq $aiUseDisclosure).Count -eq 1) 'exact Markdown AI use disclosure'
+Assert-ReleaseCondition (@($workshopLines -ceq $workshopAIUseDisclosure).Count -eq 1) 'exact one-line Workshop AI use disclosure'
+$markdownCurrentLimitsIndex = [Array]::IndexOf($descriptionLines, '## Current limits')
+$markdownAIUseIndex = [Array]::IndexOf($descriptionLines, '## AI Use')
+$markdownSupportIndex = [Array]::IndexOf($descriptionLines, '## Support')
+$markdownModInfoIndex = [Array]::IndexOf($descriptionLines, '## Mod information')
+$workshopCurrentLimitsIndex = [Array]::IndexOf($workshopLines, 'description=[h2]Current limits[/h2]')
+$workshopAIUseIndex = [Array]::IndexOf($workshopLines, 'description=[h2]AI Use[/h2]')
+$workshopSupportIndex = [Array]::IndexOf($workshopLines, 'description=[h2]Support[/h2]')
+$workshopModInfoIndex = [Array]::IndexOf($workshopLines, 'description=[h2]Mod information[/h2]')
+Assert-ReleaseCondition ($markdownCurrentLimitsIndex -ge 0 -and $markdownCurrentLimitsIndex -lt $markdownAIUseIndex -and $markdownAIUseIndex -lt $markdownSupportIndex) 'Markdown AI Use section after current limits and before support'
+Assert-ReleaseCondition ($workshopCurrentLimitsIndex -ge 0 -and $workshopCurrentLimitsIndex -lt $workshopAIUseIndex -and $workshopAIUseIndex -lt $workshopSupportIndex) 'Workshop AI Use section after current limits and before support'
 Assert-ReleaseCondition ($markdownSupportIndex -ge 0 -and $markdownSupportIndex -lt $markdownModInfoIndex) 'Markdown support section before mod information'
 Assert-ReleaseCondition ($workshopSupportIndex -ge 0 -and $workshopSupportIndex -lt $workshopModInfoIndex) 'Workshop support section before mod information'
 Assert-ReleaseCondition ($descriptionText.Contains('- Target version: Project Zomboid Build 42.20')) 'Markdown target version'

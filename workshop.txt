@@ -50,6 +50,9 @@ description=[*]Direct skill setters or third-party progression routes that emit 
 description=[*]Only English text is currently included.
 description=[/list]
 description=
+description=[h2]AI Use[/h2]
+description=AI was used for all actual code writing in this project - this does not mean SLA is 'AI slop'. I spent a lot of hours personally testing and debugging issues to make sure things work as expected. While AI wrote the code, I thought up the original idea for SLA and act as the designer/director. I'm grateful to have AI tools to help create cool things like SLA to share with the community, but if you have an anti AI stance, that's perfectly okay. You're free to move on and find a mod that doesn't use AI tooling, and I wish you the best in doing so.
+description=
 description=[h2]Support[/h2]
 description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. All donations are strictly optional and no mod features are locked behind a paywall.
 description=
