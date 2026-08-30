@@ -83,7 +83,10 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
             return result
         end,
     }
-    local source = { install = function() calls[#calls + 1] = { "install_source" }; return { ok = true } end }
+    local source = {
+        install = function() calls[#calls + 1] = { "install_source" }; return { ok = true } end,
+        verifyOwnership = function() return { ok = true, code = "ownership_verified" } end,
+    }
     local inheritanceSession = {
         tokenNewCharacter = function(player) calls[#calls + 1] = { "inheritance_token", player }; return { ok = true } end,
         recordDeath = function(player) calls[#calls + 1] = { "inheritance_death", player }; return { ok = true } end,
@@ -370,6 +373,108 @@ do
 end
 
 do
+    local installCalls, verifyCalls = 0, 0
+    local created, f = fixture(true, false, function(values)
+        values.source.install = function()
+            installCalls = installCalls + 1
+            return { ok = true }
+        end
+        values.source.verifyOwnership = function()
+            verifyCalls = verifyCalls + 1
+            return { ok = true, code = "ownership_verified" }
+        end
+    end)
+    yes(created.owner.install().ok, "repeat-verification hooks install")
+    f.events.OnServerStarted.fire()
+    eq(verifyCalls, 0, "startup install does not add a post-install verification gate")
+    yes(created.owner.install().ok, "successful repeat install remains idempotent")
+    eq(verifyCalls, 1, "post-start repeat install verifies source ownership once")
+    eq(f.factoryCalls(), 1, "successful repeat verification does not rebuild runtime")
+    eq(installCalls, 1, "successful repeat verification does not reinstall source")
+    eq(f.serverCreates(), 1, "successful repeat verification does not rebuild transports")
+    eq(f.events.OnServerStarted.adds(), 1, "successful repeat verification registers no event")
+end
+
+do
+    local installCalls, verifyCalls = 0, 0
+    local created, f = fixture(true, false, function(values)
+        values.source.install = function()
+            installCalls = installCalls + 1
+            return { ok = true }
+        end
+        values.source.verifyOwnership = function()
+            verifyCalls = verifyCalls + 1
+            return { ok = false, code = "ownership_lost", detail = "Events.AddXP" }
+        end
+    end)
+    yes(created.owner.install().ok, "loss-verification hooks install")
+    f.events.OnServerStarted.fire()
+    local failed = created.owner.install()
+    no(failed.ok, "repeat install fails closed on source ownership loss")
+    eq(failed.code, "ownership_lost", "repeat install preserves bounded source code")
+    eq(failed.detail, "Events.AddXP", "repeat install preserves bounded source detail")
+    eq(created.owner.status().failure.code, "ownership_lost", "source loss is retained")
+    eq(verifyCalls, 1, "source ownership loss is verified once")
+    no(created.owner.install().ok, "source ownership loss stays sticky")
+    eq(verifyCalls, 1, "sticky source loss does not retry verification")
+    eq(f.factoryCalls(), 1, "source ownership loss does not rebuild runtime")
+    eq(installCalls, 1, "source ownership loss does not reinstall source")
+    eq(f.serverCreates(), 1, "source ownership loss does not rebuild transports")
+    eq(f.events.OnServerStarted.adds(), 1, "source ownership loss registers no event")
+end
+
+do
+    local installCalls, verifyCalls, transportAttempts = 0, 0, 0
+    local created, f = fixture(true, false, function(values)
+        values.source.install = function()
+            installCalls = installCalls + 1
+            return { ok = true }
+        end
+        values.source.verifyOwnership = function()
+            verifyCalls = verifyCalls + 1
+            return { ok = false, code = "ownership_lost", detail = "addXp" }
+        end
+        values.modules.Build42OwnerTransport.createServer = function()
+            transportAttempts = transportAttempts + 1
+            error("later startup failure")
+        end
+    end)
+    yes(created.owner.install().ok, "post-source-failure hooks install")
+    f.events.OnServerStarted.fire()
+    eq(created.owner.status().failure.code, "owner_server_invalid",
+        "later startup failure is retained before repeat install")
+    local failed = created.owner.install()
+    no(failed.ok, "repeat install verifies after a later startup failure")
+    eq(failed.code, "ownership_lost", "post-failure repeat preserves bounded source loss")
+    eq(failed.detail, "addXp", "post-failure repeat preserves bounded source detail")
+    eq(created.owner.status().failure.code, "ownership_lost",
+        "post-failure source ownership loss becomes retained failure")
+    eq(verifyCalls, 1, "post-failure source ownership verifies exactly once")
+    no(created.owner.install().ok, "post-failure ownership loss remains sticky")
+    eq(verifyCalls, 1, "post-failure sticky loss does not retry verification")
+    eq(f.factoryCalls(), 1, "post-failure repeat does not rebuild runtime")
+    eq(installCalls, 1, "post-failure repeat does not reinstall source")
+    eq(transportAttempts, 1, "post-failure repeat does not retry failed transport creation")
+    eq(f.events.OnServerStarted.adds(), 1, "post-failure repeat registers no event")
+end
+
+do
+    local verifyCalls = 0
+    local created, f = fixture(true, false, function(values)
+        values.source.verifyOwnership = function()
+            verifyCalls = verifyCalls + 1
+            return { ok = false, code = {}, detail = values.globals }
+        end
+    end)
+    created.owner.install()
+    f.events.OnServerStarted.fire()
+    local failed = created.owner.install()
+    eq(failed.code, "xp_source_ownership_invalid", "unsafe source failure becomes bounded")
+    eq(failed.detail, "xpSource.verifyOwnership", "unsafe source detail is not exposed")
+    eq(verifyCalls, 1, "unsafe source failure is attempted once")
+end
+
+do
     local created, f = fixture(true, false, function(values)
         values.modules.Build42OwnerTransport.createServer = function() error("transport boom") end
     end)
@@ -429,6 +534,21 @@ do
     f.globals.Events.OnServerStarted = event()
     no(created.owner.install().ok, "required event replacement fails closed")
     eq(created.owner.status().failure.code, "event_ownership_lost", "required event loss retained")
+end
+
+do
+    local verifyCalls = 0
+    local created, f = fixture(true, false, function(values)
+        values.source.verifyOwnership = function()
+            verifyCalls = verifyCalls + 1
+            return { ok = true, code = "ownership_verified" }
+        end
+    end)
+    created.owner.install()
+    f.events.OnServerStarted.fire()
+    f.globals.Events.OnClientCommand = event()
+    no(created.owner.install().ok, "repeat install fails on lifecycle ownership first")
+    eq(verifyCalls, 0, "source verifier runs only after lifecycle ownership succeeds")
 end
 
 do
