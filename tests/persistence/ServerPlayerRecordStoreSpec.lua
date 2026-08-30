@@ -18,8 +18,8 @@ local function makePlayer(username, profileIndex, modData)
     }
 end
 
-local function makeEnvironment()
-    local roots = {}
+local function makeEnvironment(initialRoots)
+    local roots = initialRoots or {}
     local identityCalls = 0
     local identity = {
         resolve = function(player)
@@ -67,6 +67,46 @@ local function state(level, revision)
     return value
 end
 
+local function engineRoundTrip(value, seen)
+    local valueType = type(value)
+    if valueType == "string" or valueType == "number" or valueType == "boolean" then
+        return value
+    end
+    if valueType ~= "table" then return nil end
+    seen = seen or {}
+    if seen[value] ~= nil then error("engine Global ModData tables must be acyclic") end
+    local copy = {}
+    seen[value] = copy
+    for key, child in pairs(value) do
+        local keyType = type(key)
+        if keyType == "string" or keyType == "number" then
+            local copied = engineRoundTrip(child, seen)
+            if copied ~= nil then copy[key] = copied end
+        end
+    end
+    seen[value] = nil
+    return copy
+end
+
+local function accountedState()
+    local value = state(6, 4)
+    value.survivor.xpIntoLevel = 321
+    value.survivor.spent = 2
+    value.perks.Reloading = {
+        adapterId = "sla.vanilla",
+        adapterVersion = 1,
+        curveFingerprint = "reloading-curve",
+        effectiveMaximum = 10,
+        naturalPosition = 75,
+        highWaterPosition = 75,
+        activeTargets = {
+            { targetId = "paid-reloading-2", targetLevel = 2, targetPosition = 150 },
+        },
+        postMaxFullRateUsed = 0,
+    }
+    return value
+end
+
 local env = makeEnvironment()
 local player = makePlayer("Account", 0)
 yes(env.legacyState.save(player, state(4, 2)).ok, "legacy state seeded")
@@ -102,6 +142,115 @@ eq(serverState.load(player).state.survivor.level, 7, "award survives later playe
 local restarted = env.createStore()
 yes(restarted.ok, "server store recreates over same Global root")
 eq(restarted.stateStore.load(player).state.survivor.level, 7, "restart/reconnect retains canonical state")
+
+do
+    local before = makeEnvironment()
+    local beforePlayer = makePlayer("RestartAccount", 0)
+    local beforeStore = before.createStore()
+    yes(beforeStore.ok, "pre-restart store creates")
+    yes(beforeStore.characterStore.tokenNewCharacter(beforePlayer).ok,
+        "pre-restart new character proof")
+    yes(beforeStore.stateStore.save(beforePlayer, accountedState()).ok,
+        "pre-restart accounted state saves")
+    yes(beforeStore.characterStore.markInitialized(beforePlayer).ok,
+        "pre-restart record initializes")
+
+    local persisted = engineRoundTrip(before.roots)
+    local persistedRoot = persisted.SLA_ServerPlayers_v1
+    yes(persistedRoot ~= before.roots.SLA_ServerPlayers_v1,
+        "engine save boundary detaches Global root identity")
+    yes(persistedRoot.players.RestartAccount[0].state
+        ~= before.roots.SLA_ServerPlayers_v1.players.RestartAccount[0].state,
+        "engine save boundary detaches nested codec state identity")
+
+    beforeStore, beforePlayer, before = nil, nil, nil
+    local loadedRoots = engineRoundTrip(persisted)
+    local after = makeEnvironment(loadedRoots)
+    local afterStore = after.createStore()
+    yes(afterStore.ok, "post-OnInitGlobalModData store creates over loaded tables")
+    local afterPlayer = makePlayer("RestartAccount", 0, {
+        SurvivorLevelingAdvancement = state(99, 99),
+    })
+
+    yes(afterStore.characterStore.tokenNewCharacter(afterPlayer).ok,
+        "dedicated CreatePlayer OnNewGame is observed after process restart")
+    local pendingRoot
+    local pending = InheritanceRecordStore.create({
+        readRoot = function() return pendingRoot end,
+        writeRoot = function(value) pendingRoot = value; return true end,
+    }).store
+    local afterSession = InheritanceSession.create({
+        authority = { describe = function() return { ok = true, authoritative = true } end },
+        playerIdentity = { isPlayer = function() return true end },
+        characterStore = afterStore.characterStore,
+        stateStore = afterStore.stateStore,
+        recordStore = pending,
+        identity = after.identity,
+        inheritanceSettings = { resolve = function()
+            return { ok = true, settings = { enabled = false, retainedRatio = 0.5 } }
+        end },
+        StateCodec = StateCodec,
+        InheritancePolicy = InheritancePolicy,
+    }).session
+    local initialized = afterSession.initialize(afterPlayer)
+    yes(initialized.ok, "post-restart existing incarnation initializes")
+    eq(initialized.outcome, "existing", "restart does not reclassify existing player as fresh")
+    no(afterStore.characterStore.inspect(afterPlayer).metadata.tokenPresent,
+        "rejected restart token is discarded during initialization")
+
+    afterPlayer.modData = { SurvivorLevelingAdvancement = state(88, 88) }
+    local loaded = afterStore.stateStore.load(afterPlayer)
+    yes(loaded.ok, "post-restart canonical state loads")
+    eq(loaded.state.survivor.level, 6, "Survivor level survives full restart")
+    eq(loaded.state.survivor.xpIntoLevel, 321, "Survivor XP survives full restart")
+    eq(loaded.state.survivor.spent, 2, "spent AP survives full restart")
+    eq(loaded.state.revision, 4, "transaction revision survives full restart")
+    eq(loaded.state.accountingMode, "Tracked", "accounting mode survives full restart")
+    local ledger = loaded.state.perks.Reloading
+    eq(#ledger.activeTargets, 1, "paid advancement target survives full restart")
+    eq(ledger.activeTargets[1].targetLevel, 2, "paid target level survives full restart")
+    eq(ledger.activeTargets[1].targetPosition, 150,
+        "paid target position survives full restart")
+
+    local inspectionEnvironment = makeEnvironment(engineRoundTrip(persisted))
+    local inspectionStore = inspectionEnvironment.createStore()
+    local inspectionPlayer = makePlayer("RestartAccount", 0)
+    yes(inspectionStore.characterStore.tokenNewCharacter(inspectionPlayer).ok,
+        "separate restarted runtime observes server token")
+    local beforeInspectionSave = inspectionStore.stateStore.load(inspectionPlayer)
+    yes(beforeInspectionSave.ok, "restart token does not block canonical load")
+    yes(inspectionStore.stateStore.save(inspectionPlayer, beforeInspectionSave.state).ok,
+        "save before readiness remains canonical")
+    local firstInspection = inspectionStore.characterStore.inspect(inspectionPlayer)
+    yes(firstInspection.ok, "separate restarted metadata inspects")
+    yes(firstInspection.metadata.tokenPresent, "spurious server token remains observable once")
+    no(firstInspection.metadata.tokenValid,
+        "live canonical incarnation rejects restart CreatePlayer as replacement proof")
+    yes(firstInspection.metadata.initialized,
+        "spurious token cannot clear canonical initialization before inspection")
+    no(firstInspection.metadata.deathRecorded,
+        "spurious token cannot manufacture completed-incarnation metadata")
+    no(inspectionStore.characterStore.inspect(inspectionPlayer).metadata.tokenPresent,
+        "separately inspected rejected token is discarded")
+end
+
+do
+    local newer = { SLA_ServerPlayers_v1 = { schemaVersion = 999, players = {} } }
+    local persistedNewer = engineRoundTrip(newer)
+    local newerStore = makeEnvironment(persistedNewer).createStore()
+    no(newerStore.stateStore.load(makePlayer("Newer", 0)).ok,
+        "serialized unknown-newer Global root fails closed")
+    eq(persistedNewer.SLA_ServerPlayers_v1.schemaVersion, 999,
+        "unknown-newer Global root remains untouched")
+
+    local malformed = { SLA_ServerPlayers_v1 = { schemaVersion = 1, players = "bad" } }
+    local persistedMalformed = engineRoundTrip(malformed)
+    local malformedStore = makeEnvironment(persistedMalformed).createStore()
+    no(malformedStore.stateStore.load(makePlayer("Malformed", 0)).ok,
+        "serialized malformed Global root fails closed")
+    eq(persistedMalformed.SLA_ServerPlayers_v1.players, "bad",
+        "malformed Global root remains untouched")
+end
 
 local profileOne = makePlayer("Account", 1)
 local otherAccount = makePlayer("Other", 0)
@@ -144,6 +293,8 @@ yes(env.identityCalls() >= beforeResolve + 3,
 yes(serverCharacter.markInitialized(player).ok, "resolved proof cleared after initialization")
 
 local wrongObject = makePlayer("Account", 0)
+yes(serverCharacter.markDeathRecorded(player).ok,
+    "completed incarnation authorizes one exact-object replacement proof")
 yes(serverCharacter.tokenNewCharacter(wrongObject).ok, "wrong object receives its own proof")
 local playerMetadata = serverCharacter.inspect(player)
 no(playerMetadata.metadata.tokenValid, "wrong-object proof cannot authorize player")
@@ -240,6 +391,50 @@ local reconnect = makePlayer("Inheritance", 0)
 local reconnectResult = inheritanceSession.initialize(reconnect)
 eq(reconnectResult.outcome, "existing", "reconnect without proof retains incarnation")
 eq(inheritanceState.load(reconnect).state.survivor.level, 5, "reconnect retains inherited state")
+
+local disabledPlayer = makePlayer("DisabledInheritance", 0)
+yes(inheritanceCharacter.tokenNewCharacter(disabledPlayer).ok,
+    "disabled-inheritance source proof")
+yes(inheritanceState.save(disabledPlayer, state(9, 2)).ok,
+    "disabled-inheritance source state")
+yes(inheritanceCharacter.markInitialized(disabledPlayer).ok,
+    "disabled-inheritance source initialized")
+local disabledSession = InheritanceSession.create({
+    authority = { describe = function() return { ok = true, authoritative = true } end },
+    playerIdentity = { isPlayer = function() return true end },
+    characterStore = inheritanceCharacter,
+    stateStore = inheritanceState,
+    recordStore = recordStore,
+    identity = env.identity,
+    inheritanceSettings = { resolve = function()
+        return { ok = true, settings = { enabled = false, retainedRatio = 0.5 } }
+    end },
+    StateCodec = StateCodec,
+    InheritancePolicy = InheritancePolicy,
+}).session
+local disabledDeath = disabledSession.recordDeath(disabledPlayer)
+yes(disabledDeath.ok and disabledDeath.disabled and not disabledDeath.recorded,
+    "disabled inheritance still completes death metadata")
+yes(inheritanceCharacter.inspect(disabledPlayer).metadata.deathRecorded,
+    "disabled inheritance records the completed incarnation")
+local disabledRepeatedDeath = disabledSession.recordDeath(disabledPlayer)
+yes(disabledRepeatedDeath.ok and disabledRepeatedDeath.alreadyRecorded,
+    "disabled-inheritance repeat death remains at-most-once")
+no(recordStore.peek({
+    kind = "mp", primaryLoginUsername = "DisabledInheritance", profileIndex = 0,
+}).found, "disabled inheritance creates no pending Survivor Level")
+local disabledReplacement = makePlayer("DisabledInheritance", 0)
+yes(disabledSession.tokenNewCharacter(disabledReplacement).ok,
+    "disabled-inheritance replacement exact-object proof")
+yes(inheritanceCharacter.inspect(disabledReplacement).metadata.tokenValid,
+    "completed disabled-inheritance death authorizes replacement")
+local disabledFresh = disabledSession.initialize(disabledReplacement)
+yes(disabledFresh.ok and disabledFresh.outcome == "fresh" and not disabledFresh.consumed,
+    "disabled-inheritance replacement initializes fresh")
+eq(inheritanceState.load(disabledReplacement).state.survivor.level, 0,
+    "disabled-inheritance replacement does not retain dead survivor state")
+no(inheritanceCharacter.inspect(disabledReplacement).metadata.deathRecorded,
+    "fresh disabled-inheritance incarnation clears completed-death metadata")
 
 local mismatchSource = makePlayer("Mismatch", 0)
 yes(inheritanceCharacter.tokenNewCharacter(mismatchSource).ok, "compare-mismatch source proof")

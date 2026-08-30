@@ -316,7 +316,17 @@ function InheritanceSession.create(dependencies)
         if settingsResult == nil then return settingsFailure end
         local settings = validateSettings(settingsResult)
         if settings == nil then return failure("inheritance_settings_invalid", "inheritanceSettings.resolve") end
-        if not settings.enabled then return { ok = true, recorded = false, disabled = true } end
+        if not settings.enabled then
+            local marked, markerFailure = invoke(
+                "metadata_death", writeDeathRecorded, player
+            )
+            if marked == nil then return markerFailure end
+            if not exact(marked, { ok = true }) then
+                return failure("metadata_death_invalid", "characterStore.markDeathRecorded")
+            end
+            recordedDeaths[player] = true
+            return { ok = true, recorded = false, disabled = true }
+        end
         local loaded, loadFailure = invoke("state_load", loadState, player)
         if loaded == nil then return loadFailure end
         local state = rawget(loaded, "state")
