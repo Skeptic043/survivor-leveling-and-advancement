@@ -104,9 +104,8 @@ local function makeBoundary(target)
     local fixture = {
         lookupCalls = 0,
         onlineLookupCalls = 0,
-        usernameLookupCalls = 0,
+        onlinePlayersCalls = 0,
         lookupIds = {},
-        lookupUsernames = {},
         target = target,
     }
 
@@ -117,17 +116,22 @@ local function makeBoundary(target)
         return fixture.target
     end
 
-    local function lookupUsername(username)
+    local function getOnlinePlayers()
         fixture.lookupCalls = fixture.lookupCalls + 1
-        fixture.usernameLookupCalls = fixture.usernameLookupCalls + 1
-        fixture.lookupUsernames[fixture.usernameLookupCalls] = username
-        return fixture.target
+        fixture.onlinePlayersCalls = fixture.onlinePlayersCalls + 1
+        return {
+            size = function() return fixture.target == nil and 0 or 1 end,
+            get = function(_, index)
+                if index == 0 then return fixture.target end
+                return nil
+            end,
+        }
     end
 
     local created = Build42AdminBoundary.create({
         Capability = Capability,
         getPlayerByOnlineID = lookup,
-        getPlayerFromUsername = lookupUsername,
+        getOnlinePlayers = getOnlinePlayers,
     })
     if not created.ok then
         error("valid boundary construction failed")
@@ -175,17 +179,17 @@ local constructorCases = {
     {
         dependencies = { Capability = Capability, getPlayerByOnlineID = function() end },
         detail = "dependencies must be an exact plain table",
-        label = "missing username lookup",
+        label = "missing online-player enumeration",
     },
     {
-        dependencies = { Capability = Capability, getPlayerFromUsername = function() end },
+        dependencies = { Capability = Capability, getOnlinePlayers = function() end },
         detail = "dependencies must be an exact plain table",
         label = "missing online lookup",
     },
     {
         dependencies = {
             getPlayerByOnlineID = function() end,
-            getPlayerFromUsername = function() end,
+            getOnlinePlayers = function() end,
         },
         detail = "dependencies must be an exact plain table",
         label = "missing Capability",
@@ -194,7 +198,7 @@ local constructorCases = {
         dependencies = {
             Capability = Capability,
             getPlayerByOnlineID = function() end,
-            getPlayerFromUsername = function() end,
+            getOnlinePlayers = function() end,
             extra = true,
         },
         detail = "dependencies must be an exact plain table",
@@ -204,7 +208,7 @@ local constructorCases = {
         dependencies = {
             Capability = {},
             getPlayerByOnlineID = function() end,
-            getPlayerFromUsername = function() end,
+            getOnlinePlayers = function() end,
         },
         detail = "Capability.CanSeePlayersStats is required",
         label = "missing inspect capability",
@@ -213,7 +217,7 @@ local constructorCases = {
         dependencies = {
             Capability = { CanSeePlayersStats = SEE },
             getPlayerByOnlineID = function() end,
-            getPlayerFromUsername = function() end,
+            getOnlinePlayers = function() end,
         },
         detail = "Capability.CanModifyPlayerStatsInThePlayerStatsUI is required",
         label = "missing mutation capability",
@@ -222,7 +226,7 @@ local constructorCases = {
         dependencies = {
             Capability = Capability,
             getPlayerByOnlineID = true,
-            getPlayerFromUsername = function() end,
+            getOnlinePlayers = function() end,
         },
         detail = "getPlayerByOnlineID must be a function",
         label = "malformed lookup",
@@ -231,10 +235,10 @@ local constructorCases = {
         dependencies = {
             Capability = Capability,
             getPlayerByOnlineID = function() end,
-            getPlayerFromUsername = true,
+            getOnlinePlayers = true,
         },
-        detail = "getPlayerFromUsername must be a function",
-        label = "malformed username lookup",
+        detail = "getOnlinePlayers must be a function",
+        label = "malformed online-player enumeration",
     },
     {
         dependencies = {
@@ -244,7 +248,7 @@ local constructorCases = {
                 end,
             }),
             getPlayerByOnlineID = function() end,
-            getPlayerFromUsername = function() end,
+            getOnlinePlayers = function() end,
         },
         detail = "Capability.CanSeePlayersStats is required",
         label = "hostile Capability",
@@ -260,7 +264,7 @@ local hostileDependencies = setmetatable(
     {
         Capability = { CanSeePlayersStats = SEE },
         getPlayerByOnlineID = function() end,
-        getPlayerFromUsername = function() end,
+        getOnlinePlayers = function() end,
     },
     {
         __index = function()
@@ -279,7 +283,7 @@ assertEqual(0, hostileDependencyIndexCalls, "hostile dependency metatable not in
 local exactConstruction = Build42AdminBoundary.create({
     Capability = Capability,
     getPlayerByOnlineID = function() return nil end,
-    getPlayerFromUsername = function() return nil end,
+    getOnlinePlayers = function() return nil end,
 })
 assertExactKeys(exactConstruction, { ok = true, boundary = true }, "construction success")
 assertTrue(exactConstruction.ok, "construction success ok")
@@ -327,15 +331,15 @@ for index = 1, #operations do
     assertEqual(1, fixture.lookupCalls, operation.name .. " lookup calls")
     if operation.mutation then
         assertEqual(1, fixture.onlineLookupCalls, operation.name .. " online lookup calls")
-        assertEqual(0, fixture.usernameLookupCalls, operation.name .. " username lookup calls")
+        assertEqual(0, fixture.onlinePlayersCalls, operation.name .. " online-player enumeration calls")
         assertEqual(42, fixture.lookupIds[1], operation.name .. " lookup id")
     else
         assertEqual(0, fixture.onlineLookupCalls, operation.name .. " online lookup calls")
-        assertEqual(1, fixture.usernameLookupCalls, operation.name .. " username lookup calls")
-        assertEqual("Exact User", fixture.lookupUsernames[1], operation.name .. " lookup username")
+        assertEqual(1, fixture.onlinePlayersCalls, operation.name .. " online-player enumeration calls")
     end
     assertEqual(1, target.onlineIdCalls, operation.name .. " online id calls")
-    assertEqual(1, target.usernameCalls, operation.name .. " username calls")
+    assertEqual(operation.mutation and 1 or 2, target.usernameCalls,
+        operation.name .. " username calls")
     if operation.mutation then
         assertEqual(1, target.roleCalls, operation.name .. " target role calls")
         assertEqual(1, actorRole.positionCalls, operation.name .. " actor position calls")
@@ -497,7 +501,7 @@ local targetCases = {
     { target = makeTarget(0 / 0, "Target", makeRole({}, 1)), code = "target_mismatch" },
     { target = makeTarget(math.huge, "Target", makeRole({}, 1)), code = "target_mismatch" },
     { target = makeTarget("8", "Target", makeRole({}, 1)), code = "target_mismatch" },
-    { target = makeTarget(8, "Other", makeRole({}, 1)), code = "target_mismatch" },
+    { target = makeTarget(8, "Other", makeRole({}, 1)), code = "target_unavailable" },
     { target = makeTarget(8, "bad\nname", makeRole({}, 1)), code = "target_mismatch" },
     {
         target = makeTarget(8, "bad" .. string.char(127) .. "name", makeRole({}, 1)),
@@ -532,7 +536,7 @@ local canonicalResult = canonicalFixture.boundary.authorizeAndResolve(
 )
 assertSuccess(canonicalResult, canonicalTarget, 912, "Target", "inspect constructs canonical target")
 assertEqual(0, canonicalFixture.onlineLookupCalls, "canonical inspect avoids online lookup")
-assertEqual(1, canonicalFixture.usernameLookupCalls, "canonical inspect uses username lookup once")
+assertEqual(1, canonicalFixture.onlinePlayersCalls, "canonical inspect uses online-player enumeration once")
 
 local hostedSelfRole = makeRole({ [SEE] = true }, 10)
 local hostedSelf = makeActor(hostedSelfRole)
@@ -588,7 +592,7 @@ local remoteResult = remoteFixture.boundary.authorizeAndResolve(
 )
 assertSuccess(remoteResult, remoteTarget, 915, "Remote Player", "remote inspect after actor username")
 assertEqual(1, remoteActor.usernameCalls, "remote inspect reads actor username once")
-assertEqual(1, remoteFixture.usernameLookupCalls, "remote inspect uses username lookup")
+assertEqual(1, remoteFixture.onlinePlayersCalls, "remote inspect uses online-player enumeration")
 assertEqual(0, remoteFixture.onlineLookupCalls, "remote inspect avoids online lookup")
 
 local malformedActorUsernameCases = {
@@ -612,7 +616,7 @@ for index = 1, #malformedActorUsernameCases do
         { username = "Remote Player" }
     )
     assertSuccess(result, target, 916 + index, "Remote Player", "malformed actor username fallback " .. tostring(index))
-    assertEqual(1, fixture.usernameLookupCalls, "malformed actor username uses lookup " .. tostring(index))
+    assertEqual(1, fixture.onlinePlayersCalls, "malformed actor username uses lookup " .. tostring(index))
 end
 
 local displayNameActor = makeActor(makeRole({ [SEE] = true }, 10))
@@ -630,7 +634,7 @@ local displayNameResult = displayNameFixture.boundary.authorizeAndResolve(
     { username = "Remote Player" }
 )
 assertSuccess(displayNameResult, displayNameTarget, 919, "Remote Player", "display name is not identity")
-assertEqual(1, displayNameFixture.usernameLookupCalls, "display name does not select self")
+assertEqual(1, displayNameFixture.onlinePlayersCalls, "display name does not select self")
 
 local changedSelfRole = makeRole({ [SEE] = true }, 10)
 local changedSelf = makeActor(changedSelfRole)
@@ -671,7 +675,7 @@ local mutationResult = mutationFixture.boundary.authorizeAndResolve(
 assertSuccess(mutationResult, mutationTarget, 921, "Remote Player", "mutation remains canonical lookup")
 assertEqual(0, mutationUsernameReads, "mutation avoids actor username")
 assertEqual(1, mutationFixture.onlineLookupCalls, "mutation retains online lookup")
-assertEqual(0, mutationFixture.usernameLookupCalls, "mutation avoids username lookup")
+assertEqual(0, mutationFixture.onlinePlayersCalls, "mutation avoids online-player enumeration")
 assertEqual(1, mutationActorRole.positionCalls, "mutation retains actor hierarchy")
 
 local utf8Username = "T" .. string.char(195) .. string.char(169) .. "st"
@@ -683,7 +687,6 @@ local utf8Result = utf8Fixture.boundary.authorizeAndResolve(
     { username = utf8Username }
 )
 assertSuccess(utf8Result, utf8Target, 913, utf8Username, "UTF-8 inspect target")
-assertEqual(utf8Username, utf8Fixture.lookupUsernames[1], "UTF-8 lookup preserved")
 
 local throwingFixture = {
     lookupCalls = 0,
@@ -691,7 +694,7 @@ local throwingFixture = {
 local throwingConstruction = Build42AdminBoundary.create({
     Capability = Capability,
     getPlayerByOnlineID = function() error("online lookup must not run") end,
-    getPlayerFromUsername = function()
+    getOnlinePlayers = function()
         throwingFixture.lookupCalls = throwingFixture.lookupCalls + 1
         error("lookup failure")
     end,
@@ -727,7 +730,7 @@ local replacementResult = replacementFixture.boundary.authorizeAndResolve(
     "inspect",
     { username = "Original" }
 )
-assertFailure(replacementResult, "target_mismatch", "replacement target")
+assertFailure(replacementResult, "target_unavailable", "replacement target")
 assertEqual(1, replacementFixture.lookupCalls, "replacement target lookup once")
 
 local hierarchyCases = {
@@ -844,8 +847,11 @@ local replacementLookupCalls = 0
 local mutableDependencies = {
     Capability = mutableCapabilities,
     getPlayerByOnlineID = function() error("online lookup must not run") end,
-    getPlayerFromUsername = function()
-        return capturedTarget
+    getOnlinePlayers = function()
+        return {
+            size = function() return 1 end,
+            get = function(_, index) return index == 0 and capturedTarget or nil end,
+        }
     end,
 }
 local capturedConstruction = Build42AdminBoundary.create(mutableDependencies)
@@ -853,7 +859,7 @@ assertTrue(capturedConstruction.ok, "captured dependency construction")
 local capturedBoundary = capturedConstruction.boundary
 mutableCapabilities.CanSeePlayersStats = {}
 mutableCapabilities.CanModifyPlayerStatsInThePlayerStatsUI = {}
-mutableDependencies.getPlayerFromUsername = function()
+mutableDependencies.getOnlinePlayers = function()
     replacementLookupCalls = replacementLookupCalls + 1
     return nil
 end
@@ -866,5 +872,48 @@ local capturedResult = capturedBoundary.authorizeAndResolve(
 assertSuccess(capturedResult, capturedTarget, 8, "Target", "dependencies captured")
 assertEqual(oldSee, capturedRole.lastCapability, "captured capability identity")
 assertEqual(0, replacementLookupCalls, "captured lookup identity")
+
+local duplicateA = makeTarget(31, "Duplicate", makeRole({}, 1))
+local duplicateB = makeTarget(32, "Duplicate", makeRole({}, 1))
+local duplicateCalls = 0
+local duplicateConstruction = Build42AdminBoundary.create({
+    Capability = Capability,
+    getPlayerByOnlineID = function() error("mutation lookup must not run") end,
+    getOnlinePlayers = function()
+        duplicateCalls = duplicateCalls + 1
+        return {
+            size = function() return 2 end,
+            get = function(_, index) return index == 0 and duplicateA or duplicateB end,
+        }
+    end,
+})
+local duplicateResult = duplicateConstruction.boundary.authorizeAndResolve(
+    makeActor(makeRole({ [SEE] = true }, 10)),
+    "inspect",
+    { username = "Duplicate" }
+)
+assertFailure(duplicateResult, "target_unavailable", "duplicate username")
+assertEqual(1, duplicateCalls, "duplicate inspection reads collection once")
+
+local malformedCollections = {
+    function() return {} end,
+    function() return { size = function() error("size") end, get = function() end } end,
+    function() return { size = function() return -1 end, get = function() end } end,
+    function() return { size = function() return 1 end, get = function() return nil end } end,
+    function() return { size = function() return 1 end, get = function() return {} end } end,
+}
+for index = 1, #malformedCollections do
+    local malformed = Build42AdminBoundary.create({
+        Capability = Capability,
+        getPlayerByOnlineID = function() error("mutation lookup must not run") end,
+        getOnlinePlayers = malformedCollections[index],
+    })
+    local malformedResult = malformed.boundary.authorizeAndResolve(
+        makeActor(makeRole({ [SEE] = true }, 10)),
+        "inspect",
+        { username = "Target" }
+    )
+    assertFalse(malformedResult.ok, "malformed collection rejected " .. tostring(index))
+end
 
 return assertionCount

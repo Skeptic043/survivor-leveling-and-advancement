@@ -79,6 +79,7 @@ local modules = {
     StateCodec = require "SurvivorLevelingAdvancement/State/StateCodec",
     PlayerStateStore = require "SurvivorLevelingAdvancement/Persistence/PlayerStateStore",
     CharacterInheritanceStore = require "SurvivorLevelingAdvancement/Persistence/CharacterInheritanceStore",
+    ServerPlayerRecordStore = require "SurvivorLevelingAdvancement/Persistence/ServerPlayerRecordStore",
     InheritanceRecordStore = require "SurvivorLevelingAdvancement/Persistence/InheritanceRecordStore",
     InheritancePolicy = require "SurvivorLevelingAdvancement/Core/InheritancePolicy",
     NaturalLedger = require "SurvivorLevelingAdvancement/Core/NaturalLedger",

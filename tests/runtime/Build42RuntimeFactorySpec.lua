@@ -21,6 +21,16 @@ local function makeModules(log, g)
     local accountingMode = { create = function() end }
     local inheritanceWorldStore = { readRoot = function() end, writeRoot = function() end }
     local inheritanceIdentity = { resolve = function() end }
+    local legacyStateStore = { load = function() end, save = function() end }
+    local legacyCharacterStore = {
+        inspect = function() end, tokenNewCharacter = function() end,
+        markInitialized = function() end, markDeathRecorded = function() end,
+    }
+    local serverStateStore = { load = function() end, save = function() end }
+    local serverCharacterStore = {
+        inspect = function() end, tokenNewCharacter = function() end,
+        markInitialized = function() end, markDeathRecorded = function() end,
+    }
     local levelGainCompletion = { create = function() end, validate = function() end }
     local m = {
         Build42PerkCatalog = { create = function(a) log[#log + 1] = "catalog"; eq(a.perkRegistry, g.PerkFactory.PerkList, "registry identity"); eq(type(a.progressionAdapter), "table", "adapter identity"); return { ok = true, catalog = catalog } end },
@@ -31,8 +41,12 @@ local function makeModules(log, g)
         Build42XpPositionArithmetic = { create = function(a) log[#log + 1] = "arithmetic"; eq(a.environment.globals, g, "globals identity"); return { ok = true, arithmetic = { add = function() end } } end },
         Build42InheritanceWorldStore = { create = function(a) log[#log + 1] = "inheritance_world"; eq(type(a.getOrCreate), "function", "captured ModData reader"); eq(type(a.add), "function", "captured ModData writer"); return { ok = true, capabilities = inheritanceWorldStore } end },
         Build42InheritanceIdentity = { create = function(a) log[#log + 1] = "inheritance_identity"; eq(type(a.isServer), "function", "captured server mode"); eq(type(a.isClient), "function", "captured client mode"); eq(a.getPlayerByOnlineID, g.getPlayerByOnlineID, "captured exact Lua lookup"); return { ok = true, adapter = inheritanceIdentity } end },
-        ServiceComposition = { create = function(a) log[#log + 1] = "composition"; eq(a.catalog, catalog, "composition catalog"); eq(a.normalizationByPerk.Cooking, 3, "normalization map"); eq(a.AccountingMode, accountingMode, "accounting factory identity"); eq(a.OwnerSnapshot, ownerSnapshot, "snapshot factory identity"); eq(a.OwnerSession, ownerSession, "session factory identity"); eq(a.AdvancementSession, advancementSession, "advancement factory identity"); eq(a.AdminSession, adminSession, "admin factory identity"); eq(a.LevelGainCompletion, levelGainCompletion, "completion factory identity"); eq(type(a.levelGainSink), "function", "completion sink callable"); eq(a.inheritanceWorldStore, inheritanceWorldStore, "inheritance world identity"); eq(a.inheritanceIdentity, inheritanceIdentity, "inheritance identity"); eq(a.authority.describe().authoritative, true, "authority"); eq(a.playerIdentity.isPlayer({}), true, "identity"); return { ok = true, services = services } end },
-        StateCodec = { decode = function() end, encode = function() end, fresh = function() end }, InheritancePolicy = { plan = function() end }, LevelGainCompletion = levelGainCompletion, PlayerStateStore = { create = function() end }, CharacterInheritanceStore = { create = function() end }, InheritanceRecordStore = { create = function() end }, InheritanceSession = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, AccountingMode = accountingMode, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, AdvancementSession = advancementSession, AdminSession = adminSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
+        ServiceComposition = { create = function(a) log[#log + 1] = "composition"; eq(a.catalog, catalog, "composition catalog"); eq(a.normalizationByPerk.Cooking, 3, "normalization map"); eq(a.AccountingMode, accountingMode, "accounting factory identity"); eq(a.OwnerSnapshot, ownerSnapshot, "snapshot factory identity"); eq(a.OwnerSession, ownerSession, "session factory identity"); eq(a.AdvancementSession, advancementSession, "advancement factory identity"); eq(a.AdminSession, adminSession, "admin factory identity"); eq(a.LevelGainCompletion, levelGainCompletion, "completion factory identity"); eq(type(a.levelGainSink), "function", "completion sink callable"); eq(a.inheritanceWorldStore, inheritanceWorldStore, "inheritance world identity"); eq(a.inheritanceIdentity, inheritanceIdentity, "inheritance identity"); eq(a.stateStore, legacyStateStore, "SP state-store identity"); eq(a.characterStore, legacyCharacterStore, "SP character-store identity"); eq(a.authority.describe().authoritative, true, "authority"); eq(a.playerIdentity.isPlayer({}), true, "identity"); return { ok = true, services = services } end },
+        StateCodec = { decode = function() end, encode = function() end, fresh = function() end }, InheritancePolicy = { plan = function() end }, LevelGainCompletion = levelGainCompletion,
+        PlayerStateStore = { create = function() log[#log + 1] = "player_state"; return { ok = true, store = legacyStateStore } end },
+        CharacterInheritanceStore = { create = function() log[#log + 1] = "character_state"; return { ok = true, store = legacyCharacterStore } end },
+        ServerPlayerRecordStore = { create = function() log[#log + 1] = "server_state"; return { ok = true, stateStore = serverStateStore, characterStore = serverCharacterStore } end },
+        InheritanceRecordStore = { create = function() end }, InheritanceSession = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, AccountingMode = accountingMode, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, AdvancementSession = advancementSession, AdminSession = adminSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
     }
     return m, catalog, services
 end
@@ -42,7 +56,7 @@ local result = Build42RuntimeFactory.create({ modules = m, globals = g })
 ok(result, "success"); eq(result.runtime.catalog, catalog, "catalog result"); eq(result.runtime.services, services, "services result")
 local resultKeys = 0; for key in pairs(result) do resultKeys = resultKeys + 1; eq(key == "ok" or key == "runtime", true, "result allowlist") end; eq(resultKeys, 2, "result key count")
 local runtimeKeys = 0; for key in pairs(result.runtime) do runtimeKeys = runtimeKeys + 1; eq(key == "catalog" or key == "services", true, "runtime allowlist") end; eq(runtimeKeys, 2, "runtime key count")
-eq(table.concat(log, ","), "catalog,refresh,normalization,provider,multiplier,arithmetic,inheritance_world,inheritance_identity,composition", "order")
+eq(table.concat(log, ","), "catalog,refresh,normalization,provider,multiplier,arithmetic,inheritance_world,inheritance_identity,player_state,character_state,composition", "order")
 local savedOwnerSnapshot = m.OwnerSnapshot
 m.OwnerSnapshot = nil
 local callsBeforeMissingSnapshot = #log
@@ -102,8 +116,43 @@ m.Build42WorldSettingsProvider.create = function(a) providerArgs = a; return { o
 ok(Build42RuntimeFactory.create({ modules = m, globals = g }), "current settings success"); eq(providerArgs.readSandboxVars(), g.SandboxVars, "current settings")
 eq(providerArgs.readSandboxOption("GlobalAdvancementLimit"), 7, "current engine sandbox option")
 g.isClient = function() return true end
-m.ServiceComposition.create = function(a) eq(a.authority.describe().authoritative, false, "client authority"); g.isClient = function() return "bad" end; eq(a.authority.describe().authoritative, false, "authority captures exact function"); g.instanceof = function() error("boom") end; eq(a.playerIdentity.isPlayer({}), true, "player identity captures exact function"); return { ok = true, services = services } end
-ok(Build42RuntimeFactory.create({ modules = m, globals = g }), "authority variants")
+local clientRuntime = Build42RuntimeFactory.create({ modules = m, globals = g })
+eq(clientRuntime.ok, false, "client runtime rejected")
+eq(clientRuntime.code, "invalid_mode", "client runtime code")
+g.isClient = function() return false end
+
+do
+    local serverGlobals = globals()
+    serverGlobals.isServer = function() return true end
+    local serverLog = {}
+    local serverModules = makeModules(serverLog, serverGlobals)
+    local serverState, serverCharacter
+    serverModules.ServerPlayerRecordStore.create = function(argument)
+        serverLog[#serverLog + 1] = "server_state"
+        eq(argument.codec, serverModules.StateCodec, "server store codec identity")
+        eq(type(argument.identity.resolve), "function", "server store identity adapter")
+        eq(type(argument.legacyStateStore.load), "function", "server store legacy state source")
+        eq(type(argument.legacyCharacterStore.inspect), "function", "server store legacy metadata source")
+        eq(type(argument.getOrCreate), "function", "server store Global reader")
+        eq(type(argument.add), "function", "server store Global writer")
+        serverState = { load = function() end, save = function() end }
+        serverCharacter = {
+            inspect = function() end, tokenNewCharacter = function() end,
+            markInitialized = function() end, markDeathRecorded = function() end,
+        }
+        return { ok = true, stateStore = serverState, characterStore = serverCharacter }
+    end
+    serverModules.ServiceComposition.create = function(argument)
+        serverLog[#serverLog + 1] = "composition"
+        eq(argument.stateStore, serverState, "server state surface reaches composition")
+        eq(argument.characterStore, serverCharacter, "server metadata surface reaches composition")
+        return { ok = true, services = {} }
+    end
+    ok(Build42RuntimeFactory.create({ modules = serverModules, globals = serverGlobals }),
+        "server store composition")
+    eq(serverLog[#serverLog - 1], "server_state", "server store built before composition")
+    eq(serverLog[#serverLog], "composition", "server composition follows store")
+end
 
 do
     local boundaryGlobals = globals()

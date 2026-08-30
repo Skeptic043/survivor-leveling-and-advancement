@@ -219,7 +219,7 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
         end,
         Capability = { CanSeePlayersStats = "inspect", CanModifyPlayerStatsInThePlayerStatsUI = "mutate" },
         getPlayerByOnlineID = function() end,
-        getPlayerFromUsername = function() end,
+        getOnlinePlayers = function() end,
         writeLog = function(name, line) calls[#calls + 1] = { "write_log", name, line } end,
         HaloTextHelper = {},
         getText = function(key) return key end,
@@ -1754,9 +1754,9 @@ end
 
 do
     local created, f = fixture(true, false)
-    local capturedUsernameLookup = f.globals.getPlayerFromUsername
+    local capturedOnlinePlayers = f.globals.getOnlinePlayers
     yes(created.owner.install().ok, "admin server installs existing events")
-    f.globals.getPlayerFromUsername = function() error("replacement username lookup") end
+    f.globals.getOnlinePlayers = function() error("replacement player enumeration") end
     f.events.OnServerStarted.fire()
     eq(f.adminBoundaryCreates(), 1, "one admin boundary after startup")
     eq(f.adminServerCreates(), 1, "one admin server after boundary")
@@ -1766,8 +1766,8 @@ do
     local boundary = f.calls[7][2]
     eq(boundary.Capability, f.globals.Capability, "boundary gets captured capability")
     eq(boundary.getPlayerByOnlineID, f.globals.getPlayerByOnlineID, "boundary gets captured lookup")
-    eq(boundary.getPlayerFromUsername, capturedUsernameLookup,
-        "boundary gets captured username lookup")
+    eq(boundary.getOnlinePlayers, capturedOnlinePlayers,
+        "boundary gets captured online-player enumeration")
     local server = f.calls[8][2]
     eq(server.adminBoundary, f.adminBoundary, "admin server gets exact boundary")
     eq(server.adminSession, f.adminSession, "admin server gets composed admin session")
