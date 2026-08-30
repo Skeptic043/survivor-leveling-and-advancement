@@ -51,6 +51,10 @@ Authorized administrators can open "Admin Panel > Mini Scoreboard", right-click 
 - Direct skill setters or third-party progression routes that emit no supported XP event do not generate Survivor XP.
 - Only English text is currently included.
 
+## AI Use
+
+AI was used for all actual code writing in this project - this does not mean SLA is 'AI slop'. I spent a lot of hours personally testing and debugging issues to make sure things work as expected. While AI wrote the code, I thought up the original idea for SLA and act as the designer/director. I'm grateful to have AI tools to help create cool things like SLA to share with the community, but if you have an anti AI stance, that's perfectly okay. You're free to move on and find a mod that doesn't use AI tooling, and I wish you the best in doing so.
+
 ## Support
 
 Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are strictly optional and no mod features are locked behind a paywall.
