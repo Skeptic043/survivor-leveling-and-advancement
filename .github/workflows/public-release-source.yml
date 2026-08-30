@@ -1,0 +1,26 @@
+name: Public release source
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  public-source:
+    name: Public source checks
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Validate public sandbox settings
+        shell: pwsh
+        run: ./tests/settings/ValidatePublicSandboxSettings.ps1
+      - name: Validate Workshop source
+        shell: pwsh
+        run: ./tests/release/ValidateWorkshopSource.ps1
