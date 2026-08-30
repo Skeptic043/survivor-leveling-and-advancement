@@ -481,6 +481,8 @@ end
 
 rejectSnapshot(function(value) value.extra = true end)
 rejectSnapshot(function(value) setmetatable(value, {}) end)
+rejectSnapshot(function(value) value.survivor.level = nil end)
+rejectSnapshot(function(value) value.survivor.level = "six" end)
 rejectSnapshot(function(value) value.survivor.xpIntoLevel = math.huge end)
 rejectSnapshot(function(value) value.perks.Axe.activeTargets[1].extra = true end)
 rejectSnapshot(function(value) value.perks.Axe.activeTargets = value.perks.Axe end)
