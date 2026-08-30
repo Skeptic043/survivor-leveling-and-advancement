@@ -72,6 +72,9 @@ end
 
 local function newPerk(natural, high, targets, perkId)
     perkId = perkId or "Axe"
+    local activeTargets = targets or {}
+    local observedPosition = natural or 0
+    if #activeTargets > 0 then observedPosition = activeTargets[#activeTargets].targetPosition end
     return {
         adapterId = "fake.adapter",
         adapterVersion = 1,
@@ -79,9 +82,9 @@ local function newPerk(natural, high, targets, perkId)
         effectiveMaximum = 3,
         naturalPosition = natural or 0,
         highWaterPosition = high or 0,
-        activeTargets = targets or {},
+        activeTargets = activeTargets,
         postMaxFullRateUsed = 0,
-        observedPosition = natural or 0,
+        observedPosition = observedPosition,
     }
 end
 
@@ -255,10 +258,6 @@ local function dependenciesFor(store, resolver)
             local fromMode = candidate.accountingMode
             candidate.accountingMode = desiredMode
             candidate.revision = candidate.revision + 1
-            if desiredMode == "Tracked" then
-                candidate.perks = {}
-                candidate.orphanedPerks = {}
-            end
             local saved = store.save(player, candidate)
             if not saved.ok then return saved end
             return {
@@ -424,6 +423,7 @@ do
     state.perks.Axe = newPerk(0, 0, {
         { targetId = "advancement-local:1", targetLevel = 1, targetPosition = 100 },
     })
+    state.perks.Axe.observedPosition = 100
     local store = makeStore(state)
     local adapter, resolver = makeRuntime()
     local service = createService(store, adapter, resolver)
@@ -541,7 +541,8 @@ do
     assertEqual(result.revision, 1)
     assertEqual(player.skills.Axe.level, 3)
     assertEqual(player.skills.Axe.position, 450)
-    assertSame(store.current.perks, frozenPerks, "Free final step preserves frozen perk map byte-for-byte")
+    frozenPerks.Axe.observedPosition = 450
+    assertSame(store.current.perks, frozenPerks, "Free final step preserves ledger accounting and advances only its actual boundary")
     assertSame(store.current.orphanedPerks, frozenOrphans, "Free final step preserves frozen orphan map byte-for-byte")
 end
 do
@@ -567,7 +568,7 @@ do
         { state = newState(3, 0), config = { mode = "PerSkill", perSkillDefault = 1, perSkillOverrides = { Axe = 0 } }, code = "allotment_rejected" },
     }
     for index = 1, #cases do
-        cases[index].state.perks.Axe = newPerk(0, 0)
+        cases[index].state.perks.Axe = newPerk(250, 250)
         local store = makeStore(cases[index].state)
         local adapter, resolver = makeRuntime()
         local service = createService(store, adapter, resolver)
@@ -593,6 +594,7 @@ do
         local item = scenarios[index]
         local state = newState(3, 0)
         state.perks.Axe = newPerk(item.natural, item.high)
+        if item.code == "red_recovery" then state.perks.Axe.observedPosition = item.position end
         local store = makeStore(state)
         local adapter, resolver = makeRuntime()
         local service = createService(store, adapter, resolver)
@@ -740,7 +742,8 @@ do
     assertEqual(store.saves, 2, "Free spend reserves and commits exactly once")
     assertEqual(store.current.survivor.spent, 1)
     assertEqual(store.current.revision, 1)
-    assertSame(store.current.perks, frozenPerks, "ordinary Free spend preserves frozen perks")
+    frozenPerks.Axe.observedPosition = 100
+    assertSame(store.current.perks, frozenPerks, "ordinary Free spend preserves ledger accounting and excludes the AP movement")
     assertSame(store.current.orphanedPerks, frozenOrphans, "ordinary Free spend preserves frozen orphans")
 end
 do
@@ -777,6 +780,37 @@ do
     assertSame(store.current.perks, frozen, "Tracked-to-Free transition freezes perk map")
     assertEqual(resolver.resolveCount, 0, "transition-stale request does not resolve")
     assertEqual(adapter.ensureCalls, 0, "transition-stale request does not mutate engine")
+end
+do
+    local cases = {
+        { name = "global", config = { mode = "Global", globalLimit = 3 } },
+        { name = "per_skill", config = { mode = "PerSkill", perSkillDefault = 2 } },
+    }
+    for index = 1, #cases do
+        local state = newState(3, 0)
+        state.accountingMode = "Free"
+        state.perks.Axe = newPerk(0, 0, {
+            { targetId = "preserved", targetLevel = 1, targetPosition = 100 },
+        })
+        state.orphanedPerks.Old = newPerk(4, 8, {}, "Old")
+        local frozenPerks = clone(state.perks)
+        local frozenOrphans = clone(state.orphanedPerks)
+        local store = makeStore(state)
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver)
+        local player = newPlayer("Axe", 1, 100)
+        local result = service.spend(player, {
+            perkId = "Axe", requestId = "restore_" .. cases[index].name, expectedRevision = 0,
+        }, cases[index].config)
+        assertCode(result, "stale_revision")
+        assertEqual(store.loads, 2, "Free-to-tracked AP boundary reloads compatibility state once")
+        assertEqual(store.saves, 1, "Free-to-tracked AP boundary saves only the mode transition")
+        assertEqual(store.current.accountingMode, "Tracked", "Free-to-tracked AP boundary persists tracked mode")
+        assertEqual(store.current.revision, 1, "Free-to-tracked AP boundary increments revision exactly once")
+        assertSame(store.current.perks, frozenPerks, "Free-to-tracked AP boundary preserves active accounting")
+        assertSame(store.current.orphanedPerks, frozenOrphans, "Free-to-tracked AP boundary preserves orphan accounting")
+        assertEqual(adapter.ensureCalls, 0, "stale transition request performs no engine mutation")
+    end
 end
 do
     local cases = {
@@ -831,7 +865,12 @@ do
         if cases[index].behavior then player.behavior.Axe = cases[index].behavior end
         assertCode(service.spend(player, { perkId = "Axe", requestId = "free_" .. cases[index].name, expectedRevision = 0 }, { mode = "Free" }), cases[index].code)
         assertEqual(adapter.ensureCalls, cases[index].engine and 1 or 0)
-        assertSame(store.current.perks, frozen, "Free failure preserves frozen perks")
+        if cases[index].name == "reservation" then
+            assertSame(store.current.perks, frozen, "failed Free reservation preserves accounting")
+        else
+            frozen.Axe.observedPosition = 0
+            assertSame(store.current.perks, frozen, "post-reservation Free failure preserves ledger and its pre-mutation boundary")
+        end
         assertFalse(MutationScope.isActive(player, "Axe"), "Free failure cleans mutation scope")
     end
 end
@@ -962,7 +1001,7 @@ local function reservationState(options)
     return state
 end
 
--- Free recovery derives universal costs and completes without touching frozen accounting.
+-- Free recovery derives universal costs, preserves the ledger, and excludes its AP movement.
 do
     local cases = {
         { final = false, level = 0, position = 0, cost = 1 },
@@ -992,7 +1031,8 @@ do
         assertEqual(store.current.revision, 1)
         assertEqual(store.current.survivor.spent, cases[index].cost)
         assertEqual(store.current.inFlightAdvancement, nil)
-        assertSame(store.current.perks, frozenPerks, "Free recovery preserves frozen perks")
+        frozenPerks.Axe.observedPosition = cases[index].final and 450 or 100
+        assertSame(store.current.perks, frozenPerks, "Free recovery preserves ledger accounting and advances its actual boundary")
         assertSame(store.current.orphanedPerks, frozenOrphans, "Free recovery preserves frozen orphans")
     end
 end

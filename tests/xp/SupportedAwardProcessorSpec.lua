@@ -242,10 +242,6 @@ local function makeEnvironment(config)
             local fromMode = candidate.accountingMode
             candidate.accountingMode = desiredMode
             candidate.revision = candidate.revision + 1
-            if desiredMode == "Tracked" then
-                candidate.perks = {}
-                candidate.orphanedPerks = {}
-            end
             local saved = store.save(synchronizedPlayer, candidate)
             if not saved.ok then return saved end
             return {
@@ -361,12 +357,12 @@ do
     equal(thrown.store.loadCount, 1, "thrown recovery follows one load")
 end
 
--- Free awards use only the authoritative envelope and Survivor economy.
+-- Free awards without preserved accounting use only the authoritative envelope and Survivor economy.
 do
     local function forbidden() error("tracked award dependency called in Free") end
     local state = freshState()
     state.accountingMode = "Free"
-    state.perks.Aiming = perkRecord(7, 99, { target("frozen", 4, 40) }, 13)
+    state.perks.Frozen = perkRecord(7, 9, { target("frozen", 4, 40) }, 13)
     state.orphanedPerks.Old = perkRecord(3, 8)
     local frozenPerks = deepCopy(state.perks)
     local frozenOrphans = deepCopy(state.orphanedPerks)
@@ -446,7 +442,6 @@ do
     state.accountingMode = "Free"
     state.survivor.xpIntoLevel = 1195
     state.perks.Aiming = perkRecord(0, 100)
-    local frozen = deepCopy(state.perks)
     local env = makeEnvironment({ state = state, position = 10 })
     local result = env.service.process(env.player, award(10, 10, 0, 10), freeSettings())
     expect(result.ok, "Free re-earned threshold-crossing XP succeeds")
@@ -455,7 +450,9 @@ do
     equal(result.apGained, 1, "threshold award AP gained")
     equal(env.store.state.survivor.level, 1, "threshold award persisted level")
     equal(env.store.state.survivor.xpIntoLevel, 5, "threshold award persisted remainder")
-    expect(deepEqual(env.store.state.perks, frozen), "re-earned Free XP leaves frozen high-water state unchanged")
+    equal(env.store.state.perks.Aiming.naturalPosition, 10, "re-earned Free XP advances preserved recovery")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 100, "re-earned Free XP preserves the old high water")
+    equal(env.store.state.perks.Aiming.observedPosition, 10, "re-earned Free XP persists the exact actual boundary")
 end
 do
     local state = freshState()
@@ -466,47 +463,128 @@ do
     equal(env.store.saveCount, 0, "invalid Free movement does not save")
     equal(env.resolver.resolveCount, 0, "invalid Free movement does not resolve")
 end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.perks.Aiming = perkRecord(0, 0, {
+        target("first", 1, 10),
+        target("second", 2, 20),
+    }, 0, { observedPosition = 20 })
+    local env = makeEnvironment({ state = state, position = 25 })
+    local partial = env.service.process(env.player, award(5, 5, 20, 25), freeSettings())
+    expect(partial.ok, "Free partial preserved accounting succeeds")
+    equal(partial.survivorXp, 5, "Free partial award still grants full Survivor XP")
+    equal(env.store.state.perks.Aiming.naturalPosition, 5, "Free partial award advances preserved natural progress")
+    equal(#env.store.state.perks.Aiming.activeTargets, 2, "Free partial award retains both targets")
+
+    env.player.position = 30
+    local exact = env.service.process(env.player, award(5, 5, 25, 30), freeSettings())
+    expect(exact.ok, "Free exact target accounting succeeds")
+    equal(env.store.state.perks.Aiming.naturalPosition, 10, "Free exact award reaches the first target")
+    equal(#env.store.state.perks.Aiming.activeTargets, 1, "Free exact award clears one target")
+    equal(env.store.state.perks.Aiming.activeTargets[1].targetId, "second", "Free exact award retains the later target")
+    equal(exact.clearedTargetIds[1], "first", "Free exact award reports the cleared target")
+
+    env.player.position = 45
+    local multi = env.service.process(env.player, award(15, 15, 30, 45), freeSettings())
+    expect(multi.ok, "Free multi-target accounting succeeds")
+    equal(#env.store.state.perks.Aiming.activeTargets, 0, "Free multi-target award clears the remaining target")
+    equal(env.store.state.perks.Aiming.naturalPosition, 45, "clearing the final target rebases to exact actual position")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 45, "final target clear rebases high water")
+    equal(env.store.state.survivor.xpIntoLevel, 25, "Free awards grant Survivor XP exactly once across accounting updates")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.perks.Aiming = perkRecord(10, 10, {}, 0, { observedPosition = 10 })
+    local env = makeEnvironment({ state = state, position = 5 })
+    local loss = env.service.process(env.player, award(0, -5, 10, 5), freeSettings())
+    expect(loss.ok, "Free negative movement updates preserved recovery")
+    equal(loss.survivorXp, 0, "Free negative movement grants no Survivor XP")
+    equal(env.store.state.perks.Aiming.naturalPosition, 5, "Free negative movement lowers natural position")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 10, "Free negative movement preserves high water")
+    equal(env.store.state.perks.Aiming.observedPosition, 5, "Free negative movement persists its actual boundary")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.perks.Aiming = perkRecord(3, 7, {}, 0, { adapterVersion = 99, observedPosition = 3 })
+    state.orphanedPerks.Old = perkRecord(1, 2)
+    local frozenPerks = deepCopy(state.perks)
+    local frozenOrphans = deepCopy(state.orphanedPerks)
+    local env = makeEnvironment({ state = state, position = 8 })
+    local result = env.service.process(env.player, award(5, 5, 3, 8), freeSettings())
+    expect(result.ok, "Free incompatible preserved record does not block ordinary award")
+    equal(result.survivorXp, 5, "Free incompatible record still grants ordinary Survivor XP")
+    expect(deepEqual(env.store.state.perks, frozenPerks), "Free incompatible record remains frozen for tracked fail-closed handling")
+    expect(deepEqual(env.store.state.orphanedPerks, frozenOrphans), "Free orphan accounting remains intact")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.perks.Aiming = perkRecord(10, 10, {}, 0, { observedPosition = 10 })
+    local env = makeEnvironment({ state = state, position = 10 })
+    local result = env.service.process(env.player, award(0, 0, 10, 10), freeSettings())
+    expect(result.ok, "Free no-progress preserved accounting succeeds")
+    equal(result.stateWritten, false, "Free no-progress preserved accounting avoids a save")
+    equal(env.store.saveCount, 0, "Free no-progress performs no durable write")
+end
+do
+    local state = freshState()
+    state.accountingMode = "Free"
+    state.perks.Aiming = perkRecord(0, 0, { target("legacy", 1, 10) }, 0, { observedPosition = nil })
+    local env = makeEnvironment({ state = state, position = 20 })
+    local result = env.service.process(env.player, award(10, 10, 10, 20), freeSettings())
+    expect(result.ok, "Free legacy record without observed boundary reconciles from its latest target")
+    equal(env.store.state.perks.Aiming.naturalPosition, 20, "legacy target clears at exact supported progress")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 20, "legacy clear rebases to actual position")
+    equal(#env.store.state.perks.Aiming.activeTargets, 0, "legacy target is cleared")
+    equal(env.store.state.perks.Aiming.observedPosition, 20, "legacy record gains a durable actual boundary")
+end
 
 -- Mode boundaries select the synchronized branch exactly once.
 do
     local state = freshState()
     state.perks.Aiming = perkRecord(5, 12, { target("frozen", 2, 20) }, 7)
-    local frozen = deepCopy(state.perks)
-    local env = makeEnvironment({ state = state, position = 10 })
-    local result = env.service.process(env.player, award(10, 10, 0, 10), freeSettings())
+    local env = makeEnvironment({ state = state, position = 15 })
+    local result = env.service.process(env.player, award(10, 10, 5, 15), freeSettings())
     expect(result.ok, "Tracked-to-Free boundary award succeeds")
     equal(result.survivorXp, 10, "Tracked-to-Free boundary follows Free once")
     equal(env.store.saveCount, 2, "transition and award each save once")
     equal(env.store.state.accountingMode, "Free", "Tracked-to-Free persisted mode")
     equal(env.store.state.revision, 1, "Tracked-to-Free persisted revision")
-    expect(deepEqual(env.store.state.perks, frozen), "Tracked-to-Free boundary freezes tracked map")
-    equal(env.resolver.resolveCount, 0, "Tracked-to-Free boundary does not enter tracked processing")
+    equal(env.store.state.perks.Aiming.naturalPosition, 15, "Tracked-to-Free boundary advances preserved natural position")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 15, "Tracked-to-Free boundary clears recovery then advances high water")
+    equal(env.store.state.perks.Aiming.observedPosition, 15, "Tracked-to-Free boundary persists the current actual boundary")
+    equal(env.resolver.resolveCount, 1, "Tracked-to-Free boundary resolves only its preserved record")
 end
 do
     local state = freshState()
     state.accountingMode = "Free"
-    state.perks.Aiming = perkRecord(50, 70, { target("discarded", 8, 80) }, 9)
+    state.perks.Aiming = perkRecord(0, 0, { target("preserved", 8, 80) }, 9)
     state.orphanedPerks.Old = perkRecord(1, 2)
     local env = makeEnvironment({ state = state, observed = 0, position = 10 })
     local result = env.service.process(env.player, award(10, 10, 0, 10), settings())
     expect(result.ok, "Free-to-Tracked boundary award succeeds")
     equal(result.survivorXp, 10, "Free-to-Tracked boundary credits event once")
     equal(env.store.saveCount, 2, "Free-to-Tracked transition and award each save once")
+    equal(env.store.loadCount, 2, "Free-to-Tracked award reloads compatibility state once")
     equal(env.store.state.accountingMode, "Tracked", "Free-to-Tracked persisted mode")
     equal(env.store.state.revision, 1, "Free-to-Tracked persisted revision")
-    equal(env.store.state.perks.Aiming.naturalPosition, 10, "boundary baselines before and applies event once")
-    equal(env.store.state.perks.Aiming.highWaterPosition, 10, "boundary applies high water once")
-    equal(env.store.state.orphanedPerks.Old, nil, "returning to Tracked clears frozen orphan map")
+    equal(env.store.state.perks.Aiming.naturalPosition, 10, "boundary advances the preserved natural position once")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 10, "boundary advances preserved high water once")
+    equal(env.store.state.perks.Aiming.activeTargets[1].targetId, "preserved", "boundary retains the remaining target")
+    expect(env.store.state.orphanedPerks.Old ~= nil, "returning to Tracked preserves the orphan map")
 end
 do
     local state = freshState()
     state.perks.Aiming = perkRecord(1, 2)
-    local env = makeEnvironment({ state = state, position = 0 })
-    local result = env.service.process(env.player, award(0, 0, 0, 0), freeSettings())
+    local env = makeEnvironment({ state = state, position = 1 })
+    local result = env.service.process(env.player, award(0, 0, 1, 1), freeSettings())
     expect(result.ok, "transition-only zero Free award succeeds")
     expect(result.stateWritten, "transition-only zero reports prior durable write")
     equal(env.store.saveCount, 1, "transition-only zero avoids a second save")
-    equal(env.resolver.resolveCount, 0, "transition-only Free skips resolver")
+    equal(env.resolver.resolveCount, 1, "transition-only Free validates its preserved record")
 end
 do
     local state = freshState()

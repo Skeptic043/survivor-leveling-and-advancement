@@ -11,8 +11,18 @@ local function expectEqual(actual, expected, message)
     if actual ~= expected then error(message or (tostring(actual) .. " ~= " .. tostring(expected))) end
 end
 
-local function empty(map)
-    for _ in pairs(map) do return false end
+local function same(left, right, seen)
+    if type(left) ~= type(right) then return false end
+    if type(left) ~= "table" then return left == right end
+    seen = seen or {}
+    if seen[left] == right then return true end
+    seen[left] = right
+    for key, value in pairs(left) do
+        if not same(value, right[key], seen) then return false end
+    end
+    for key in pairs(right) do
+        if left[key] == nil then return false end
+    end
     return true
 end
 
@@ -70,18 +80,21 @@ expectEqual(ServiceFactory.create({ store = { save = function() end } }).code, "
 
 local player = {}
 local service, calls = fixtures()
+expectEqual(service.transitionGeneration(player).generation, 0, "new player begins at transition generation zero")
 local noOp = state("Tracked")
 noOp.inFlightAdvancement = { private = true }
 local noTransition = service.synchronizeLoaded(player, noOp, "Tracked")
 expect(noTransition.ok and noTransition.state == noOp and not noTransition.transitioned, "same-mode returns exact state")
 expectEqual(calls.clear, 0, "same-mode skips observation clear")
 expectEqual(calls.save, 0, "same-mode skips save")
+expectEqual(service.transitionGeneration(player).generation, 0, "same-mode synchronization does not advance transition generation")
 
 local tracked = state("Tracked")
 local toFree = service.synchronizeLoaded(player, tracked, "Free")
 expect(toFree.ok and toFree.transitioned and toFree.fromMode == "Tracked" and toFree.toMode == "Free", "tracked transition succeeds")
 expect(toFree.state ~= tracked and toFree.state.accountingMode == "Free" and toFree.state.revision == 5, "tracked transition is detached and revisioned")
 expect(toFree.state.perks.Axe ~= nil and toFree.state.orphanedPerks.Removed ~= nil, "tracked accounting freezes into free mode")
+expect(same(toFree.state.perks, tracked.perks) and same(toFree.state.orphanedPerks, tracked.orphanedPerks), "tracked-to-free preserves accounting maps byte-for-byte")
 expect(tracked.perks.Axe ~= nil and tracked.orphanedPerks.Removed ~= nil and toFree.state.survivor.spent == 3, "source and AP are preserved")
 expectEqual(calls.clear, 1, "tracked-to-free clears observations once")
 expectEqual(calls.save, 1, "tracked-to-free saves once")
@@ -90,17 +103,23 @@ expectEqual(calls.savePlayer, player, "save receives exact player")
 expectEqual(calls.saved, toFree.state, "save receives transition candidate")
 expectEqual(calls.order[1], "clear", "clear precedes save")
 expectEqual(calls.order[2], "save", "save follows clear")
+expectEqual(service.transitionGeneration(player).generation, 1, "successful transition advances generation once")
 tracked.perks.Axe.adapterId = "changed"
 expectEqual(toFree.state.perks.Axe.adapterId, "old", "later source mutation cannot change frozen candidate")
 
 service, calls = fixtures()
 local free = state("Free")
+local frozenPerks = free.perks
+local frozenOrphans = free.orphanedPerks
 local toTracked = service.synchronizeLoaded(player, free, "Tracked")
 expect(toTracked.ok and toTracked.transitioned and toTracked.state.accountingMode == "Tracked" and toTracked.state.revision == 5, "free transition succeeds")
-expect(empty(toTracked.state.perks) and empty(toTracked.state.orphanedPerks), "tracked mode starts with lazy-baseline maps")
+expect(toTracked.state.perks.Axe ~= nil and toTracked.state.orphanedPerks.Removed ~= nil, "tracked mode restores preserved accounting maps")
+expect(toTracked.state.perks ~= frozenPerks and toTracked.state.orphanedPerks ~= frozenOrphans, "restored accounting remains detached")
+expect(same(toTracked.state.perks, free.perks) and same(toTracked.state.orphanedPerks, free.orphanedPerks), "free-to-tracked restores accounting maps byte-for-byte")
 expect(free.perks.Axe ~= nil and free.orphanedPerks.Removed ~= nil and free.survivor.spent == toTracked.state.survivor.spent, "free source and AP are preserved")
 expectEqual(calls.clear, 1, "free-to-tracked clears observations once")
 expectEqual(calls.save, 1, "free-to-tracked saves once")
+expectEqual(service.transitionGeneration(player).generation, 1, "independent service transition starts at generation one")
 
 service, calls = fixtures()
 local reserved = state("Free")
@@ -135,12 +154,34 @@ expectEqual(rejected.code, "save_failed")
 expectEqual(calls.clear, 1, "throwing save follows clear")
 expectEqual(calls.save, 1, "throwing save is attempted once")
 expectEqual(failedSource.accountingMode, "Tracked", "throwing save preserves supplied state")
+expectEqual(service.transitionGeneration(player).generation, 0, "throwing save does not advance transition generation")
 
 service, calls = fixtures({ saveResult = { ok = false } })
 rejected = service.synchronizeLoaded(player, state("Tracked"), "Free")
 expectEqual(rejected.code, "save_failed")
 expectEqual(calls.clear, 1, "failed save follows clear")
 expectEqual(calls.save, 1, "failed save is attempted once")
+expectEqual(service.transitionGeneration(player).generation, 0, "failed save does not advance transition generation")
+
+local retryOptions = { saveResult = { ok = false } }
+service, calls = fixtures(retryOptions)
+failedSource = state("Free")
+rejected = service.synchronizeLoaded(player, failedSource, "Tracked")
+expectEqual(rejected.code, "save_failed", "failed restore is reported")
+expect(failedSource.perks.Axe ~= nil and failedSource.orphanedPerks.Removed ~= nil, "failed restore preserves supplied accounting")
+retryOptions.saveResult = { ok = true }
+local retried = service.synchronizeLoaded(player, failedSource, "Tracked")
+expect(retried.ok and retried.state.perks.Axe ~= nil and retried.state.orphanedPerks.Removed ~= nil, "failed restore retries with preserved accounting")
+expectEqual(retried.state.revision, 5, "restore retry increments revision exactly once")
+expectEqual(service.transitionGeneration(player).generation, 1, "successful retry advances transition generation exactly once")
+
+local roundTripService = fixtures()
+local roundTripPlayer = {}
+local roundTripFree = roundTripService.synchronizeLoaded(roundTripPlayer, state("Tracked"), "Free")
+local roundTripTracked = roundTripService.synchronizeLoaded(roundTripPlayer, roundTripFree.state, "Tracked")
+expect(roundTripTracked.ok, "unobserved round trip succeeds")
+expectEqual(roundTripService.transitionGeneration(roundTripPlayer).generation, 2, "round trip retains both monotonic transition boundaries")
+expectEqual(roundTripService.transitionGeneration({}).generation, 0, "transition generations are player-scoped")
 
 service, calls = fixtures({ saveResult = setmetatable({ ok = true }, {}) })
 rejected = service.synchronizeLoaded(player, state("Tracked"), "Free")

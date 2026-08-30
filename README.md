@@ -6,13 +6,17 @@ A Project Zomboid Build 42 release candidate that turns ordinary skill activity 
 
 The 1.0 release candidate is feature-complete. Core XP, Survivor Levels, Advancement Points, persistence, multiplayer authority, sandbox settings, Skills-screen integration, representative custom-skill compatibility, and representative Skills-tooltip compatibility are implemented and live-validated.
 
-The current friends-only Workshop candidate passes clean-profile and Workshop-only loads, progression, AP spending, reload persistence, cross-version AP/XP retention, the complete deterministic gate, and the public-source gates. Before public release, it still needs the final different-owner dedicated-server session covering remote administration and restart persistence.
+The current unlisted Workshop candidate passes clean-profile and Workshop-only loads, progression, AP spending, reload persistence, cross-version AP/XP retention, the complete deterministic gate, and the public-source gates. Before public release, it still needs the final dedicated-server persistence corrections and acceptance checks.
 
 Development and current testing target Project Zomboid 42.20.4. The internal mod ID is `SurvivorLevelingAdvancement`. The mod does not enforce exact patch-version bounds, and compatibility will be claimed only for versions and integrations that have been tested.
 
 ## Installation
 
-[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). The release candidate is currently friends-only while final multiplayer testing is completed. Steam Workshop is the supported installation route; remove duplicate manual copies from `Zomboid/mods` before testing or playing.
+[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). The release candidate is currently unlisted while final multiplayer testing is completed. Steam Workshop is the supported installation route; remove duplicate manual copies from `Zomboid/mods` before testing or playing.
+
+### Dedicated-server saves
+
+Set Project Zomboid's native `SaveWorldEveryMinutes` server option to a nonzero value; `5` or `10` real-world minutes is a practical starting point. SLA's multiplayer progression is stored in server-owned Global ModData and becomes durable with the normal server save. Abrupt termination can lose changes made after the last successful save, so a shorter interval reduces that window. SLA does not invoke a separate save because Build 42.20.4 exposes no Lua-callable dedicated save with a trustworthy completion result.
 
 ## Project links
 

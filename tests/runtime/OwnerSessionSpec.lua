@@ -105,6 +105,9 @@ local function fixture(overrides)
             toMode = desiredMode,
         }
     end
+    function accountingMode.transitionGeneration()
+        return { ok = true, generation = accountingMode.generation or 0 }
+    end
     local catalog = {
         resolver = { loadOptions = options },
         positionReader = {
@@ -160,6 +163,8 @@ failure(OwnerSession.create({ store = { load = function() end } }), "invalid_dep
 local creationDependencies = { store = { load = function() end, save = function() end }, recoveryService = { recoverLoadedState = function() end } }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingMode.synchronizeLoaded is required")
 creationDependencies.accountingMode = { synchronizeLoaded = function() end }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingMode.transitionGeneration is required")
+creationDependencies.accountingMode.transitionGeneration = function() end
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingSettings.resolve is required")
 creationDependencies.accountingSettings = { resolve = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "catalog capabilities are required")
@@ -430,25 +435,47 @@ end
 
 do
     local session, _, values = fixture(function(dependencies, fixtureValues)
+        local transitionedState = nil
+        dependencies.store.load = function(actualPlayer, actualOptions)
+            fixtureValues.calls[#fixtureValues.calls + 1] = "load"
+            fixtureValues.loads[#fixtureValues.loads + 1] = { player = actualPlayer, options = actualOptions }
+            return { ok = true, state = transitionedState or fixtureValues.state }
+        end
         dependencies.accountingMode.synchronizeLoaded = function(_, actualState, desiredMode)
             fixtureValues.calls[#fixtureValues.calls + 1] = "synchronize"
             if actualState.accountingMode == desiredMode then
                 return { ok = true, state = actualState, transitioned = false, fromMode = desiredMode, toMode = desiredMode }
             end
-            local candidate = { accountingMode = desiredMode, revision = actualState.revision + 1, survivor = actualState.survivor, perks = {}, private = "tracked synchronized" }
+            local candidate = { accountingMode = desiredMode, revision = actualState.revision + 1, survivor = actualState.survivor, perks = actualState.perks, private = "tracked synchronized" }
+            transitionedState = candidate
             return { ok = true, state = candidate, transitioned = true, fromMode = actualState.accountingMode, toMode = desiredMode }
+        end
+        dependencies.ownerSnapshot.project = function(actualState, sequence, ready)
+            fixtureValues.calls[#fixtureValues.calls + 1] = "project"
+            return { ok = true, snapshot = {
+                protocolVersion = 1, sequence = sequence, ready = ready,
+                revision = actualState.revision, privateInput = actualState.private,
+                preservedAxe = actualState.perks.Axe ~= nil,
+            } }
         end
     end)
     expectEqual(session.ready(values.player).ok, true, "ready before subsequent transition")
     values.state.accountingMode = "Free"
     values.state.revision = 10
+    values.state.perks.Axe = trackedRecord(10, {
+        { targetId = "preserved", targetLevel = 2, targetPosition = 30 },
+    })
+    values.positions.Axe = 20
     values.accountingSettings.mode = "Tracked"
     local snapshot = session.snapshot(values.player)
     expectEqual(snapshot.ok, true, "Free-to-Tracked subsequent snapshot succeeds")
-    sequenceEquals(values.calls, { "load", "recover", "settings", "synchronize", "catalog", "initialize", "project", "load", "settings", "synchronize", "project" }, "Free-to-Tracked subsequent ordering")
+    sequenceEquals(values.calls, { "load", "recover", "settings", "synchronize", "catalog", "initialize", "project", "load", "settings", "synchronize", "load", "read:Axe", "save", "observe:Axe", "project" }, "Free-to-Tracked subsequent ordering")
     expectEqual(snapshot.snapshot.sequence, 2, "transition snapshot sequence")
     expectEqual(snapshot.snapshot.revision, 11, "subsequent snapshot projects synchronized revision")
     expectEqual(snapshot.snapshot.privateInput, "tracked synchronized", "subsequent snapshot projects synchronized state")
+    expectEqual(snapshot.snapshot.preservedAxe, true, "first tracked snapshot restores preserved accounting")
+    expectEqual(values.saves[#values.saves].state.perks.Axe.naturalPosition, 20, "first tracked snapshot reconciles missed Free progress")
+    expectEqual(values.saves[#values.saves].state.perks.Axe.activeTargets[1].targetId, "preserved", "first tracked snapshot keeps remaining accounting")
 end
 
 local function assertReadyFailure(name, configure, code, detail, expectedCalls)

@@ -210,6 +210,15 @@ local function ledgerFromPerk(record)
     }
 end
 
+local function durableRecordBoundary(record)
+    if record.observedPosition ~= nil then return record.observedPosition end
+    local boundary = record.naturalPosition
+    if type(record.activeTargets) == "table" and #record.activeTargets > 0 then
+        boundary = record.activeTargets[#record.activeTargets].targetPosition
+    end
+    return boundary
+end
+
 local function applyLedger(record, ledger)
     local copy, copyError = cloneValue(record)
     if not copy then return nil, copyError end
@@ -434,6 +443,70 @@ local function processAtMaximum(deps, record, award, settings, maximumPosition)
     }
 end
 
+local function processPreservedFreeRecord(deps, player, state, award)
+    local record = state.perks[award.perkId]
+    if record == nil then
+        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+    end
+
+    local resolved = resolveAdapter(deps.resolver, award.perkId)
+    if not resolved.ok then
+        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+    end
+    local described = describeAdapter(resolved.adapter, resolved.handle)
+    if not described.ok or not sameIdentity(record, described.identity) then
+        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+    end
+    local inspected = inspectAdapter(resolved.adapter, resolved.handle, player, described.identity)
+    if not inspected.ok or inspected.inspection.actualPosition ~= award.actualPositionAfter then
+        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+    end
+
+    local nextRecord = record
+    local clearedTargetIds = {}
+    local observedPosition = record.observedPosition
+    if observedPosition ~= nil and (not isFinite(observedPosition) or observedPosition < 0) then
+        return failure("perk_quarantined", "observed_position_invalid")
+    end
+    local durableBoundary = durableRecordBoundary(record)
+    local reconciledBoundary = durableBoundary ~= award.actualPositionBefore
+    if reconciledBoundary then
+        local reconciled = deps.NaturalLedger.reconcileExternal(
+            ledgerFromPerk(nextRecord),
+            award.actualPositionBefore - durableBoundary,
+            award.actualPositionBefore
+        )
+        if type(reconciled) ~= "table" or not reconciled.ok then
+            return failure("perk_quarantined", "reconciliation_" .. detailOf(reconciled))
+        end
+        local recordError
+        nextRecord, recordError = applyLedger(nextRecord, reconciled.state)
+        if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
+        appendCleared(clearedTargetIds, reconciled.effect.clearedTargetIds)
+    end
+
+    local transitioned = deps.NaturalLedger.applySupported(
+        ledgerFromPerk(nextRecord),
+        award.appliedDelta,
+        award.actualPositionAfter
+    )
+    if type(transitioned) ~= "table" or not transitioned.ok then
+        return failure("perk_quarantined", "supported_transition_" .. detailOf(transitioned))
+    end
+    local recordError
+    nextRecord, recordError = applyLedger(nextRecord, transitioned.state)
+    if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
+    nextRecord.observedPosition = award.actualPositionAfter
+    appendCleared(clearedTargetIds, transitioned.effect.clearedTargetIds)
+    state.perks[award.perkId] = nextRecord
+    return {
+        ok = true,
+        changed = observedPosition == nil or reconciledBoundary or award.appliedDelta ~= 0,
+        recoveryApplied = transitioned.effect.recoveryApplied,
+        clearedTargetIds = clearedTargetIds,
+    }
+end
+
 function SupportedAwardProcessor.create(dependencies)
     if type(dependencies) ~= "table" then
         return failure("invalid_dependencies", "dependencies_required")
@@ -512,6 +585,15 @@ function SupportedAwardProcessor.create(dependencies)
         local synchronized = synchronizeAccountingMode(deps, player, state, settings.accountingMode)
         if not synchronized.ok then return synchronized end
         state = synchronized.state
+        if synchronized.transitioned and synchronized.fromMode == "Free" then
+            local reloaded = loadState(deps.store, player, deps.loadOptions)
+            if not reloaded.ok then return reloaded end
+            if reloaded.state.accountingMode ~= "Tracked"
+                or reloaded.state.revision ~= state.revision then
+                return failure("accounting_mode_failed", "tracked_reload_invalid")
+            end
+            state = reloaded.state
+        end
         if type(state.perks) ~= "table"
             or type(state.survivor) ~= "table"
             or not isInteger(state.revision)
@@ -525,6 +607,8 @@ function SupportedAwardProcessor.create(dependencies)
             if award.actualPositionAfter - award.actualPositionBefore ~= award.appliedDelta then
                 return failure("invalid_award", "applied_delta_position_mismatch")
             end
+            local preserved = processPreservedFreeRecord(deps, player, state, award)
+            if not preserved.ok then return preserved end
             local computed = { ok = true, award = zeroAward() }
             if award.appliedDelta > 0 and award.survivorCreditBase > 0 then
                 computed = computeAward(deps, award.survivorCreditBase, settings, 1, settings.survivorMultiplier)
@@ -535,7 +619,7 @@ function SupportedAwardProcessor.create(dependencies)
             if type(applied) ~= "table" or not applied.ok then
                 return failure("survivor_transition_failed", detailOf(applied))
             end
-            local stateChanged = applied.state.level ~= state.survivor.level
+            local stateChanged = preserved.changed or applied.state.level ~= state.survivor.level
                 or applied.state.xpIntoLevel ~= state.survivor.xpIntoLevel
                 or applied.state.spent ~= state.survivor.spent
             state.survivor = applied.state
@@ -551,11 +635,11 @@ function SupportedAwardProcessor.create(dependencies)
                 survivorXp = survivorXp,
                 levelsGained = applied.effects.levelsGained,
                 apGained = applied.effects.apGained,
-                recoveryApplied = 0,
+                recoveryApplied = preserved.recoveryApplied,
                 naturalEligibleBase = computed.award.eligibleBase,
                 postMaxBase = 0,
                 postMaxXp = 0,
-                clearedTargetIds = {},
+                clearedTargetIds = preserved.clearedTargetIds,
                 stateWritten = alreadyWritten or stateChanged,
             }
         end
@@ -584,10 +668,19 @@ function SupportedAwardProcessor.create(dependencies)
         if not observed.ok then return observed end
         local stateChanged = false
         local clearedTargetIds = {}
-        if record ~= nil and observed.present and observed.position ~= award.actualPositionBefore then
+        local reconciliationBoundary = observed.present and observed.position or nil
+        if reconciliationBoundary == nil and synchronized.transitioned
+            and synchronized.fromMode == "Free" and record ~= nil then
+            reconciliationBoundary = durableRecordBoundary(record)
+            if not isFinite(reconciliationBoundary) or reconciliationBoundary < 0 then
+                return failure("perk_quarantined", "observed_position_invalid")
+            end
+        end
+        if record ~= nil and reconciliationBoundary ~= nil
+            and reconciliationBoundary ~= award.actualPositionBefore then
             local reconciled = deps.NaturalLedger.reconcileExternal(
                 ledgerFromPerk(record),
-                award.actualPositionBefore - observed.position,
+                award.actualPositionBefore - reconciliationBoundary,
                 award.actualPositionBefore
             )
             if type(reconciled) ~= "table" or not reconciled.ok then

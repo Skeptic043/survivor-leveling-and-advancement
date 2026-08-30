@@ -1,4 +1,5 @@
 local AccountingMode = {}
+local MAX_SAFE_INTEGER = 9007199254740991
 
 local function failed(code, detail)
     return { ok = false, code = code, detail = detail }
@@ -46,6 +47,12 @@ function AccountingMode.create(dependencies)
 
     local save = store.save
     local clearPlayer = observation.clearPlayer
+    local transitionGenerations = setmetatable({}, { __mode = "k" })
+
+    local function transitionGeneration(player)
+        local generation = player ~= nil and transitionGenerations[player] or nil
+        return { ok = true, generation = generation or 0 }
+    end
 
     local function synchronizeLoaded(player, state, desiredMode)
         if not validMode(desiredMode) then
@@ -61,15 +68,16 @@ function AccountingMode.create(dependencies)
         if state.inFlightAdvancement ~= nil then
             return failed("in_flight_advancement", "accounting mode cannot change during an advancement reservation")
         end
+        local generation = player ~= nil and transitionGenerations[player] or nil
+        generation = generation or 0
+        if generation >= MAX_SAFE_INTEGER then
+            return failed("transition_generation_exhausted", "accounting mode transition generation is exhausted")
+        end
 
         local candidate, copyError = copyValue(state)
         if candidate == nil then return failed("invalid_state", copyError) end
         candidate.accountingMode = desiredMode
         candidate.revision = candidate.revision + 1
-        if desiredMode == "Tracked" then
-            candidate.perks = {}
-            candidate.orphanedPerks = {}
-        end
 
         local cleared, clearResult = pcall(clearPlayer, player)
         if not cleared or not acknowledged(clearResult) then
@@ -79,10 +87,14 @@ function AccountingMode.create(dependencies)
         if not saved or not acknowledged(saveResult) then
             return failed("save_failed", "accounting mode transition could not be saved")
         end
+        if player ~= nil then transitionGenerations[player] = generation + 1 end
         return { ok = true, state = candidate, transitioned = true, fromMode = fromMode, toMode = desiredMode }
     end
 
-    return { ok = true, service = { synchronizeLoaded = synchronizeLoaded } }
+    return { ok = true, service = {
+        synchronizeLoaded = synchronizeLoaded,
+        transitionGeneration = transitionGeneration,
+    } }
 end
 
 return AccountingMode

@@ -473,6 +473,7 @@ function Build42SkillsUi.create(dependencies)
         ISCharacterInfo = true,
         ISSkillProgressBar = true,
         ISButton = true,
+        ISPanel = true,
         owner = true,
         viewModel = true,
         settingsProvider = true,
@@ -496,6 +497,7 @@ function Build42SkillsUi.create(dependencies)
     local characterInfo = rawget(dependencies, "ISCharacterInfo")
     local progressBar = rawget(dependencies, "ISSkillProgressBar")
     local buttonClass = rawget(dependencies, "ISButton")
+    local panelClass = rawget(dependencies, "ISPanel")
     local owner = rawget(dependencies, "owner")
     local viewModel = rawget(dependencies, "viewModel")
     local settingsProvider = rawget(dependencies, "settingsProvider")
@@ -520,7 +522,9 @@ function Build42SkillsUi.create(dependencies)
     local priorOnJoypadDirRight = method(characterInfo, "onJoypadDirRight")
     local priorOnGainJoypadFocus = method(characterInfo, "onGainJoypadFocus")
     local priorOnLoseJoypadFocus = method(characterInfo, "onLoseJoypadFocus")
+    local priorOnMouseWheel = method(characterInfo, "onMouseWheel")
     local buttonNew = method(buttonClass, "new")
+    local panelNew = method(panelClass, "new")
     local clientState = validOwner(owner) and rawget(owner, "clientState") or nil
     local refreshOwner = validOwner(owner) and rawget(owner, "refreshOwner") or nil
     local setClientStateListener = validOwner(owner) and rawget(owner, "setClientStateListener") or nil
@@ -541,9 +545,11 @@ function Build42SkillsUi.create(dependencies)
     }) and callable(adminInstall) and callable(adminStatus)
         and callable(adminAvailable) and callable(adminOpen))
 
-    if type(characterInfo) ~= "table" or type(progressBar) ~= "table" or type(buttonClass) ~= "table"
+    if type(characterInfo) ~= "table" or type(progressBar) ~= "table"
+        or type(buttonClass) ~= "table" or type(panelClass) ~= "table"
         or not priorPrerender or not priorRender or not priorRenderPerkRect
-        or not priorUpdateTooltip or not priorRemoveTooltip or not priorActivate or not buttonNew
+        or not priorUpdateTooltip or not priorRemoveTooltip or not priorActivate
+        or not priorOnMouseWheel or not buttonNew or not panelNew
         or not priorOnJoypadDown or not priorOnJoypadDirUp or not priorOnJoypadDirDown
         or not priorOnJoypadDirLeft or not priorOnJoypadDirRight
         or not priorOnGainJoypadFocus or not priorOnLoseJoypadFocus
@@ -637,6 +643,8 @@ function Build42SkillsUi.create(dependencies)
             adminVisible = false,
             adminButton = nil,
             adminButtonParent = nil,
+            adminWheelSurface = nil,
+            adminWheelReady = false,
             adminOutboardRight = nil,
             adminGeometryLease = nil,
             adminGeometryPrimed = false,
@@ -684,6 +692,7 @@ function Build42SkillsUi.create(dependencies)
         state.statusLeft = nil
         state.statusRight = nil
         state.adminVisible = false
+        state.adminWheelReady = false
         state.adminGeometryPrimed = false
         clearJoypadButton(state)
         if type(state.adminButton) == "table" then
@@ -693,6 +702,12 @@ function Build42SkillsUi.create(dependencies)
             if callable(setEnable) then pcall(setEnable, state.adminButton, false) end
             rawset(state.adminButton, "onclick", nil)
             rawset(state.adminButton, "target", nil)
+            rawset(state.adminButton, "onMouseWheel", nil)
+        end
+        if type(state.adminWheelSurface) == "table" then
+            local setVisible = state.adminWheelSurface.setVisible
+            if callable(setVisible) then pcall(setVisible, state.adminWheelSurface, false) end
+            rawset(state.adminWheelSurface, "onMouseWheel", nil)
         end
         if releaseAdminGeometry ~= nil then pcall(releaseAdminGeometry, state) end
         if restoreAdminVisibility ~= nil then pcall(restoreAdminVisibility, state) end
@@ -990,34 +1005,52 @@ function Build42SkillsUi.create(dependencies)
         local firstRight = localized("IGUI_SLA_StatusAP", cache.survivor.availableAp)
         local current = formatSurvivorXp(cache.survivor.xpIntoLevel)
         local required = formatSurvivorXp(cache.survivor.xpForNextLevel)
-        local secondRight = current ~= nil and required ~= nil
+        local secondLeft = current ~= nil and required ~= nil
             and localized("IGUI_SLA_StatusSurvivorXp", current, required) or nil
-        if firstLeft == nil or firstRight == nil or secondRight == nil then
+        if firstLeft == nil or firstRight == nil or secondLeft == nil then
             return nil, nil, nil, nil
         end
         if cache.allotment.mode ~= "Global" then
-            return firstLeft, firstRight, nil, secondRight
+            return firstLeft, firstRight, secondLeft, nil
         end
-        local secondLeft = localized(
+        local secondRight = localized(
             "IGUI_SLA_StatusActive", cache.allotment.activeCount, cache.allotment.limit)
-        if secondLeft == nil then return nil, nil, nil, nil end
+        if secondRight == nil then return nil, nil, nil, nil end
         return firstLeft, firstRight, secondLeft, secondRight
+    end
+
+    local function forwardAdminWheel(state, delta)
+        if state == nil or state.disabled or state.adminVisible ~= true
+            or not isVisible(state.view) or not finite(delta) then return false end
+        local called, consumed = pcall(priorOnMouseWheel, state.view, delta)
+        return called and consumed == true
     end
 
     local function applyAdminButtonVisibility(state, visible)
         local button = state.adminButton
-        if type(button) ~= "table" then return true end
-        local setVisible = button.setVisible
-        local setEnable = button.setEnable
-        local visibilityOk = callable(setVisible) and pcall(setVisible, button, visible)
-        local enableOk = callable(setEnable) and pcall(setEnable, button, visible)
-        return visibilityOk and enableOk
+        local buttonOk = true
+        if type(button) == "table" then
+            local setVisible = button.setVisible
+            local setEnable = button.setEnable
+            local visibilityOk = callable(setVisible) and pcall(setVisible, button, visible)
+            local enableOk = callable(setEnable) and pcall(setEnable, button, visible)
+            buttonOk = visibilityOk and enableOk
+        end
+        local surface = state.adminWheelSurface
+        local surfaceOk = true
+        if type(surface) == "table" then
+            local setVisible = surface.setVisible
+            surfaceOk = callable(setVisible)
+                and pcall(setVisible, surface, visible and state.adminWheelReady == true)
+        end
+        return buttonOk and surfaceOk
     end
 
     local function setAdminButtonState(state, visible, expandImmediately)
         state.adminVisible = visible
         if not visible then
             state.adminGeometryPrimed = false
+            state.adminWheelReady = false
             local hidden = applyAdminButtonVisibility(state, false)
             local released = releaseAdminGeometry == nil or releaseAdminGeometry(state)
             return hidden and released
@@ -1127,11 +1160,16 @@ function Build42SkillsUi.create(dependencies)
 
     local function removeAdminButton(state)
         local button = state.adminButton
+        local wheelSurface = state.adminWheelSurface
         local parent = state.adminButtonParent
         local hidden = applyAdminButtonVisibility(state, false)
         if type(button) == "table" then
             rawset(button, "onclick", nil)
             rawset(button, "target", nil)
+            rawset(button, "onMouseWheel", nil)
+        end
+        if type(wheelSurface) == "table" then
+            rawset(wheelSurface, "onMouseWheel", nil)
         end
         local released = true
         if releaseAdminGeometry ~= nil then
@@ -1142,8 +1180,14 @@ function Build42SkillsUi.create(dependencies)
             local removeChild = type(parent) == "table" and parent.removeChild or nil
             if callable(removeChild) then pcall(removeChild, parent, button) end
         end
+        if type(wheelSurface) == "table" then
+            local removeChild = type(parent) == "table" and parent.removeChild or nil
+            if callable(removeChild) then pcall(removeChild, parent, wheelSurface) end
+        end
         state.adminButton = nil
         state.adminButtonParent = nil
+        state.adminWheelSurface = nil
+        state.adminWheelReady = false
         state.adminOutboardRight = nil
         state.adminGeometryPrimed = false
         return hidden and released
@@ -1170,6 +1214,31 @@ function Build42SkillsUi.create(dependencies)
             end
             state.adminButton = button
             state.adminButtonParent = parent
+            rawset(button, "onMouseWheel", function(_, delta)
+                return forwardAdminWheel(state, delta)
+            end)
+            local panelCalled, wheelSurface = pcall(panelNew, panelClass, 0, 0, 1, 1)
+            if not panelCalled or type(wheelSurface) ~= "table" then
+                removeAdminButton(state)
+                return false
+            end
+            local initialisePanel = wheelSurface.initialise
+            local noBackground = wheelSurface.noBackground
+            local setWantMouseEvents = wheelSurface.setWantMouseEvents
+            if not callable(initialisePanel) or not callable(noBackground)
+                or not callable(setWantMouseEvents)
+                or not pcall(initialisePanel, wheelSurface)
+                or not pcall(noBackground, wheelSurface)
+                or not pcall(setWantMouseEvents, wheelSurface, false)
+                or not pcall(addChild, parent, wheelSurface) then
+                removeAdminButton(state)
+                return false
+            end
+            rawset(wheelSurface, "onMouseWheel", function(_, delta)
+                return forwardAdminWheel(state, delta)
+            end)
+            state.adminWheelSurface = wheelSurface
+            state.adminWheelReady = false
         end
         return setAdminButtonState(state, state.adminVisible)
     end
@@ -1189,7 +1258,7 @@ function Build42SkillsUi.create(dependencies)
         state.statusFirstRightText = firstRight
         state.statusSecondLeftText = secondLeft
         state.statusSecondRightText = secondRight
-        if cache and (firstLeft == nil or firstRight == nil or secondRight == nil) then
+        if cache and (firstLeft == nil or firstRight == nil or secondLeft == nil) then
             disableView(state)
             return false
         end
@@ -1604,27 +1673,29 @@ function Build42SkillsUi.create(dependencies)
         state.outerGutter = gutter
         local requiredRight = controlRight
         if state.statusFirstLeftText ~= nil and state.statusFirstRightText ~= nil
-            and state.statusSecondRightText ~= nil then
+            and state.statusSecondLeftText ~= nil then
             local contentLeft, y, rowHeight = firstButtonGeometry(view)
             local gapCalled, gapWidth = pcall(measureText, "  ")
             local firstLeftCalled, firstLeftWidth = pcall(measureText, state.statusFirstLeftText)
             local firstRightCalled, firstRightWidth = pcall(measureText, state.statusFirstRightText)
-            local secondRightCalled, secondRightWidth = pcall(measureText, state.statusSecondRightText)
             if contentLeft == nil or y == nil or rowHeight == nil
                 or not firstLeftCalled or not finite(firstLeftWidth) or firstLeftWidth < 0
                 or not firstRightCalled or not finite(firstRightWidth) or firstRightWidth < 0
-                or not secondRightCalled or not finite(secondRightWidth) or secondRightWidth < 0
                 or not gapCalled or not finite(gapWidth) or gapWidth < 0 then return false end
             local viewX = readNumber(view, "getX")
             if viewX == nil then return false end
             local firstRowWidth = STATUS_LEFT_MARGIN + firstLeftWidth + gapWidth
                 + firstRightWidth + STATUS_LEFT_MARGIN
-            local secondRowWidth = STATUS_LEFT_MARGIN + secondRightWidth + STATUS_LEFT_MARGIN
-            if state.statusSecondLeftText ~= nil then
-                local secondLeftCalled, secondLeftWidth = pcall(
-                    measureText, state.statusSecondLeftText)
-                if not secondLeftCalled or not finite(secondLeftWidth)
-                    or secondLeftWidth < 0 then return false end
+            local secondLeftCalled, secondLeftWidth = pcall(
+                measureText, state.statusSecondLeftText)
+            if not secondLeftCalled or not finite(secondLeftWidth)
+                or secondLeftWidth < 0 then return false end
+            local secondRowWidth = STATUS_LEFT_MARGIN + secondLeftWidth + STATUS_LEFT_MARGIN
+            if state.statusSecondRightText ~= nil then
+                local secondRightCalled, secondRightWidth = pcall(
+                    measureText, state.statusSecondRightText)
+                if not secondRightCalled or not finite(secondRightWidth)
+                    or secondRightWidth < 0 then return false end
                 secondRowWidth = STATUS_LEFT_MARGIN + secondLeftWidth + gapWidth
                     + secondRightWidth + STATUS_LEFT_MARGIN
             end
@@ -1644,12 +1715,27 @@ function Build42SkillsUi.create(dependencies)
                 local parent = rawget(view, "parent")
                 if state.adminButton ~= nil and state.adminButtonParent == parent then
                     local buttonWidth = readNumber(state.adminButton, "getWidth")
-                    if buttonWidth == nil or buttonWidth <= 0 then return false end
+                    local buttonHeight = readNumber(state.adminButton, "getHeight")
+                    if buttonWidth == nil or buttonWidth <= 0
+                        or buttonHeight == nil or buttonHeight <= 0 then return false end
                     local buttonX = viewX + desiredWidth + ADMIN_OUTBOARD_GAP
+                    local buttonY = state.baseY + state.statusFirstY
                     if not writeNumber(state.adminButton, "setX", buttonX)
-                        or not writeNumber(state.adminButton, "setY",
-                            state.baseY + state.statusSecondY) then return false end
+                        or not writeNumber(state.adminButton, "setY", buttonY) then return false end
                     state.adminOutboardRight = buttonX + buttonWidth + STATUS_LEFT_MARGIN
+                    local wheelSurface = state.adminWheelSurface
+                    local parentHeight = readNumber(parent, "getHeight")
+                    local surfaceX = viewX + desiredWidth
+                    local surfaceY = buttonY + buttonHeight
+                    local surfaceWidth = state.adminOutboardRight - surfaceX
+                    local surfaceHeight = parentHeight ~= nil and parentHeight - surfaceY or nil
+                    if type(wheelSurface) ~= "table" or parentHeight == nil
+                        or surfaceWidth <= 0 or surfaceHeight == nil or surfaceHeight <= 0
+                        or not writeNumber(wheelSurface, "setX", surfaceX)
+                        or not writeNumber(wheelSurface, "setY", surfaceY)
+                        or not writeNumber(wheelSurface, "setWidth", surfaceWidth)
+                        or not writeNumber(wheelSurface, "setHeight", surfaceHeight) then return false end
+                    state.adminWheelReady = true
                     if state.adminVisible then
                         if state.adminGeometryLease ~= nil then
                             if not reapplyAdminGeometry(state)
@@ -1708,7 +1794,7 @@ function Build42SkillsUi.create(dependencies)
             return
         end
         if state.statusFirstLeftText ~= nil and state.statusFirstRightText ~= nil
-            and state.statusSecondRightText ~= nil
+            and state.statusSecondLeftText ~= nil
             and state.statusLeft ~= nil then
             local parent = rawget(view, "parent")
             local viewX = readNumber(view, "getX")
@@ -1722,12 +1808,12 @@ function Build42SkillsUi.create(dependencies)
             local firstRightOk = viewX ~= nil and callable(drawRight)
                 and pcall(drawRight, parent, state.statusFirstRightText, viewX + state.statusRight,
                     firstY, 1, 1, 1, 1, smallFont)
-            local secondLeftOk = state.statusSecondLeftText == nil or (viewX ~= nil
-                and callable(drawLeft) and pcall(drawLeft, parent, state.statusSecondLeftText,
-                    state.statusLeft, secondY, 1, 1, 1, 1, smallFont))
-            local secondRightOk = viewX ~= nil and callable(drawRight)
-                and pcall(drawRight, parent, state.statusSecondRightText, viewX + state.statusRight,
-                    secondY, 1, 1, 1, 1, smallFont)
+            local secondLeftOk = viewX ~= nil and callable(drawLeft)
+                and pcall(drawLeft, parent, state.statusSecondLeftText,
+                    state.statusLeft, secondY, 1, 1, 1, 1, smallFont)
+            local secondRightOk = state.statusSecondRightText == nil or (viewX ~= nil
+                and callable(drawRight) and pcall(drawRight, parent, state.statusSecondRightText,
+                    viewX + state.statusRight, secondY, 1, 1, 1, 1, smallFont))
             if not leftOk or not firstRightOk or not secondLeftOk or not secondRightOk then
                 disableView(state)
             end

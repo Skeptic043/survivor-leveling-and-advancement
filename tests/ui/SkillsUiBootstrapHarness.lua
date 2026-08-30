@@ -13,9 +13,11 @@ if evidence == nil then
     evidence.characterInfo = {}
     evidence.progressBar = {}
     evidence.button = {}
+    evidence.panel = {}
     evidence.entry = {}
     evidence.window = {}
     evidence.scoreboard = {}
+    evidence.usersList = {}
     evidence.capability = { CanSeePlayersStats = {} }
     evidence.smallFont = {}
     evidence.aButton = {}
@@ -92,9 +94,11 @@ if evidence == nil then
     ISCharacterInfo = evidence.characterInfo
     ISSkillProgressBar = evidence.progressBar
     ISButton = evidence.button
+    ISPanel = evidence.panel
     ISTextEntryBox = evidence.entry
     ISCollapsableWindowJoypad = evidence.window
     ISMiniScoreboardUI = evidence.scoreboard
+    ISUsersList = evidence.usersList
     Capability = evidence.capability
     UIFont = { Small = evidence.smallFont }
     Joypad = { AButton = evidence.aButton }
@@ -122,7 +126,8 @@ elseif evidence.phase == 1 then
         and rawget(_G, key).integration == evidence.integration, "exact sentinel payload")
     check(evidence.dependencies.ISCharacterInfo == evidence.characterInfo
         and evidence.dependencies.ISSkillProgressBar == evidence.progressBar
-        and evidence.dependencies.ISButton == evidence.button, "exact vanilla classes")
+        and evidence.dependencies.ISButton == evidence.button
+        and evidence.dependencies.ISPanel == evidence.panel, "exact vanilla classes")
     check(evidence.dependencies.owner == evidence.owner
         and evidence.dependencies.viewModel == evidence.model
         and evidence.dependencies.settingsProvider == evidence.provider
@@ -136,6 +141,7 @@ elseif evidence.phase == 1 then
         "Skills integration receives exact admin launcher")
     check(evidence.adminDependencies.owner == evidence.owner
         and evidence.adminDependencies.ISMiniScoreboardUI == evidence.scoreboard
+        and evidence.adminDependencies.ISUsersList == evidence.usersList
         and evidence.adminDependencies.ISCollapsableWindowJoypad == evidence.window
         and evidence.adminDependencies.ISTextEntryBox == evidence.entry
         and evidence.adminDependencies.ISButton == evidence.button,

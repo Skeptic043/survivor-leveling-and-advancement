@@ -46,7 +46,9 @@ Assert-ReleaseCondition ($workshopLines[0] -eq 'version=1') 'workshop version'
 Assert-ReleaseCondition ($workshopLines -contains 'id=3792412209') 'Workshop item ID'
 Assert-ReleaseCondition ($workshopLines -contains 'title=Survivor Leveling & Advancement [B42]') 'workshop title'
 Assert-ReleaseCondition ($workshopLines -contains 'tags=Build 42;Balance;Interface;Multiplayer;Skills') 'workshop tags'
-Assert-ReleaseCondition ($workshopLines -contains 'visibility=friendsOnly') 'initial friends-only visibility'
+$visibilityLines = @($workshopLines -match '^visibility=')
+Assert-ReleaseCondition ($visibilityLines.Count -eq 1) 'exactly one Workshop visibility declaration'
+Assert-ReleaseCondition ($visibilityLines[0] -ceq 'visibility=unlisted') 'unlisted Workshop visibility'
 Assert-ReleaseCondition (@($workshopLines -match '^description=').Count -ge 30) 'substantial Workshop description'
 
 $descriptionLines = @(Get-Content -LiteralPath $descriptionPath)
@@ -69,6 +71,10 @@ Assert-ReleaseCondition ($descriptionText.Contains('[Ko-fi](https://ko-fi.com/sk
 Assert-ReleaseCondition ($workshopText.Contains('[url=https://ko-fi.com/skeptic043]Ko-fi[/url]')) 'Workshop Ko-fi link'
 Assert-ReleaseCondition ($descriptionText.Contains('Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are strictly optional and no mod features are locked behind a paywall.')) 'Markdown support copy'
 Assert-ReleaseCondition ($workshopText.Contains('description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. All donations are strictly optional and no mod features are locked behind a paywall.')) 'Workshop support copy'
+$workshopAdministrationLine = 'description=Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Panel > Users List", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel.'
+$workshopDedicatedSaveLimitLine = 'description=[*]Dedicated servers should set the native SaveWorldEveryMinutes option to a nonzero value. Abrupt termination can lose SLA progression written after the last successful server save; a shorter interval reduces that window.'
+Assert-ReleaseCondition (@($workshopLines -ceq $workshopAdministrationLine).Count -eq 1) 'exact Workshop online-player administration copy for Mini Scoreboard and Users List'
+Assert-ReleaseCondition (@($workshopLines -ceq $workshopDedicatedSaveLimitLine).Count -eq 1) 'exact Workshop dedicated SaveWorldEveryMinutes limitation copy'
 $aiUseDisclosure = "AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. I'm grateful that AI tools helped me turn the idea into something I can share with the community. If you prefer not to use mods developed with AI assistance, I understand and respect that choice."
 $workshopAIUseDisclosure = "description=$aiUseDisclosure"
 Assert-ReleaseCondition (@($descriptionLines -ceq '## AI Use').Count -eq 1) 'exact Markdown AI Use heading'

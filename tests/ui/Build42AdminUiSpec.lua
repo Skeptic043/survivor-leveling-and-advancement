@@ -75,7 +75,9 @@ local function makeEnvironment(processMode)
         debug = true,
         canSee = true,
         priorMenus = 0,
+        priorUsersMenus = 0,
         vanillaContextGets = 0,
+        vanillaUsersContextGets = 0,
         existingMenuGets = 0,
         capabilityReads = 0,
         specificPlayerReads = 0,
@@ -95,6 +97,7 @@ local function makeEnvironment(processMode)
     }
 
     local Scoreboard = {}
+    local UsersList = {}
     local Window = {}
     local Entry = {}
     local Button = {}
@@ -135,6 +138,14 @@ local function makeEnvironment(processMode)
         evidence.menu = makeMenu()
         if evidence.priorThrows then error("vanilla menu boom") end
         return "vanilla", x, y
+    end
+
+    function UsersList.doContextMenu(self, item, x, y)
+        evidence.priorUsersMenus = evidence.priorUsersMenus + 1
+        evidence.vanillaUsersContextGets = evidence.vanillaUsersContextGets + 1
+        evidence.menu = makeMenu()
+        if evidence.priorUsersThrows then error("vanilla users menu boom") end
+        return "users", x, y
     end
 
     function Window.createChildren(self)
@@ -259,6 +270,7 @@ local function makeEnvironment(processMode)
     local dependencies = {
         owner = owner,
         ISMiniScoreboardUI = Scoreboard,
+        ISUsersList = UsersList,
         ISCollapsableWindowJoypad = Window,
         ISTextEntryBox = Entry,
         ISButton = Button,
@@ -302,6 +314,7 @@ local function makeEnvironment(processMode)
     evidence.dependencies = dependencies
     evidence.owner = owner
     evidence.Scoreboard = Scoreboard
+    evidence.UsersList = UsersList
     evidence.Capability = Capability
 
     function evidence:scoreboard(username, slot)
@@ -336,6 +349,35 @@ local function makeEnvironment(processMode)
     function evidence:openFromScoreboard(username, slot)
         local scoreboard, player = self:scoreboard(username, slot)
         local a, b, c = self.Scoreboard.doPlayerListContextMenu(scoreboard, player, 11, 22)
+        local option = self.menu.options[#self.menu.options]
+        option:click()
+        return option, a, b, c
+    end
+
+    function evidence:usersList(username, slot, online)
+        local role = setmetatable({}, { __index = function(_, key)
+            if key == "hasCapability" then
+                return function(_, value)
+                    evidence.capabilityReads = evidence.capabilityReads + 1
+                    evidence.lastCapability = value
+                    return evidence.canSee
+                end
+            end
+        end })
+        local actor = setmetatable({}, { __index = function(_, key)
+            if key == "getRole" then return function() return role end end
+            if key == "getPlayerNum" then return function() return slot or 0 end end
+        end })
+        local item = setmetatable({}, { __index = function(_, key)
+            if key == "isOnline" then return function() return online ~= false end end
+            if key == "getUsername" then return function() return username end end
+        end })
+        return { player = actor }, item
+    end
+
+    function evidence:openFromUsersList(username, slot)
+        local usersList, item = self:usersList(username, slot, true)
+        local a, b, c = self.UsersList.doContextMenu(usersList, item, 33, 44)
         local option = self.menu.options[#self.menu.options]
         option:click()
         return option, a, b, c
@@ -435,6 +477,54 @@ equal(#explicitRemote.requests, 1, "explicit MP remote target inspects once")
 expect(exact(explicitRemote.requests[1].request.target, { username = true })
     and explicitRemote.requests[1].request.target.username == "RemoteTarget",
     "explicit MP target never becomes the local self target")
+
+local usersMenu = makeEnvironment("multiplayer")
+expect(usersMenu.integration.install().ok, "Users List environment installs")
+expect(usersMenu.integration.install().ok, "Users List repeated install is idempotent")
+local hiddenUsers, hiddenUsersItem = usersMenu:usersList("HiddenUser", 3, true)
+usersMenu.canSee = false
+usersMenu.UsersList.doContextMenu(hiddenUsers, hiddenUsersItem, 1, 2)
+equal(usersMenu.priorUsersMenus, 1, "unauthorized Users List still chains vanilla once")
+equal(#usersMenu.menu.options, 0, "unauthorized Users List omits SLA action")
+equal(usersMenu.existingMenuGets, 0, "unauthorized Users List retrieves no context")
+usersMenu.canSee = true
+local offlineUsers, offlineItem = usersMenu:usersList("OfflineUser", 3, false)
+usersMenu.UsersList.doContextMenu(offlineUsers, offlineItem, 1, 2)
+equal(usersMenu.priorUsersMenus, 2, "offline Users List still chains vanilla once")
+equal(#usersMenu.menu.options, 0, "offline Users List omits online-only SLA action")
+equal(usersMenu.existingMenuGets, 0, "offline Users List retrieves no context")
+local malformedUsers, _ = usersMenu:usersList("Malformed", 3, true)
+local malformedItem = setmetatable({}, { __index = {
+    isOnline = function() return true end,
+} })
+usersMenu.UsersList.doContextMenu(malformedUsers, malformedItem, 1, 2)
+equal(usersMenu.priorUsersMenus, 3, "malformed Users List target still chains vanilla once")
+equal(#usersMenu.menu.options, 0, "malformed Users List target omits SLA action")
+local usersOption, usersA, usersB, usersC = usersMenu:openFromUsersList("OnlineUser", 3)
+equal(usersA, "users", "Users List wrapper preserves first return")
+equal(usersB, 33, "Users List wrapper preserves second return")
+equal(usersC, 44, "Users List wrapper preserves third return")
+equal(usersMenu.priorUsersMenus, 4, "Users List chains captured vanilla exactly once")
+equal(usersMenu.vanillaUsersContextGets, 4, "Users List owns one context construction per invocation")
+equal(usersMenu.existingMenuGets, 1, "Users List retrieves the existing context exactly once")
+equal(usersMenu.lastMenuSlot, 3, "Users List existing context uses exact local slot")
+equal(usersOption.title, "Survivor progression", "Users List action uses existing localization")
+equal(#usersMenu.requests, 1, "Users List action sends one inspection")
+equal(usersMenu.requests[1].slot, 3, "Users List inspection preserves exact local slot")
+expect(exact(usersMenu.requests[1].request.target, { username = true })
+    and usersMenu.requests[1].request.target.username == "OnlineUser",
+    "Users List inspection sends only bounded online username")
+
+local throwingUsers = makeEnvironment("multiplayer")
+expect(throwingUsers.integration.install().ok, "throwing Users List environment installs")
+throwingUsers.priorUsersThrows = true
+local throwingUsersList, throwingUsersItem = throwingUsers:usersList("ThrowUser", 0, true)
+local throwingUsersOk = pcall(function()
+    throwingUsers.UsersList.doContextMenu(throwingUsersList, throwingUsersItem, 0, 0)
+end)
+expect(not throwingUsersOk, "vanilla Users List failure propagates")
+equal(throwingUsers.priorUsersMenus, 1, "throwing vanilla Users List is called exactly once")
+equal(throwingUsers.existingMenuGets, 0, "throwing vanilla Users List appends nothing")
 
 local noLocalRole = makeEnvironment("multiplayer")
 noLocalRole.localPlayers[0] = { getUsername = function() return "Local0" end }
@@ -1066,6 +1156,13 @@ lost.Scoreboard.doPlayerListContextMenu = function() end
 local lostResult = lost.integration.install()
 equal(lostResult.ok, false, "lost scoreboard hook fails closed")
 equal(lostResult.code, "hook_ownership_lost", "lost scoreboard ownership code")
+
+local lostUsers = makeEnvironment("multiplayer")
+expect(lostUsers.integration.install().ok, "Users List ownership environment installs")
+lostUsers.UsersList.doContextMenu = function() end
+local lostUsersResult = lostUsers.integration.install()
+equal(lostUsersResult.ok, false, "lost Users List hook fails closed")
+equal(lostUsersResult.code, "hook_ownership_lost", "lost Users List ownership code")
 
 local childFailure = makeEnvironment("multiplayer")
 childFailure.childConstructionThrows = true
