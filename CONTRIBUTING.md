@@ -2,7 +2,7 @@
 
 Thank you for helping improve Survivor Leveling & Advancement.
 
-The project is in release preparation. Contributions should preserve the documented progression contracts and include deterministic coverage at the narrowest useful unit and integration boundaries.
+The project is a 1.0 release candidate. Contributions should preserve the documented progression contracts and include deterministic coverage at the narrowest useful unit and integration boundaries.
 
 ## Expectations
 
