@@ -66,11 +66,12 @@ Assert ($text -notmatch '(?m)^\s*page\s*=\s*SLA_PerSkill\s*,\s*$') 'no second sa
 
 $info = @{}
 foreach ($line in Get-Content $infoPath) { if ($line -match '^([^=]+)=(.*)$') { $info[$Matches[1]] = $Matches[2] } }
-Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,id,incompatible,name,poster') 'metadata has only the approved fields'
+Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,icon,id,incompatible,name,poster') 'metadata has only the approved fields'
 Assert ($info.name -eq 'Survivor Leveling & Advancement' -and $info.id -eq 'SurvivorLevelingAdvancement') 'metadata name and id'
 Assert (-not $info.ContainsKey('versionMin') -and -not $info.ContainsKey('versionMax')) 'metadata does not enforce patch bounds'
 Assert ($info.description -eq 'Earn Survivor Levels through skill XP and spend Advancement Points to raise trainable skills.') 'metadata behavior description'
 Assert ($info.poster -eq 'poster.png' -and (Test-Path -LiteralPath (Join-Path $mod $info.poster))) 'metadata poster exists'
+Assert ($info.icon -eq 'icon.png' -and (Test-Path -LiteralPath (Join-Path $mod $info.icon))) 'metadata icon exists'
 Assert ($info.incompatible -eq 'RpgSkillsSystemsB42,VanillaMenu') 'metadata blocks both conflicting RPG Skills Systems mod IDs'
 
 $jsonText = Get-Content -Raw $jsonPath
@@ -112,7 +113,7 @@ foreach ($id in $ids) {
 
 $forbidden = 'post.?maximum|digital.?watch|admin|runtime|poll|network|ui|poster|icon|workshop|client'
 Assert (-not ($text -match "(?i)$forbidden")) 'sandbox file contains no deferred settings or claims'
-$metadataClaimValues = @($info.GetEnumerator() | Where-Object Key -ne 'poster' | ForEach-Object Value) -join ' '
+$metadataClaimValues = @($info.GetEnumerator() | Where-Object Key -notin @('poster', 'icon') | ForEach-Object Value) -join ' '
 Assert (-not ($metadataClaimValues -match "(?i)$forbidden")) 'metadata contains no deferred claims'
 
 $requiredUi = [ordered]@{

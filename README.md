@@ -6,13 +6,13 @@ A Project Zomboid Build 42 release candidate that turns ordinary skill activity 
 
 The 1.0 release candidate is feature-complete. Core XP, Survivor Levels, Advancement Points, persistence, multiplayer authority, sandbox settings, Skills-screen integration, representative custom-skill compatibility, and representative Skills-tooltip compatibility are implemented and live-validated.
 
-The current unlisted Workshop candidate passes clean-profile and Workshop-only loads, progression, AP spending, reload persistence, cross-version AP/XP retention, the complete deterministic gate, and the public-source gates. Before public release, it still needs the focused live checks for the final UI, temporary Free-mode accounting restoration, and dedicated retention through a configured native autosave interval.
+The 1.0 Workshop payload passes clean-profile and Workshop-only loads, progression, AP spending, reload persistence, cross-version AP/XP retention, the complete deterministic and public-source gates, and the final focused live checks for its Skills interface, temporary Free-mode accounting restoration, and dedicated native-autosave retention. The dedicated console-X check retained a bounded portion of post-launch state while later changes rolled back; this is consistent with the documented last-successful-save limit, but the exact completed autosave boundary was not observed.
 
 Development and current testing target Project Zomboid 42.20.4. The internal mod ID is `SurvivorLevelingAdvancement`. The mod does not enforce exact patch-version bounds, and compatibility will be claimed only for versions and integrations that have been tested.
 
 ## Installation
 
-[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). The release candidate is currently unlisted while final multiplayer testing is completed. Steam Workshop is the supported installation route; remove duplicate manual copies from `Zomboid/mods` before testing or playing.
+[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). Steam Workshop is the supported installation route; remove duplicate manual copies from `Zomboid/mods` before testing or playing.
 
 ### Dedicated-server saves
 

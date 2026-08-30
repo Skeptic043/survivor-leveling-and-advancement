@@ -23,6 +23,7 @@ $previewPath = Join-Path $projectRoot 'preview.png'
 $modRoot = Join-Path $projectRoot 'Contents\mods\SurvivorLevelingAdvancement\42.20'
 $modInfoPath = Join-Path $modRoot 'mod.info'
 $posterPath = Join-Path $modRoot 'poster.png'
+$iconPath = Join-Path $modRoot 'icon.png'
 $runtimeLicensePath = Join-Path $modRoot 'LICENSE'
 $sourceLicensePath = Join-Path $projectRoot 'LICENSE'
 $descriptionPath = Join-Path $projectRoot 'assets\workshop\WORKSHOP_DESCRIPTION.md'
@@ -33,6 +34,7 @@ foreach ($requiredPath in @(
     $previewPath,
     $modInfoPath,
     $posterPath,
+    $iconPath,
     $runtimeLicensePath,
     $sourceLicensePath,
     $descriptionPath,
@@ -48,7 +50,7 @@ Assert-ReleaseCondition ($workshopLines -contains 'title=Survivor Leveling & Adv
 Assert-ReleaseCondition ($workshopLines -contains 'tags=Build 42;Balance;Interface;Multiplayer;Skills') 'workshop tags'
 $visibilityLines = @($workshopLines -match '^visibility=')
 Assert-ReleaseCondition ($visibilityLines.Count -eq 1) 'exactly one Workshop visibility declaration'
-Assert-ReleaseCondition ($visibilityLines[0] -ceq 'visibility=unlisted') 'unlisted Workshop visibility'
+Assert-ReleaseCondition ($visibilityLines[0] -ceq 'visibility=public') 'public Workshop visibility (stale unlisted is rejected)'
 Assert-ReleaseCondition (@($workshopLines -match '^description=').Count -ge 30) 'substantial Workshop description'
 
 $descriptionLines = @(Get-Content -LiteralPath $descriptionPath)
@@ -107,6 +109,7 @@ Assert-ReleaseCondition (-not $workshopText.Contains('—')) 'Workshop compatibi
 $modInfoLines = @(Get-Content -LiteralPath $modInfoPath)
 Assert-ReleaseCondition ($modInfoLines -contains 'id=SurvivorLevelingAdvancement') 'mod ID'
 Assert-ReleaseCondition ($modInfoLines -contains 'poster=poster.png') 'poster declaration'
+Assert-ReleaseCondition (@($modInfoLines -ceq 'icon=icon.png').Count -eq 1) 'exact icon=icon.png declaration'
 Assert-ReleaseCondition ($modInfoLines -contains 'incompatible=RpgSkillsSystemsB42,VanillaMenu') 'native incompatibility declaration'
 
 Add-Type -AssemblyName System.Drawing
@@ -136,6 +139,7 @@ function Assert-PngDimensions {
 
 Assert-PngDimensions $previewPath 256 256 'preview'
 Assert-PngDimensions $posterPath 512 512 'poster'
+Assert-PngDimensions $iconPath 64 64 'icon'
 Assert-ReleaseCondition ((Get-Item -LiteralPath $previewPath).Length -le 1MB) 'preview is at most 1 MB'
 
 $screenshots = @(Get-ChildItem -LiteralPath $screenshotsPath -File -Filter '*.png' | Sort-Object Name)
