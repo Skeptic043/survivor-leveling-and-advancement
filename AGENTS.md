@@ -4,7 +4,7 @@ Active project folder: `E:\Projects\PZ Mods\Survivor Leveling and Advancement`
 
 ## Scope
 
-- Confine runtime and project modifications to this project folder unless explicitly authorized otherwise. Read-only access is permitted to installed Project Zomboid files and to `../pz-knowledge` for shared PZ research; other sibling mod repositories remain off-limits. During otherwise-authorized work in this repository, the project orchestrator has standing authorization to make narrowly scoped proposals to `pz-knowledge` without a separate permission prompt, but only on a dedicated branch and under that repository's own `AGENTS.md`, validation, risk, PR, review, and merge rules; this does not authorize pushes to or merges into `pz-knowledge/main`.
+- Confine runtime and project modifications to this project folder unless explicitly authorized otherwise. Read-only access is permitted to installed Project Zomboid files; other sibling mod repositories remain off-limits. The workspace-level `AGENTS.md` governs shared-knowledge preflight and capture before this mod's rules apply.
 - Do not modify or borrow from `Basekeeper (shelved)` or any other mod.
 - Do not add runtime mod files until the user explicitly lifts the implementation pause.
 
@@ -18,8 +18,8 @@ Active project folder: `E:\Projects\PZ Mods\Survivor Leveling and Advancement`
 - Implementation agents never read or edit `.project/`. They begin with their named `.agents/packets/<packet-id>.md` brief and follow only the reusable `.agents/contracts/` references named there.
 - Implementation agents do not browse unrelated executor documents, broaden scope, inspect sibling mods, commit, push, publish, or begin a dependent packet unless their work order explicitly permits it.
 - Use one branch and isolated worktree per implementation packet when Git state exists. Do not run overlapping writers against the same files.
+- A packet worktree is temporary execution space, not an archive. After integration or explicit closure, verify recoverability, remove the clean worktree, and retire its local branch when safe. Preserve dirty or unresolved worktrees until deliberately reconciled.
 - The orchestrator independently reviews every returned diff and evidence before integration. A worker report is not acceptance.
-- At the end of any substantial research, debugging, implementation, compatibility, or architecture task involving Project Zomboid behavior, the orchestrator explicitly asks: "Did this work establish, refine, dispute, supersede, or revalidate any generally reusable Project Zomboid knowledge that is not already adequately represented in `pz-knowledge`?" If no, do nothing and do not manufacture a contribution. If yes, inspect the existing shared knowledge first and propose only the reusable knowledge through its governed branch/PR workflow before treating the broader task as fully wrapped up.
 
 ## Canonical documents — orchestrator only
 
@@ -30,9 +30,11 @@ Active project folder: `E:\Projects\PZ Mods\Survivor Leveling and Advancement`
 - `.project/PLAN.md` defines implementation order and gates.
 - `.project/STATE.md` records current project status.
 
+Keep the opening current-phase section of `STATE.md` genuinely current and concise. Replace superseded status instead of stacking multiple competing "current" summaries; detailed completed evidence belongs in the appropriate validation/decision record and Git history.
+
 When documents disagree, stop and reconcile them before implementation. Do not silently choose an interpretation.
 
-Executor-facing information is indexed separately in `.agents/INDEX.md`. The orchestrator keeps that layer synchronized with material canonical decisions before dispatch.
+Executor-facing information is indexed separately in `.agents/INDEX.md`. Treat it as routing for active packets and reusable contracts, not as required sequential reading or a second canonical history. Completed packet briefs remain historical unless a current packet explicitly references them. The orchestrator keeps active routing synchronized with material canonical decisions before dispatch.
 
 ## Engineering rules
 
@@ -54,11 +56,5 @@ Executor-facing information is indexed separately in `.agents/INDEX.md`. The orc
 
 ## Change control
 
-- No commits, pushes, publication, Workshop actions, or releases without explicit user authorization.
+- No commits or pushes in this mod repository, publication, Workshop actions, or releases without explicit user authorization.
 - Record material design changes in `.project/DECISIONS.md` and update affected canonical documents together.
-
-## Shared Project Zomboid knowledge
-
-Before researching Project Zomboid engine or API behavior, read `../pz-knowledge/AGENTS.md` and search the shared knowledge map from `../pz-knowledge/index.md`. Treat shared pages as navigation and synthesis, not primary evidence; inspect their cited sources when verification is required.
-
-Keep this mod's feature, architecture, product, specification, constraint, tradeoff, and TODO decisions in this repository. During otherwise-authorized work in this repository, the project orchestrator's standing authorization for warranted `pz-knowledge` proposals satisfies the explicit-user-authorization requirement only for this lifecycle without a separate permission prompt: inspect/search the shared KB; create a dedicated KB feature branch; create or update narrowly scoped KB files; append the required audit entry; run KB tests and validation; commit on that KB feature branch; push only that KB feature branch; and open or update its PR. This narrow exception does not authorize pushes to `pz-knowledge/main`, any merge or review bypass, ordinary commits or pushes in Survivor Leveling, runtime or project modifications beyond the otherwise-authorized Survivor Leveling work, access to other sibling mod repositories, or moving project-specific decisions into shared knowledge. Proposed knowledge is not authoritative until merged under `pz-knowledge` governance.
