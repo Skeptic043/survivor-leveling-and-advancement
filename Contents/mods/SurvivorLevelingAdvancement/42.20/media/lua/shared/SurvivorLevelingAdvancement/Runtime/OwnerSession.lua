@@ -210,7 +210,20 @@ local function synchronizeAccountingMode(accountingMode, player, state, desiredM
         or (desiredMode == "Tracked" and type(synchronized.state.perks) ~= "table") then
         return nil, failure("accounting_mode_invalid", "accountingMode.synchronizeLoaded")
     end
-    return synchronized.state, nil
+    return synchronized.state, nil, synchronized
+end
+
+local function accountingTransitionGeneration(accountingMode, player)
+    local current, generationFailure, generationResult = call(accountingMode.transitionGeneration, player)
+    if current == nil then
+        return nil, dependencyFailure("accounting_transition_generation", generationFailure, generationResult)
+    end
+    if not exactPlain(current, { ok = true, generation = true })
+        or rawget(current, "ok") ~= true
+        or not nonnegativeInteger(current.generation) then
+        return nil, failure("accounting_transition_generation_invalid", "accountingMode.transitionGeneration")
+    end
+    return current.generation, nil
 end
 
 function OwnerSession.create(dependencies)
@@ -230,6 +243,9 @@ function OwnerSession.create(dependencies)
     local accountingMode = dependencies.accountingMode
     if type(accountingMode) ~= "table" or type(accountingMode.synchronizeLoaded) ~= "function" then
         return failure("invalid_dependencies", "accountingMode.synchronizeLoaded is required")
+    end
+    if type(accountingMode.transitionGeneration) ~= "function" then
+        return failure("invalid_dependencies", "accountingMode.transitionGeneration is required")
     end
     local accountingSettings = dependencies.accountingSettings
     if type(accountingSettings) ~= "table" or type(accountingSettings.resolve) ~= "function" then
@@ -384,13 +400,27 @@ function OwnerSession.create(dependencies)
 
         local desiredMode, settingsFailure = resolveAccountingMode(accountingSettings, player)
         if desiredMode == nil then return settingsFailure end
-        local synchronizedState, synchronizationFailure = synchronizeAccountingMode(
+        local synchronizedState, synchronizationFailure, synchronization = synchronizeAccountingMode(
             accountingMode,
             player,
             recovered.state,
             desiredMode
         )
         if synchronizedState == nil then return synchronizationFailure end
+        local transitionedToTracked = synchronization.transitioned
+            and synchronization.fromMode == "Free"
+        if transitionedToTracked then
+            local reloaded, reloadFailure, reloadResult = call(store.load, player, loadOptions)
+            if reloaded == nil then return dependencyFailure("store_reload", reloadFailure, reloadResult) end
+            if type(reloaded.state) ~= "table"
+                or reloaded.state.accountingMode ~= "Tracked"
+                or reloaded.state.revision ~= synchronizedState.revision then
+                return failure("store_reload_invalid", "store.load")
+            end
+            synchronizedState = reloaded.state
+        end
+        local transitionGeneration, generationFailure = accountingTransitionGeneration(accountingMode, player)
+        if transitionGeneration == nil then return generationFailure end
 
         local catalogResult, catalogFailure, failedCatalogResult = call(catalog.allPerks)
         if catalogResult == nil then return dependencyFailure("catalog", catalogFailure, failedCatalogResult) end
@@ -412,7 +442,12 @@ function OwnerSession.create(dependencies)
         local snapshot, snapshotFailure = project(synchronizedState, sequence)
         if snapshot == nil then return snapshotFailure end
 
-        entries[player] = { ready = true, sequence = sequence }
+        entries[player] = {
+            ready = true,
+            sequence = sequence,
+            accountingMode = synchronizedState.accountingMode,
+            transitionGeneration = transitionGeneration,
+        }
         local result = {
             ok = true,
             snapshot = snapshot,
@@ -443,13 +478,36 @@ function OwnerSession.create(dependencies)
 
         local desiredMode, settingsFailure = resolveAccountingMode(accountingSettings, player)
         if desiredMode == nil then return settingsFailure end
-        local synchronizedState, synchronizationFailure = synchronizeAccountingMode(
+        local synchronizedState, synchronizationFailure, synchronization = synchronizeAccountingMode(
             accountingMode,
             player,
             loaded.state,
             desiredMode
         )
         if synchronizedState == nil then return synchronizationFailure end
+        local transitionedToTracked = synchronization.transitioned
+            and synchronization.fromMode == "Free"
+        if transitionedToTracked then
+            local reloaded, reloadFailure, reloadResult = call(store.load, player, loadOptions)
+            if reloaded == nil then return dependencyFailure("store_reload", reloadFailure, reloadResult) end
+            if type(reloaded.state) ~= "table"
+                or reloaded.state.accountingMode ~= "Tracked"
+                or reloaded.state.revision ~= synchronizedState.revision then
+                return failure("store_reload_invalid", "store.load")
+            end
+            synchronizedState = reloaded.state
+        end
+        local transitionGeneration, generationFailure = accountingTransitionGeneration(accountingMode, player)
+        if transitionGeneration == nil then return generationFailure end
+        local enteredTracked = entry.accountingMode ~= "Tracked"
+            and synchronizedState.accountingMode == "Tracked"
+        local crossedAccountingBoundary = entry.transitionGeneration ~= transitionGeneration
+        if transitionedToTracked or enteredTracked
+            or (synchronizedState.accountingMode == "Tracked" and crossedAccountingBoundary) then
+            local reconciledState, reconciliationFailure = reconcileReadiness(player, synchronizedState)
+            if reconciledState == nil then return reconciliationFailure end
+            synchronizedState = reconciledState
+        end
 
         local sequence = nextSequence(entry)
         if sequence == nil then return failure("sequence_invalid", "session sequence") end
@@ -457,6 +515,8 @@ function OwnerSession.create(dependencies)
         if snapshot == nil then return snapshotFailure end
 
         entry.sequence = sequence
+        entry.accountingMode = synchronizedState.accountingMode
+        entry.transitionGeneration = transitionGeneration
         return { ok = true, snapshot = snapshot }
     end
 

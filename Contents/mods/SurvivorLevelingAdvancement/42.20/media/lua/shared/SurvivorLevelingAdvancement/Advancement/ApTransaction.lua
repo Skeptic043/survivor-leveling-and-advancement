@@ -172,6 +172,15 @@ local function ledgerFromPerk(record)
     }
 end
 
+local function durableRecordBoundary(record)
+    if record.observedPosition ~= nil then return record.observedPosition end
+    local boundary = record.naturalPosition
+    if type(record.activeTargets) == "table" and #record.activeTargets > 0 then
+        boundary = record.activeTargets[#record.activeTargets].targetPosition
+    end
+    return boundary
+end
+
 local function applyLedger(record, ledger)
     local copy, copyError = cloneValue(record)
     if not copy then return nil, copyError end
@@ -192,6 +201,16 @@ local function perkFromBaseline(identity, ledger)
         activeTargets = ledger.activeTargets,
         postMaxFullRateUsed = 0,
     }
+end
+
+local function setPreservedFreeBoundary(state, perkId, identity, position)
+    local record = state.perks[perkId]
+    if record == nil or not sameIdentity(record, identity) then return { ok = true } end
+    local nextRecord, recordError = cloneValue(record)
+    if not nextRecord then return failure("invalid_state", recordError) end
+    nextRecord.observedPosition = position
+    state.perks[perkId] = nextRecord
+    return { ok = true }
 end
 
 local function validateRequest(request)
@@ -293,9 +312,12 @@ local function synchronizeObservation(deps, player, perkId, state, record, actua
     local observed = callResult(deps.ActualObservation.get, "observation_get", player, perkId)
     if not observed.ok then return failure("observation_failed", detailOf(observed)) end
     if observed.present ~= true then
-        local setResult = setObservation(deps.ActualObservation, player, perkId, actualPosition)
-        if not setResult.ok then return setResult end
-        return { ok = true, state = state, record = record }
+        if record == nil then
+            local setResult = setObservation(deps.ActualObservation, player, perkId, actualPosition)
+            if not setResult.ok then return setResult end
+            return { ok = true, state = state, record = record }
+        end
+        observed = { ok = true, present = true, position = durableRecordBoundary(record) }
     end
     if not isFinite(observed.position) or observed.position < 0 then
         return failure("observation_failed", "stored_position_invalid")
@@ -496,7 +518,15 @@ local function recoverLoaded(deps, player, state)
 
     local committed, stateError = cloneValue(state)
     if not committed then return failure("recovery_quarantined", "state_" .. stateError) end
-    if not free then
+    if free then
+        local bounded = setPreservedFreeBoundary(
+            committed,
+            reservation.perkId,
+            identity,
+            reservation.targetPosition
+        )
+        if not bounded.ok then return failure("recovery_quarantined", detailOf(bounded)) end
+    else
         local committedRecord, recordError = applyLedger(record, ledgerResult.state)
         if not committedRecord then return failure("recovery_quarantined", "record_" .. recordError) end
         committedRecord.observedPosition = reservation.targetPosition
@@ -615,6 +645,15 @@ function ApTransaction.create(dependencies)
         local synchronized = synchronizeAccountingMode(deps, player, state, desiredMode)
         if not synchronized.ok then return synchronized end
         state = synchronized.state
+        if synchronized.transitioned and synchronized.fromMode == "Free" then
+            local reloaded = loadState(deps.store, player, deps.loadOptions)
+            if not reloaded.ok then return reloaded end
+            if reloaded.state.accountingMode ~= "Tracked"
+                or reloaded.state.revision ~= state.revision then
+                return failure("accounting_mode_failed", "tracked_reload_invalid")
+            end
+            state = reloaded.state
+        end
 
         local requestValid = validateRequest(request)
         if not requestValid.ok then return requestValid end
@@ -643,6 +682,13 @@ function ApTransaction.create(dependencies)
             if available.availableAp < apCost then return failure("no_ap", "insufficient_ap_for_advancement") end
             local reservationState, stateError = cloneValue(state)
             if not reservationState then return failure("invalid_state", stateError) end
+            local bounded = setPreservedFreeBoundary(
+                reservationState,
+                request.perkId,
+                identity,
+                actual.actualPosition
+            )
+            if not bounded.ok then return bounded end
             reservationState.inFlightAdvancement = {
                 requestId = request.requestId,
                 perkId = request.perkId,
@@ -681,6 +727,13 @@ function ApTransaction.create(dependencies)
 
             local committed, commitError = cloneValue(reservationState)
             if not committed then return failure("commit_save_failed", commitError) end
+            bounded = setPreservedFreeBoundary(
+                committed,
+                request.perkId,
+                identity,
+                actual.nextTargetPosition
+            )
+            if not bounded.ok then return failure("commit_save_failed", detailOf(bounded)) end
             committed.survivor.spent = state.survivor.spent + apCost
             committed.revision = state.revision + 1
             committed.inFlightAdvancement = nil
