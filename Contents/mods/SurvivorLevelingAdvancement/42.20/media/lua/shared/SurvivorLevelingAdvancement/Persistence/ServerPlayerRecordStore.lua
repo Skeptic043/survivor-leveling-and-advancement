@@ -4,6 +4,7 @@ local NAMESPACE = "SLA_ServerPlayers_v1"
 local LEGACY_STATE_NAMESPACE = "SurvivorLevelingAdvancement"
 local ROOT_SCHEMA = 1
 local RECORD_SCHEMA = 1
+local COMPLETED_DEATH_REPLACEMENT = "completed_death_replacement"
 
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail or code }
@@ -161,7 +162,7 @@ function ServerPlayerRecordStore.create(dependencies)
     local resolveIdentity = rawget(identity, "resolve")
     local loadLegacy = rawget(legacyStateStore, "load")
     local inspectLegacy = rawget(legacyCharacterStore, "inspect")
-    local issued = setmetatable({}, { __mode = "k" })
+    local completedPlayers = setmetatable({}, { __mode = "k" })
 
     local function resolve(player)
         local called, result = pcall(resolveIdentity, player)
@@ -271,7 +272,10 @@ function ServerPlayerRecordStore.create(dependencies)
         return { ok = true, state = decoded.state }
     end
 
-    function stateStore.save(player, state)
+    function stateStore.save(player, state, intent)
+        if intent ~= nil and intent ~= COMPLETED_DEATH_REPLACEMENT then
+            return failure("invalid_save_intent", "stateStore.save")
+        end
         local owner, ownerFailure = resolve(player)
         if owner == nil then return ownerFailure end
         local called, encoded = pcall(encode, state)
@@ -287,12 +291,25 @@ function ServerPlayerRecordStore.create(dependencies)
             local _, stateFailure = decodeRecord(current)
             if stateFailure ~= nil then return stateFailure end
         end
-        local replacing = current ~= nil and issued[player] == true and current.deathRecorded
+        local legacyReplacing = false
+        if current == nil and intent == COMPLETED_DEATH_REPLACEMENT
+            and completedPlayers[player] ~= true and legacyPresent(player) then
+            local called, inspected = pcall(inspectLegacy, player)
+            local legacyMetadata = called and metadata(inspected) or nil
+            legacyReplacing = legacyMetadata ~= nil and legacyMetadata.initialized
+                and legacyMetadata.deathRecorded
+        end
+        local replacing = intent == COMPLETED_DEATH_REPLACEMENT
+            and completedPlayers[player] ~= true
+            and ((current ~= nil and current.deathRecorded) or legacyReplacing)
+        if intent == COMPLETED_DEATH_REPLACEMENT and not replacing then
+            return failure("replacement_not_authorized", "completed death required")
+        end
         profiles, profileIndex = locate(root, owner, true)
         profiles[profileIndex] = {
             schemaVersion = RECORD_SCHEMA,
             state = encoded.state,
-            initialized = current ~= nil and not replacing and current.initialized or false,
+            initialized = replacing or (current ~= nil and current.initialized) or false,
             deathRecorded = current ~= nil and not replacing and current.deathRecorded or false,
         }
         local written = writeRoot(root)
@@ -312,14 +329,12 @@ function ServerPlayerRecordStore.create(dependencies)
         if record ~= nil then
             local _, stateFailure = decodeRecord(record)
             if stateFailure ~= nil then return stateFailure end
-            local tokenPresent = issued[player] == true
-            -- Dedicated CreatePlayer also emits OnNewGame for a loaded incarnation after restart.
-            local tokenValid = tokenPresent and record.deathRecorded
-            if tokenPresent and not tokenValid then issued[player] = nil end
+            -- Dedicated OnNewGame receives a transient pre-DB player, not the later live object.
+            local tokenValid = record.deathRecorded and completedPlayers[player] ~= true
             return {
                 ok = true,
                 metadata = {
-                    tokenPresent = tokenPresent,
+                    tokenPresent = tokenValid,
                     tokenValid = tokenValid,
                     initialized = record.initialized,
                     deathRecorded = record.deathRecorded,
@@ -336,13 +351,11 @@ function ServerPlayerRecordStore.create(dependencies)
             deathRecorded = legacyMetadata ~= nil
                 and legacyMetadata.initialized and legacyMetadata.deathRecorded or false
         end
-        local tokenPresent = issued[player] == true
-        local tokenValid = tokenPresent and (not codecPresent or deathRecorded)
-        if tokenPresent and not tokenValid then issued[player] = nil end
+        local tokenValid = deathRecorded and completedPlayers[player] ~= true
         return {
             ok = true,
             metadata = {
-                tokenPresent = tokenPresent,
+                tokenPresent = tokenValid,
                 tokenValid = tokenValid,
                 initialized = initialized,
                 deathRecorded = deathRecorded,
@@ -355,7 +368,6 @@ function ServerPlayerRecordStore.create(dependencies)
         if type(player) ~= "table" and type(player) ~= "userdata" then
             return failure("invalid_player", "player object required")
         end
-        issued[player] = true
         return { ok = true }
     end
 
@@ -376,9 +388,27 @@ function ServerPlayerRecordStore.create(dependencies)
         return { ok = true }
     end
 
-    function characterStore.markInitialized(player)
+    function characterStore.markInitialized(player, intent)
+        if intent ~= nil then
+            if intent ~= COMPLETED_DEATH_REPLACEMENT then
+                return failure("invalid_initialize_intent", "characterStore.markInitialized")
+            end
+            local inspected = characterStore.inspect(player)
+            if not inspected.ok then return inspected end
+            if not inspected.metadata.tokenValid then
+                return failure("replacement_not_authorized", "completed death required")
+            end
+            local updated = updateMetadata(player, true, false)
+            if not updated.ok and updated.code == "canonical_record_missing" then
+                local adopted = stateStore.load(player)
+                if not adopted.ok then return adopted end
+                updated = updateMetadata(player, true, false)
+            end
+            if updated.ok then completedPlayers[player] = nil end
+            return updated
+        end
         local updated = updateMetadata(player, true, false)
-        if updated.ok then issued[player] = nil end
+        if updated.ok then completedPlayers[player] = nil end
         return updated
     end
 
@@ -397,6 +427,7 @@ function ServerPlayerRecordStore.create(dependencies)
         record.deathRecorded = true
         local written = writeRoot(root)
         if not written.ok then return written end
+        completedPlayers[player] = true
         return { ok = true }
     end
 
