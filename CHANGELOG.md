@@ -2,7 +2,13 @@
 
 All notable public changes will be documented here.
 
-## 1.0.0 - Unreleased
+## Unreleased
+
+- Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.
+- Removed semicolons from the public README and Workshop description.
+- Clarified the dedicated-server shutdown and save-loss warning.
+
+## 1.0.0 - 2026-08-30
 
 - Earn independently paced Survivor XP from accepted trainable-skill XP.
 - Gain one Advancement Point for each Survivor Level and spend it directly from the vanilla Skills panel.

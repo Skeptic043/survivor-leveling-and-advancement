@@ -18,8 +18,11 @@ function Assert-ReleaseCondition {
 }
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$readmePath = Join-Path $projectRoot 'README.md'
+$changelogPath = Join-Path $projectRoot 'CHANGELOG.md'
 $workshopPath = Join-Path $projectRoot 'workshop.txt'
 $previewPath = Join-Path $projectRoot 'preview.png'
+$fullNamePosterPath = Join-Path $projectRoot 'assets\workshop\poster-full-name.png'
 $modRoot = Join-Path $projectRoot 'Contents\mods\SurvivorLevelingAdvancement\42.20'
 $modInfoPath = Join-Path $modRoot 'mod.info'
 $posterPath = Join-Path $modRoot 'poster.png'
@@ -27,17 +30,22 @@ $iconPath = Join-Path $modRoot 'icon.png'
 $runtimeLicensePath = Join-Path $modRoot 'LICENSE'
 $sourceLicensePath = Join-Path $projectRoot 'LICENSE'
 $descriptionPath = Join-Path $projectRoot 'assets\workshop\WORKSHOP_DESCRIPTION.md'
+$steamChangeNotesPath = Join-Path $projectRoot 'assets\workshop\STEAM_CHANGE_NOTES.md'
 $screenshotsPath = Join-Path $projectRoot 'assets\workshop\screenshots'
 
 foreach ($requiredPath in @(
+    $readmePath,
+    $changelogPath,
     $workshopPath,
     $previewPath,
+    $fullNamePosterPath,
     $modInfoPath,
     $posterPath,
     $iconPath,
     $runtimeLicensePath,
     $sourceLicensePath,
     $descriptionPath,
+    $steamChangeNotesPath,
     $screenshotsPath
 )) {
     Assert-ReleaseCondition (Test-Path -LiteralPath $requiredPath) "missing $requiredPath"
@@ -58,6 +66,58 @@ Assert-ReleaseCondition (@($workshopLines -match '^description=').Count -ge 30) 
 $descriptionLines = @(Get-Content -LiteralPath $descriptionPath)
 $descriptionText = Get-Content -Raw -LiteralPath $descriptionPath
 $workshopText = Get-Content -Raw -LiteralPath $workshopPath
+$readmeText = Get-Content -Raw -LiteralPath $readmePath
+$changelogLines = @(Get-Content -LiteralPath $changelogPath)
+$steamChangeNoteLines = @(Get-Content -LiteralPath $steamChangeNotesPath)
+
+function Get-MarkdownSectionBody {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Lines,
+        [Parameter(Mandatory = $true)]
+        [string]$Heading
+    )
+
+    $startIndex = [Array]::IndexOf($Lines, $Heading)
+    if ($startIndex -lt 0) {
+        return @()
+    }
+
+    $endIndex = $Lines.Count
+    for ($index = $startIndex + 1; $index -lt $Lines.Count; $index += 1) {
+        if ($Lines[$index] -match '^## ') {
+            $endIndex = $index
+            break
+        }
+    }
+
+    return @($Lines | Select-Object -Skip ($startIndex + 1) -First ($endIndex - $startIndex - 1))
+}
+
+Assert-ReleaseCondition (@($changelogLines -ceq '## 1.0.0 - 2026-08-30').Count -eq 1) 'exact released 1.0.0 changelog heading'
+Assert-ReleaseCondition (@($changelogLines -ceq '## 1.0.0 - Unreleased').Count -eq 0) 'changelog omits stale 1.0.0 Unreleased heading'
+Assert-ReleaseCondition (@($changelogLines -ceq '## Unreleased').Count -eq 1) 'exact one changelog Unreleased heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## Next update').Count -eq 1) 'exact one Steam Next update heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.0.0').Count -eq 1) 'exact one Steam 1.0.0 heading'
+$unreleasedChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Heading '## Unreleased')
+$nextUpdateBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## Next update')
+$releasedSteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.0.0')
+$unreleasedChangelogContent = @($unreleasedChangelogBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$nextUpdateContent = @($nextUpdateBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$releasedSteamContent = @($releasedSteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$expectedNextUpdateBullets = @(
+    '- Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.'
+    '- Removed semicolons from the public README and Workshop description.'
+    '- Clarified the dedicated-server shutdown and save-loss warning.'
+)
+$unreleasedChangelogBullets = @($unreleasedChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+$nextUpdateBullets = @($nextUpdateBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+Assert-ReleaseCondition ($unreleasedChangelogContent.Count -gt 0) 'non-empty changelog Unreleased section'
+Assert-ReleaseCondition ($nextUpdateContent.Count -gt 0) 'non-empty Steam Next update section'
+Assert-ReleaseCondition ([string]::Join("`n", $unreleasedChangelogBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact changelog Unreleased update bullets'
+Assert-ReleaseCondition ([string]::Join("`n", $nextUpdateBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact matching Steam Next update bullets'
+Assert-ReleaseCondition ($releasedSteamContent.Count -gt 0) 'non-empty Steam 1.0.0 section'
 $howItWorksCopy = "SLA gives each character a Survivor Level separate from normal skills. Supported trainable skill XP also earns Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level. The final advancement to a skill's effective maximum, normally level 9 to level 10, requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery only requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost."
 $staleHowItWorksCopy = "Trainable skill XP also earns you Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla Skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. By default, you are limited to 3 Advancement Slots across all skills. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level."
 $advancementModeCopy = @(
@@ -139,16 +199,23 @@ Assert-ReleaseCondition ($descriptionText.Contains('Optional support: [Ko-fi](ht
 Assert-ReleaseCondition ($workshopText.Contains('description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. All donations are strictly optional and no mod features are locked behind a paywall.')) 'Workshop support copy'
 $administrationCopy = 'Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Panel > Users List", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel. Administration is limited to online players.'
 $workshopAdministrationLine = "description=$administrationCopy"
-$workshopDedicatedSaveLimitLine = 'description=[*]Dedicated servers should set the native SaveWorldEveryMinutes option to a nonzero value. Abrupt termination can lose SLA progression written after the last successful server save; a shorter interval reduces that window.'
+$dedicatedSaveLimitCopy = "Dedicated servers should set the native SaveWorldEveryMinutes option to a nonzero value. Closing the server any other way than using the 'quit' command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure."
+$markdownDedicatedSaveLimitLine = "- Dedicated servers should set the native ``SaveWorldEveryMinutes`` option to a nonzero value. Closing the server any other way than using the 'quit' command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure."
+$workshopDedicatedSaveLimitLine = "description=[*]$dedicatedSaveLimitCopy"
 $backupRecommendationCopy = 'Regardless of design, I strongly recommend backing up your save before changing the mod list of an ongoing world you care about.'
 $staleWatchSettingsCopy = "Optional sandbox settings also provide Survivor Level inheritance and a small digital watch integration."
 Assert-ReleaseCondition (@($workshopLines -ceq $workshopAdministrationLine).Count -eq 1) 'exact Workshop online-player administration copy for Mini Scoreboard and Users List'
 Assert-ReleaseCondition (@($descriptionLines -ceq $administrationCopy).Count -eq 1) 'exact Markdown online-player administration copy for Mini Scoreboard and Users List'
 Assert-ReleaseCondition (@($workshopLines -ceq $workshopDedicatedSaveLimitLine).Count -eq 1) 'exact Workshop dedicated SaveWorldEveryMinutes limitation copy'
+Assert-ReleaseCondition (@($descriptionLines -ceq $markdownDedicatedSaveLimitLine).Count -eq 1) 'exact Markdown dedicated SaveWorldEveryMinutes limitation copy'
 Assert-ReleaseCondition (@($descriptionLines -ceq $backupRecommendationCopy).Count -eq 1) 'exact Markdown strengthened backup recommendation'
 Assert-ReleaseCondition (@($workshopLines -ceq "description=$backupRecommendationCopy").Count -eq 1) 'exact Workshop strengthened backup recommendation'
 Assert-ReleaseCondition (-not $descriptionText.Contains($staleWatchSettingsCopy)) 'Markdown omits stale combined sandbox-settings watch copy'
 Assert-ReleaseCondition (-not $workshopText.Contains("description=$staleWatchSettingsCopy")) 'Workshop omits stale combined sandbox-settings watch copy'
+Assert-ReleaseCondition (-not $readmeText.Contains(';')) 'README prose omits semicolons'
+Assert-ReleaseCondition (-not $descriptionText.Contains(';')) 'Markdown Workshop description prose omits semicolons'
+$workshopDescriptionLines = @($workshopLines | Where-Object { $_.StartsWith('description=', [StringComparison]::Ordinal) })
+Assert-ReleaseCondition (@($workshopDescriptionLines -match ';').Count -eq 0) 'Workshop description lines omit semicolons'
 $aiUseDisclosure = "AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. I'm grateful that AI tools helped me turn the idea into something I can share with the community. If you prefer not to use mods developed with AI assistance, I understand and respect that choice."
 $workshopAIUseDisclosure = "description=$aiUseDisclosure"
 Assert-ReleaseCondition (@($descriptionLines -ceq '## AI Use').Count -eq 1) 'exact Markdown AI Use heading'
@@ -213,9 +280,12 @@ function Assert-PngDimensions {
     }
 }
 
-Assert-PngDimensions $previewPath 256 256 'preview'
+Assert-PngDimensions $previewPath 512 512 'preview'
 Assert-PngDimensions $posterPath 512 512 'poster'
 Assert-PngDimensions $iconPath 64 64 'icon'
+$previewHash = (Get-FileHash -LiteralPath $previewPath -Algorithm SHA256).Hash
+$fullNamePosterHash = (Get-FileHash -LiteralPath $fullNamePosterPath -Algorithm SHA256).Hash
+Assert-ReleaseCondition ($previewHash -eq $fullNamePosterHash) 'preview is byte-identical to full-name Workshop artwork'
 Assert-ReleaseCondition ((Get-Item -LiteralPath $previewPath).Length -le 1MB) 'preview is at most 1 MB'
 
 $screenshots = @(Get-ChildItem -LiteralPath $screenshotsPath -File | Sort-Object Name)
