@@ -10,7 +10,7 @@ Development and current testing target Project Zomboid 42.20.4. The internal mod
 
 ## Installation
 
-[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). Steam Workshop is the supported installation route; remove duplicate manual copies from `Zomboid/mods` before testing or playing.
+[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). Steam Workshop is the supported installation route; remove duplicate manual copies from `Zomboid/mods` before testing or playing. No external mod dependencies are required.
 
 ### Dedicated-server saves
 
@@ -24,7 +24,7 @@ Set Project Zomboid's native `SaveWorldEveryMinutes` server option to a nonzero 
 
 ## Design goals
 
-- Integrate with the vanilla Skills screen instead of duplicating it.
+- Integrate with the vanilla skills screen instead of duplicating it.
 - Keep Survivor XP independent from each skill's sandbox XP multiplier.
 - Support vanilla trainable skills and compatible modded skills through narrow adapters.
 - Preserve multiplayer authority and character-bound progression.

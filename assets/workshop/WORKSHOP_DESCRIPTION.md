@@ -4,9 +4,15 @@ Level your skills through normal play while at the same time progressing your Su
 
 ## How it works
 
-Trainable skill XP also earns you Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla Skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. By default, you are limited to 3 Advancement Slots across all skills. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level.
+SLA gives each character a separate Survivor Level. Supported trainable skill XP also earns Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level.
 
-In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts you into a recovery state that grants no Survivor XP from that skill until the lost progress is recovered. Free mode does not track catch-up or recovery.
+## Advancement modes
+
+- **Global:** Shares one configurable pool of Advancement Slots across every skill, with a default limit of 3 active slots in total.
+- **Per Skill:** Gives each skill its own configurable slot limit, using a default for compatible custom skills and optional overrides for vanilla skills.
+- **Free:** Removes Advancement Slot limits and catch-up or recovery restrictions while selected; switching back to Global or Per Skill restores any remaining prior tracked obligation instead of clearing it.
+
+In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts that skill into a recovery state that grants no Survivor XP until the lost progress is recovered.
 
 The final advancement to a skill's effective maximum, normally level 9 to level 10, requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost.
 
@@ -14,10 +20,14 @@ Survivor Level inheritance is configured through sandbox settings and allows the
 
 ## Features
 
-- Integrated directly into the vanilla Skills panel
+- Integrated directly into the vanilla skills panel
 - Global, Per Skill, and Free advancement slot modes
-- Configurable Survivor XP settings
-- Server-authoritative multiplayer progression and administration
+- A separately configurable Survivor XP multiplier that does not change skill XP
+- Configurable Fitness and Strength contribution to Survivor XP
+- Automatic curve normalization for compatible custom skills
+- Configurable global, default per-skill, and vanilla-skill-specific Advancement Slot limits
+- Server-authoritative multiplayer progression
+- Online-player administration for inspecting progression, awarding XP or levels, and clearing advancements
 - Full controller support for spending AP
 - Split-screen compatible
 - Optional Survivor Level inheritance after death
@@ -33,7 +43,7 @@ Regardless, I recommend backing up your save before changing the mod list of an 
 
 ## Multiplayer administration
 
-Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Panel > Users List", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel.
+Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Panel > Users List", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel. Administration is limited to online players.
 
 ## Compatibility
 
@@ -63,5 +73,7 @@ Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are stric
 ## Mod information
 
 - Target version: Project Zomboid Build 42.20
+- Developed and tested on: Project Zomboid 42.20.4
+- Required dependencies: None
 - License: MIT
 - [Source and issue tracker](https://github.com/Skeptic043/survivor-leveling-and-advancement)
