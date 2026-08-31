@@ -4,6 +4,7 @@ Copy the relevant version's text into Project Zomboid's Workshop change-note fie
 
 ## Next update
 
+- Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.
 - Removed semicolons from the public README and Workshop description.
 - Clarified the dedicated-server shutdown and save-loss warning.
 

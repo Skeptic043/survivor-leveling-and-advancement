@@ -2,6 +2,12 @@
 
 All notable public changes will be documented here.
 
+## Unreleased
+
+- Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.
+- Removed semicolons from the public README and Workshop description.
+- Clarified the dedicated-server shutdown and save-loss warning.
+
 ## 1.0.0 - 2026-08-30
 
 - Earn independently paced Survivor XP from accepted trainable-skill XP.
