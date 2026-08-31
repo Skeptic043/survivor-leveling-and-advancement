@@ -63,7 +63,7 @@ Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Pan
 
 - A skill at its effective maximum does not generate additional Survivor XP.
 - Direct skill setters or third-party progression routes that emit no supported XP event do not generate Survivor XP.
-- Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonzero value. Abrupt termination can lose SLA progression written after the last successful server save; a shorter interval reduces that window.
+- Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonzero value. Closing the server any other way than using the 'quit' command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure.
 - Only English text is currently included.
 
 ## AI Use

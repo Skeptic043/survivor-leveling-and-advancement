@@ -10,11 +10,11 @@ Development and current testing target Project Zomboid 42.20.4. The internal mod
 
 ## Installation
 
-[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). Steam Workshop is the supported installation route; remove duplicate manual copies from `Zomboid/mods` before testing or playing. No external mod dependencies are required.
+[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209). Steam Workshop is the supported installation route. Remove duplicate manual copies from `Zomboid/mods` before testing or playing. No external mod dependencies are required.
 
 ### Dedicated-server saves
 
-Set Project Zomboid's native `SaveWorldEveryMinutes` server option to a nonzero value; `5` or `10` real-world minutes is a practical starting point. SLA's multiplayer progression is stored in server-owned Global ModData and becomes durable with the normal server save. Abrupt termination can lose changes made after the last successful save, so a shorter interval reduces that window. SLA does not invoke a separate save because Build 42.20.4 exposes no Lua-callable dedicated save with a trustworthy completion result.
+Set Project Zomboid's native `SaveWorldEveryMinutes` server option to a nonzero value. `5` or `10` real-world minutes is a practical starting point. SLA's multiplayer progression is stored in server-owned Global ModData and becomes durable with the normal server save. Abrupt termination can lose changes made after the last successful save, so a shorter interval reduces that window. SLA does not invoke a separate save because Build 42.20.4 exposes no Lua-callable dedicated save with a trustworthy completion result.
 
 ## Project links
 

@@ -2,7 +2,7 @@
 
 All notable public changes will be documented here.
 
-## 1.0.0 - Unreleased
+## 1.0.0 - 2026-08-30
 
 - Earn independently paced Survivor XP from accepted trainable-skill XP.
 - Gain one Advancement Point for each Survivor Level and spend it directly from the vanilla Skills panel.
