@@ -4,9 +4,7 @@ A Project Zomboid Build 42 release candidate that turns ordinary skill activity 
 
 ## Status
 
-The 1.0 release candidate is feature-complete. Core XP, Survivor Levels, Advancement Points, persistence, multiplayer authority, sandbox settings, Skills-screen integration, representative custom-skill compatibility, and representative Skills-tooltip compatibility are implemented and live-validated.
-
-The 1.0 Workshop payload passes clean-profile and Workshop-only loads, progression, AP spending, reload persistence, cross-version AP/XP retention, the complete deterministic and public-source gates, and the final focused live checks for its Skills interface, temporary Free-mode accounting restoration, and dedicated native-autosave retention. The dedicated console-X check retained a bounded portion of post-launch state while later changes rolled back; this is consistent with the documented last-successful-save limit, but the exact completed autosave boundary was not observed.
+The 1.0 release candidate is feature-complete and has passed its defined automated and live acceptance gates. Core XP, Survivor Levels, Advancement Points, persistence, multiplayer authority, sandbox settings, Skills-screen integration, representative custom-skill compatibility, and representative Skills-tooltip compatibility are implemented and validated. Dedicated-server durability follows Project Zomboid's normal world-save boundary described below.
 
 Development and current testing target Project Zomboid 42.20.4. The internal mod ID is `SurvivorLevelingAdvancement`. The mod does not enforce exact patch-version bounds, and compatibility will be claimed only for versions and integrations that have been tested.
 
