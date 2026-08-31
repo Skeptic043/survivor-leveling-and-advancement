@@ -10,7 +10,7 @@ In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts you i
 
 The final advancement to a skill's effective maximum, normally level 9 to level 10, requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost.
 
-Optional sandbox settings also provide Survivor Level inheritance and a small digital watch integration. Inheritance allows the host to set a percentage of a deceased character's Survivor Level that passes to that player's next eligible survivor. The digital watch setting shows how far you are into your current Survivor Level as a small percentage on the watch display.
+Survivor Level inheritance is configured through sandbox settings and allows the host to set a percentage of a deceased character's Survivor Level that passes to that player's next eligible survivor. The optional digital watch percentage is enabled per client through Mod Options and shows Player 1's progress toward the next Survivor Level.
 
 ## Features
 

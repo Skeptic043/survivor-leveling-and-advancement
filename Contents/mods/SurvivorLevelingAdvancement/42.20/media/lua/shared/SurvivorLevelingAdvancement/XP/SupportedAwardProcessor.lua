@@ -202,6 +202,29 @@ local function sameIdentity(record, identity)
         and record.effectiveMaximum == identity.effectiveMaximum
 end
 
+local function replacementOrphan(state, perkId, identity)
+    local orphaned = state.orphanedPerks
+    if orphaned == nil then return { ok = true, present = false } end
+    if type(orphaned) ~= "table" then
+        return failure("perk_quarantined", "orphaned_perks_invalid")
+    end
+    local record = orphaned[perkId]
+    if record == nil then return { ok = true, present = false } end
+    if type(record) ~= "table"
+        or not isSafeId(record.adapterId)
+        or not isInteger(record.adapterVersion)
+        or record.adapterVersion < 0
+        or not isSafeId(record.curveFingerprint)
+        or not isInteger(record.effectiveMaximum)
+        or record.effectiveMaximum <= 0 then
+        return failure("perk_quarantined", "orphan_invalid")
+    end
+    if sameIdentity(record, identity) then
+        return failure("perk_quarantined", "same_identity_orphan")
+    end
+    return { ok = true, present = true }
+end
+
 local function ledgerFromPerk(record)
     return {
         naturalPosition = record.naturalPosition,
@@ -663,6 +686,12 @@ function SupportedAwardProcessor.create(dependencies)
         if record ~= nil and not sameIdentity(record, identity) then
             return failure("perk_quarantined", "adapter_identity_mismatch")
         end
+        local replacingOrphan = false
+        if record == nil then
+            local replacement = replacementOrphan(state, award.perkId, identity)
+            if not replacement.ok then return replacement end
+            replacingOrphan = replacement.present
+        end
 
         local observed = getObservation(deps.ActualObservation, player, award.perkId)
         if not observed.ok then return observed end
@@ -741,6 +770,11 @@ function SupportedAwardProcessor.create(dependencies)
         state.survivor = applied.state
         if state.revision ~= originalRevision then
             return failure("invalid_state", "revision_changed_during_award")
+        end
+
+        if replacingOrphan then
+            state.orphanedPerks[award.perkId] = nil
+            stateChanged = true
         end
 
         if stateChanged then

@@ -142,6 +142,27 @@ local function sameIdentity(record, identity)
         and record.effectiveMaximum == identity.effectiveMaximum
 end
 
+local function replacementOrphan(state, perkId, identity)
+    local orphaned = state.orphanedPerks
+    if orphaned == nil then return { ok = true, present = false } end
+    if type(orphaned) ~= "table" then
+        return failure("perk_quarantined", "orphaned_perks_invalid")
+    end
+    local record = orphaned[perkId]
+    if record == nil then return { ok = true, present = false } end
+    if type(record) ~= "table"
+        or not isSafeId(record.adapterId)
+        or not isNonnegativeInteger(record.adapterVersion)
+        or not isSafeId(record.curveFingerprint)
+        or not isPositiveInteger(record.effectiveMaximum) then
+        return failure("perk_quarantined", "orphan_invalid")
+    end
+    if sameIdentity(record, identity) then
+        return failure("perk_quarantined", "same_identity_orphan")
+    end
+    return { ok = true, present = true }
+end
+
 local function advancementCost(targetLevel, effectiveMaximum)
     return targetLevel == effectiveMaximum and 2 or 1
 end
@@ -760,6 +781,12 @@ function ApTransaction.create(dependencies)
         if record ~= nil and not sameIdentity(record, identity) then
             return failure("perk_quarantined", "adapter_identity_mismatch")
         end
+        local replacingOrphan = false
+        if record == nil then
+            local replacement = replacementOrphan(state, request.perkId, identity)
+            if not replacement.ok then return replacement end
+            replacingOrphan = replacement.present
+        end
         local synchronized = synchronizeObservation(
             deps,
             player,
@@ -831,6 +858,9 @@ function ApTransaction.create(dependencies)
         local reservationState, stateError = cloneValue(state)
         if not reservationState then return failure("invalid_state", stateError) end
         reservationState.perks[request.perkId] = record
+        if replacingOrphan then
+            reservationState.orphanedPerks[request.perkId] = nil
+        end
         reservationState.inFlightAdvancement = {
             requestId = request.requestId,
             perkId = request.perkId,
