@@ -24,11 +24,20 @@ local function expectKeys(tableValue, expectedKeys, message)
     end
 end
 
+local vanillaPerkIds = {
+    'Fitness', 'Strength', 'Sprinting', 'Lightfoot', 'Nimble', 'Sneak', 'Axe', 'Blunt',
+    'SmallBlunt', 'LongBlade', 'SmallBlade', 'Spear', 'Maintenance', 'Farming', 'Husbandry',
+    'Woodwork', 'Carving', 'Cooking', 'Electricity', 'Doctor', 'FlintKnapping', 'Masonry',
+    'Mechanics', 'Blacksmith', 'Pottery', 'Tailoring', 'MetalWelding', 'Aiming', 'Reloading',
+    'Fishing', 'PlantScavenging', 'Tracking', 'Trapping', 'Butchering', 'Glassmaking'
+}
+
 local function makeNamespace(allotmentMode, overrides)
     local namespace = {
         SurvivorXpMultiplier = 1.25,
         FitnessStrengthContributionPercent = 75,
         AutomaticCurveNormalization = true,
+        CustomSkillSurvivorXp = true,
         EnableSurvivorLevelInheritance = false,
         SurvivorLevelRetainedPercent = 50,
         AllotmentMode = allotmentMode,
@@ -38,6 +47,9 @@ local function makeNamespace(allotmentMode, overrides)
     }
     for key, value in pairs(overrides or {}) do
         namespace['PerSkillLimit_' .. key] = value
+    end
+    for index = 1, #vanillaPerkIds do
+        namespace['SkillSurvivorXp_' .. vanillaPerkIds[index]] = true
     end
     return namespace
 end
@@ -67,6 +79,8 @@ expectKeys(settings, {
     survivorMultiplier = true,
     fitnessStrengthNormalization = true,
     automaticCurveNormalization = true,
+    customSkillSurvivorXpEnabled = true,
+    perSkillSurvivorXpEnabled = true,
     allotmentMode = true,
     globalLimit = true,
     perSkillDefault = true,
@@ -77,6 +91,9 @@ expectKeys(settings, {
 expectEqual(settings.survivorMultiplier, 1.25, 'survivor multiplier')
 expectEqual(settings.fitnessStrengthNormalization, 0.75, 'fitness/strength normalization')
 expectEqual(settings.automaticCurveNormalization, true, 'automatic normalization')
+expectEqual(settings.customSkillSurvivorXpEnabled, true, 'custom skill Survivor XP fallback')
+expectEqual(settings.perSkillSurvivorXpEnabled.Fitness, true, 'Fitness Survivor XP toggle')
+expectEqual(settings.perSkillSurvivorXpEnabled.Glassmaking, true, 'last vanilla Survivor XP toggle')
 expectEqual(settings.allotmentMode, 'Global', 'allotment enum 1')
 expectEqual(settings.globalLimit, 9, 'global limit')
 expectEqual(settings.perSkillDefault, 4, 'per-skill default')
@@ -87,7 +104,12 @@ expectEqual(settings.perSkillOverrides['Fitness.Strength'], 0, 'override enum 2 
 expectEqual(settings.perSkillOverrides['Other:Skill'], 10, 'override enum 12 should map to ten')
 expectEqual(settings.perSkillOverrides.FutureSetting, nil, 'unrelated namespace key should be ignored')
 
-local liveValues = { GlobalAdvancementLimit = 1, PerSkillLimit_Other = 4 }
+local liveValues = {
+    GlobalAdvancementLimit = 1,
+    PerSkillLimit_Other = 4,
+    CustomSkillSurvivorXp = false,
+    SkillSurvivorXp_Carving = false,
+}
 local liveReads = 0
 local liveCreation = Build42WorldSettingsProvider.create({
     readSandboxVars = function() return currentSandboxVars end,
@@ -100,6 +122,8 @@ currentSandboxVars = { SurvivorLevelingAdvancement = makeNamespace(1, { Other = 
 local liveSettings = liveCreation.provider.read()
 expectEqual(liveSettings.globalLimit, 1, 'current engine option overrides the stale Lua mirror')
 expectEqual(liveSettings.perSkillOverrides.Other, 2, 'live per-skill enum overrides the stale Lua mirror')
+expectEqual(liveSettings.customSkillSurvivorXpEnabled, false, 'live custom skill toggle overrides the stale Lua mirror')
+expectEqual(liveSettings.perSkillSurvivorXpEnabled.Carving, false, 'live named skill toggle overrides the stale Lua mirror')
 expect(liveReads > 0, 'live option capability is consulted during each settings read')
 liveValues.GlobalAdvancementLimit = 2
 expectEqual(liveCreation.provider.read().globalLimit, 2, 'live sandbox edits are visible without reloading')
@@ -113,9 +137,11 @@ expectNil(throwingLiveReader.provider.read(), 'throwing live option capability s
 currentSandboxVars = { SurvivorLevelingAdvancement = makeNamespace(1, { ['A:opaque-ID._-9'] = 1, ['Fitness.Strength'] = 2, ['Other:Skill'] = 12 }) }
 
 settings.perSkillOverrides['Fitness.Strength'] = 99
+settings.perSkillSurvivorXpEnabled.Fitness = false
 local detached = creation.provider.read()
 expectEqual(reads, 2, 'each read should invoke the capability once')
 expectEqual(detached.perSkillOverrides['Fitness.Strength'], 0, 'returned override maps should be detached')
+expectEqual(detached.perSkillSurvivorXpEnabled.Fitness, true, 'returned Survivor XP maps should be detached')
 
 currentSandboxVars = { SurvivorLevelingAdvancement = makeNamespace(2, {}) }
 expectEqual(creation.provider.read().allotmentMode, 'PerSkill', 'allotment enum 2')
@@ -157,6 +183,7 @@ local invalidScalars = {
     { field = 'FitnessStrengthContributionPercent', value = -0.0001 },
     { field = 'FitnessStrengthContributionPercent', value = 100.0001 },
     { field = 'AutomaticCurveNormalization', value = 1 },
+    { field = 'CustomSkillSurvivorXp', value = 1 },
     { field = 'EnableSurvivorLevelInheritance', value = 1 },
     { field = 'SurvivorLevelRetainedPercent', value = -0.1 },
     { field = 'SurvivorLevelRetainedPercent', value = 100.1 },
@@ -169,6 +196,14 @@ for _, invalid in ipairs(invalidScalars) do
     namespace[invalid.field] = invalid.value
     expectNil(readWithNamespace(namespace), 'invalid ' .. invalid.field .. ' should fail closed')
 end
+
+
+local missingToggle = makeNamespace(1, {})
+missingToggle.SkillSurvivorXp_Glassmaking = nil
+expectNil(readWithNamespace(missingToggle), 'missing vanilla Survivor XP toggle should fail closed')
+local malformedToggle = makeNamespace(1, {})
+malformedToggle.SkillSurvivorXp_Fitness = 1
+expectNil(readWithNamespace(malformedToggle), 'malformed vanilla Survivor XP toggle should fail closed')
 
 local invalidOverrideValues = { 0, 13, 2.5, '2' }
 for _, value in ipairs(invalidOverrideValues) do

@@ -19,6 +19,13 @@ local function rawSettings()
         survivorMultiplier = 1.5,
         fitnessStrengthNormalization = 16,
         automaticCurveNormalization = true,
+        customSkillSurvivorXpEnabled = true,
+        perSkillSurvivorXpEnabled = {
+            Carving = true,
+            Sprinting = true,
+            Fitness = true,
+            Strength = true,
+        },
         allotmentMode = "Global",
         globalLimit = 3,
         perSkillDefault = 1,
@@ -103,6 +110,26 @@ expectEqual(award.settings.normalization, 1)
 award = resolver.awardSettings.resolve(opaquePlayer, "Modded_Skill")
 expect(award.ok)
 expectEqual(award.settings.normalization, 1)
+current.customSkillSurvivorXpEnabled = false
+award = resolver.awardSettings.resolve(opaquePlayer, "Modded_Skill")
+expect(award.ok)
+expectEqual(award.settings.normalization, 0)
+current.customSkillSurvivorXpEnabled = true
+current.perSkillSurvivorXpEnabled.Carving = false
+award = resolver.awardSettings.resolve(opaquePlayer, "Carving")
+expect(award.ok)
+expectEqual(award.settings.normalization, 0)
+expectEqual(award.settings.accountingMode, "Tracked")
+expectEqual(resolver.accountingSettings.resolve(opaquePlayer).settings.mode, "Tracked")
+expectEqual(resolver.allotmentSettings.resolve(opaquePlayer, "Carving").settings.mode, "Global")
+current.allotmentMode = "Free"
+award = resolver.awardSettings.resolve(opaquePlayer, "Carving")
+expect(award.ok)
+expectEqual(award.settings.normalization, 0)
+expectEqual(award.settings.accountingMode, "Free")
+expectEqual(resolver.accountingSettings.resolve(opaquePlayer).settings.mode, "Free")
+expectEqual(resolver.allotmentSettings.resolve(opaquePlayer, "Carving").settings.mode, "Free")
+current = rawSettings()
 current.automaticCurveNormalization = true
 award = resolver.awardSettings.resolve(opaquePlayer, "42:mod.skill-name")
 expectEqual(award.ok, false)
@@ -195,6 +222,24 @@ malformed.fitnessStrengthNormalization = -0.1
 expectClosed(malformed)
 malformed = rawSettings()
 malformed.automaticCurveNormalization = "true"
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.customSkillSurvivorXpEnabled = "true"
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.customSkillSurvivorXpEnabled = nil
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.perSkillSurvivorXpEnabled = nil
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.perSkillSurvivorXpEnabled.Carving = 1
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.perSkillSurvivorXpEnabled["bad perk"] = true
+expectClosed(malformed)
+malformed = rawSettings()
+malformed.perSkillSurvivorXpEnabled.Carving = malformed.perSkillSurvivorXpEnabled
 expectClosed(malformed)
 malformed = rawSettings()
 malformed.allotmentMode = "Category"

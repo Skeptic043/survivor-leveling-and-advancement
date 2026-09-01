@@ -20,7 +20,7 @@ end
 local function harness()
     local h = {
         enabled = false, stamp = 0, players = {}, refreshes = {}, states = {},
-        geometry = {}, draws = {}, panels = 0, playerReads = {},
+        geometry = {}, draws = {}, panels = 0, playerReads = {}, mapVisible = false,
     }
     h.clock = { x = 100, y = 10, width = 91, height = 37, visible = true }
     function h.clock:getX() return self.x end
@@ -42,6 +42,11 @@ local function harness()
     h.dependencies = {
         owner = h.owner,
         optionEnabled = function() if h.optionThrow then error("option") end; return h.enabled end,
+        isWorldMapVisible = function()
+            if h.mapThrow then error("map") end
+            if h.mapMalformed then return "visible" end
+            return h.mapVisible
+        end,
         getClock = function() if h.clockThrow then error("clock") end; return h.clock end,
         minuteStamp = function() if h.timeThrow then error("time") end; return h.stamp end,
         getPlayer = function(slot)
@@ -79,6 +84,9 @@ equal(Watch.create(nil).code, "invalid_dependencies", "nil dependencies fail")
 local missing = harness()
 missing.dependencies.getClock = nil
 equal(Watch.create(missing.dependencies).code, "invalid_dependencies", "missing capability fails")
+missing = harness()
+missing.dependencies.isWorldMapVisible = nil
+equal(Watch.create(missing.dependencies).code, "invalid_dependencies", "missing map capability fails")
 
 local h = harness()
 h.callbacks.prerender()
@@ -106,6 +114,39 @@ equal(g.height, 37, "percentage follows clock height")
 h.callbacks.render()
 equal(#h.draws, 1, "visible percentage draws one clock-texture value")
 equal(h.draws[1][1], 25, "clock textures use player one percentage")
+
+local mapH = harness()
+mapH.enabled = true
+mapH.players[0] = { dead = false }
+mapH.states[0] = snapshot(25, 100)
+mapH.mapVisible = true
+local geometryBeforeMap = #mapH.geometry
+mapH.callbacks.prerender()
+mapH.callbacks.render()
+equal(mapH.created.integration.status().displaying, false, "visible world map hides percentage")
+equal(#mapH.refreshes, 0, "visible world map prevents owner refresh")
+equal(#mapH.playerReads, 0, "visible world map prevents player reads")
+expect(#mapH.geometry == geometryBeforeMap + 1 and mapH.geometry[#mapH.geometry].width == 0,
+    "visible world map hides without clock geometry")
+equal(#mapH.draws, 0, "visible world map prevents drawing")
+mapH.mapVisible = false
+mapH.callbacks.prerender()
+mapH.callbacks.render()
+equal(#mapH.refreshes, 1, "closing world map resumes due owner refresh")
+equal(#mapH.draws, 1, "closing world map resumes drawing without a new event")
+
+mapH.mapThrow = true
+mapH.callbacks.prerender()
+equal(mapH.created.integration.status().displaying, false, "throwing world map visibility fails closed")
+mapH.mapThrow = false
+mapH.mapMalformed = true
+mapH.callbacks.prerender()
+equal(mapH.created.integration.status().displaying, false, "non-boolean world map visibility fails closed")
+mapH.mapMalformed = false
+mapH.callbacks.prerender()
+mapH.mapVisible = true
+mapH.callbacks.render()
+equal(mapH.created.integration.status().displaying, false, "world map opening between callbacks prevents drawing")
 
 h.stamp = 9
 h.callbacks.prerender()

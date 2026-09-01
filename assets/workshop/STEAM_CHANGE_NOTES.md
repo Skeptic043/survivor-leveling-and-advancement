@@ -2,13 +2,13 @@
 
 Copy the relevant version's text into Project Zomboid's Workshop change-note field for every upload. Keep it aligned with `CHANGELOG.md` and the corresponding GitHub Release.
 
-## Next update
+## 1.1.0
 
+- Fixed the digital-watch Survivor XP percentage remaining visible over the full-screen world map.
+- Added sandbox toggles for Survivor XP generation from each vanilla skill and one universal toggle for compatible custom skills.
 - Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.
 - Removed semicolons from the public README and Workshop description.
 - Clarified the dedicated-server shutdown and save-loss warning.
-
-Add any further player-visible changes here before the next upload.
 
 ## 1.0.0
 

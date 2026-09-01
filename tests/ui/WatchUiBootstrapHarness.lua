@@ -108,6 +108,18 @@ elseif evidence.phase == 1 then
     check(evidence.dependencies.optionEnabled() == false
         and evidence.dependencies.minuteStamp() == 12, "option and engine minute capabilities")
     check(evidence.dependencies.getPlayer(0).slot == 0, "player one lookup capability")
+    check(evidence.dependencies.isWorldMapVisible() == false, "nil world map is not visible")
+    local worldMap = { visible = true, visibilityReads = 0 }
+    function worldMap:isVisible()
+        self.visibilityReads = self.visibilityReads + 1
+        return self.visible
+    end
+    ISWorldMap_instance = worldMap
+    check(evidence.dependencies.isWorldMapVisible() == true, "visible world map uses isVisible")
+    worldMap.visible = false
+    check(evidence.dependencies.isWorldMapVisible() == false, "hidden retained world map uses current visibility")
+    check(worldMap.visibilityReads == 2, "exact isVisible method is called for each live check")
+    ISWorldMap_instance = nil
     local panel = evidence.dependencies.createPanel({
         prerender = function() evidence.postUiPrerenders = evidence.postUiPrerenders + 1 end,
         render = function() evidence.postUiRenders = evidence.postUiRenders + 1 end,

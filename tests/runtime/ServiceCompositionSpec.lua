@@ -870,6 +870,8 @@ do
                     survivorMultiplier = 2,
                     fitnessStrengthNormalization = 91,
                     automaticCurveNormalization = true,
+                    customSkillSurvivorXpEnabled = true,
+                    perSkillSurvivorXpEnabled = { Cooking = true },
                     allotmentMode = "Free",
                     globalLimit = 0,
                     perSkillDefault = 0,

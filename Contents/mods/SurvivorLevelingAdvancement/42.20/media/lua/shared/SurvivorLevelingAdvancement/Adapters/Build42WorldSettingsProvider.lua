@@ -3,6 +3,14 @@ local Build42WorldSettingsProvider = {}
 local POSITIVE_INFINITY = math.huge
 local NEGATIVE_INFINITY = -math.huge
 local OVERRIDE_PREFIX = 'PerSkillLimit_'
+local SURVIVOR_XP_PREFIX = 'SkillSurvivorXp_'
+local VANILLA_PERK_IDS = {
+    'Fitness', 'Strength', 'Sprinting', 'Lightfoot', 'Nimble', 'Sneak', 'Axe', 'Blunt',
+    'SmallBlunt', 'LongBlade', 'SmallBlade', 'Spear', 'Maintenance', 'Farming', 'Husbandry',
+    'Woodwork', 'Carving', 'Cooking', 'Electricity', 'Doctor', 'FlintKnapping', 'Masonry',
+    'Mechanics', 'Blacksmith', 'Pottery', 'Tailoring', 'MetalWelding', 'Aiming', 'Reloading',
+    'Fishing', 'PlantScavenging', 'Tracking', 'Trapping', 'Butchering', 'Glassmaking'
+}
 
 local function isFiniteNumber(value)
     return type(value) == 'number'
@@ -34,25 +42,20 @@ local function readSettings(readSandboxVars, readSandboxOption)
         return nil
     end
 
-    if readSandboxOption ~= nil then
-        local liveNamespace = {}
-        for key, value in pairs(namespace) do
-            local liveValue = readSandboxOption(key)
-            if liveValue == nil then
-                liveNamespace[key] = value
-            else
-                liveNamespace[key] = liveValue
-            end
+    local function namedValue(name)
+        if readSandboxOption ~= nil then
+            local liveValue = readSandboxOption(name)
+            if liveValue ~= nil then return liveValue end
         end
-        namespace = liveNamespace
+        return namespace[name]
     end
 
-    local survivorMultiplier = namespace.SurvivorXpMultiplier
+    local survivorMultiplier = namedValue('SurvivorXpMultiplier')
     if not isFiniteNumber(survivorMultiplier) or survivorMultiplier < 0 or survivorMultiplier > 100 then
         return nil
     end
 
-    local fitnessStrengthContributionPercent = namespace.FitnessStrengthContributionPercent
+    local fitnessStrengthContributionPercent = namedValue('FitnessStrengthContributionPercent')
     if not isFiniteNumber(fitnessStrengthContributionPercent)
         or fitnessStrengthContributionPercent < 0
         or fitnessStrengthContributionPercent > 100 then
@@ -60,23 +63,38 @@ local function readSettings(readSandboxVars, readSandboxOption)
     end
     local fitnessStrengthNormalization = fitnessStrengthContributionPercent / 100
 
-    local automaticCurveNormalization = namespace.AutomaticCurveNormalization
+    local automaticCurveNormalization = namedValue('AutomaticCurveNormalization')
     if type(automaticCurveNormalization) ~= 'boolean' then
         return nil
     end
 
-    local inheritanceEnabled = namespace.EnableSurvivorLevelInheritance
+    local customSkillSurvivorXpEnabled = namedValue('CustomSkillSurvivorXp')
+    if type(customSkillSurvivorXpEnabled) ~= 'boolean' then
+        return nil
+    end
+
+    local perSkillSurvivorXpEnabled = {}
+    for index = 1, #VANILLA_PERK_IDS do
+        local perkId = VANILLA_PERK_IDS[index]
+        local enabled = namedValue(SURVIVOR_XP_PREFIX .. perkId)
+        if type(enabled) ~= 'boolean' then
+            return nil
+        end
+        perSkillSurvivorXpEnabled[perkId] = enabled
+    end
+
+    local inheritanceEnabled = namedValue('EnableSurvivorLevelInheritance')
     if type(inheritanceEnabled) ~= 'boolean' then
         return nil
     end
 
-    local retainedPercent = namespace.SurvivorLevelRetainedPercent
+    local retainedPercent = namedValue('SurvivorLevelRetainedPercent')
     if not isFiniteNumber(retainedPercent) or retainedPercent < 0 or retainedPercent > 100 then
         return nil
     end
     local retainedRatio = retainedPercent / 100
 
-    local allotmentModeValue = namespace.AllotmentMode
+    local allotmentModeValue = namedValue('AllotmentMode')
     local allotmentMode
     if allotmentModeValue == 1 then
         allotmentMode = 'Global'
@@ -88,19 +106,20 @@ local function readSettings(readSandboxVars, readSandboxOption)
         return nil
     end
 
-    local globalLimit = namespace.GlobalAdvancementLimit
+    local globalLimit = namedValue('GlobalAdvancementLimit')
     if not isNonnegativeInteger(globalLimit) then
         return nil
     end
 
-    local perSkillDefault = namespace.PerSkillDefaultLimit
+    local perSkillDefault = namedValue('PerSkillDefaultLimit')
     if not isNonnegativeInteger(perSkillDefault) then
         return nil
     end
 
     local perSkillOverrides = {}
-    for key, value in pairs(namespace) do
+    for key in pairs(namespace) do
         if type(key) == 'string' and string.sub(key, 1, string.len(OVERRIDE_PREFIX)) == OVERRIDE_PREFIX then
+            local value = namedValue(key)
             local perkId = string.sub(key, string.len(OVERRIDE_PREFIX) + 1)
             if not isSafePerkId(perkId) then
                 return nil
@@ -118,6 +137,8 @@ local function readSettings(readSandboxVars, readSandboxOption)
         survivorMultiplier = survivorMultiplier,
         fitnessStrengthNormalization = fitnessStrengthNormalization,
         automaticCurveNormalization = automaticCurveNormalization,
+        customSkillSurvivorXpEnabled = customSkillSurvivorXpEnabled,
+        perSkillSurvivorXpEnabled = perSkillSurvivorXpEnabled,
         allotmentMode = allotmentMode,
         globalLimit = globalLimit,
         perSkillDefault = perSkillDefault,

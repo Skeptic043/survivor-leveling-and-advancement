@@ -82,6 +82,12 @@ ensureModOptionsPage()
 local lifecycle = require "SurvivorLevelingAdvancement/Bootstrap"
 local Build42WatchUi = require "SurvivorLevelingAdvancement/UI/Build42WatchUi"
 
+local function isWorldMapVisible()
+    local instance = rawget(_G, "ISWorldMap_instance")
+    if instance == nil then return false end
+    return instance:isVisible()
+end
+
 local function createPanel(callbacks)
     if type(Events) ~= "table" or type(Events.OnPostUIDraw) ~= "table"
         or type(Events.OnPostUIDraw.Add) ~= "function" then return nil end
@@ -163,6 +169,7 @@ end
 local createdCalled, created = pcall(Build42WatchUi.create, {
     owner = lifecycle,
     optionEnabled = function() return option:getValue() == true end,
+    isWorldMapVisible = isWorldMapVisible,
     getClock = function() return UIManager.getClock() end,
     minuteStamp = function() return getGameTime():getMinutesStamp() end,
     getPlayer = function(slot) return getSpecificPlayer(slot) end,
