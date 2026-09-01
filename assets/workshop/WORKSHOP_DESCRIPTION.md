@@ -62,9 +62,9 @@ Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonz
 
 - **Tested together: [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242), [Toughness Skill](https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939), and [Show Skill XP Gain B42.20](https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883)**. This combination worked without issue in testing, but compatibility with every interface or custom-skill mod cannot be guaranteed.
 
-- **Potential hook conflicts:** Mods that replace the game's skill-XP award functions or `Events.AddXP` handling, vanilla Skills panel/progress-bar methods, online-player context menus, or digital-watch rendering may conflict with the corresponding SLA feature. SLA disables an affected capability when it detects that a required hook has been replaced rather than continuing with potentially incorrect behavior.
+- **Potential hook conflicts:** Mods that replace skill-XP award functions or `Events.AddXP`, the vanilla Skills panel, online-player context menus, or digital-watch rendering may conflict with the related SLA feature. If SLA detects a required hook was replaced, it disables that capability rather than risking incorrect behavior.
 
-- **Custom progression boundary:** Compatible trainable skills that publish a usable XP curve and award XP through supported game events are expected to work. Mods that directly set skill XP or levels, replace skill caps or curves without compatible data, or otherwise bypass supported XP events may not grant Survivor XP or may be unsupported.
+- **Custom progression boundary:** Compatible trainable skills with a usable XP curve and supported XP events are expected to work. Mods that directly set skill XP or levels, replace caps or curves incompatibly, or bypass supported XP events may not grant Survivor XP.
 
 ## Current limits
 
@@ -74,7 +74,7 @@ Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonz
 
 ## AI Use
 
-AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. I'm grateful that AI tools helped me turn the idea into something I can share with the community. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.
+AI was used to write the code in this project. The concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues before release. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.
 
 ## Support
 

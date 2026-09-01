@@ -58,8 +58,8 @@ description=[*][b]Incompatible: [url=https://steamcommunity.com/sharedfiles/file
 description=[*][b]Currently unsupported: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705]Beyond Ten - Level 15 Skills[/url] and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643]Seesaw Game[/url][/b]. These mods directly replace progression rules that SLA relies on.
 description=[*][b]Load-order dependent: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url][/b]. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
 description=[*][b]Tested together: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url], [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939]Toughness Skill[/url], and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883]Show Skill XP Gain B42.20[/url][/b]. This combination worked without issue in testing, but compatibility with every interface or custom-skill mod cannot be guaranteed.
-description=[*][b]Potential hook conflicts:[/b] Mods that replace the game's skill-XP award functions or Events.AddXP handling, vanilla Skills panel/progress-bar methods, online-player context menus, or digital-watch rendering may conflict with the corresponding SLA feature. SLA disables an affected capability when it detects that a required hook has been replaced rather than continuing with potentially incorrect behavior.
-description=[*][b]Custom progression boundary:[/b] Compatible trainable skills that publish a usable XP curve and award XP through supported game events are expected to work. Mods that directly set skill XP or levels, replace skill caps or curves without compatible data, or otherwise bypass supported XP events may not grant Survivor XP or may be unsupported.
+description=[*][b]Potential hook conflicts:[/b] Mods that replace skill-XP award functions or Events.AddXP, the vanilla Skills panel, online-player context menus, or digital-watch rendering may conflict with the related SLA feature. If SLA detects a required hook was replaced, it disables that capability rather than risking incorrect behavior.
+description=[*][b]Custom progression boundary:[/b] Compatible trainable skills with a usable XP curve and supported XP events are expected to work. Mods that directly set skill XP or levels, replace caps or curves incompatibly, or bypass supported XP events may not grant Survivor XP.
 description=[/list]
 description=
 description=[h2]Current limits[/h2]
@@ -70,7 +70,7 @@ description=[*]Only English text is currently included.
 description=[/list]
 description=
 description=[h2]AI Use[/h2]
-description=AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. I'm grateful that AI tools helped me turn the idea into something I can share with the community. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.
+description=AI was used to write the code in this project. The concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues before release. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.
 description=
 description=[h2]Support[/h2]
 description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. All donations are strictly optional and no mod features are locked behind a paywall.
