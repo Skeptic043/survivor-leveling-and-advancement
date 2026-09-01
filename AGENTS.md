@@ -58,4 +58,5 @@ Executor-facing information is indexed separately in `.agents/INDEX.md`. Treat i
 
 - No commits or pushes in this mod repository, publication, Workshop actions, or releases without explicit user authorization.
 - Before every Workshop update or version release, prepare a non-empty Steam change note and matching GitHub release notes. Keep the canonical history in `CHANGELOG.md` and the Steam-ready copy in `assets/workshop/STEAM_CHANGE_NOTES.md`.
+- Public change notes and release notes must describe player-visible mod behavior only. Never list punctuation, formatting, tests, CI, refactoring, or other developer-facing housekeeping as a release change.
 - Record material design changes in `.project/DECISIONS.md` and update affected canonical documents together.

@@ -7,7 +7,6 @@ All notable public changes will be documented here.
 - Fixed the digital-watch Survivor XP percentage remaining visible over the full-screen world map.
 - Added sandbox toggles for Survivor XP generation from each vanilla skill and one universal toggle for compatible custom skills.
 - Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.
-- Removed semicolons from the public README and Workshop description.
 - Clarified the dedicated-server shutdown and save-loss warning.
 
 ## 1.0.0 - 2026-08-30

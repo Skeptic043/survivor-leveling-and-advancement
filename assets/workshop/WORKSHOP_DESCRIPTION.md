@@ -40,9 +40,9 @@ Survivor Level inheritance is configured through sandbox settings and allows the
 
 ## Adding or removing SLA
 
-SLA is designed to be safely added and removed from existing saves. Existing skills are preserved and historical progression is not converted into retroactive Survivor Levels.
+SLA can be added to or removed from existing saves. Existing skills are preserved, and past progression does not grant retroactive Survivor Levels.
 
-Disabling SLA removes its interface while leaving skill levels already gained through AP in place. Re-enabling SLA restores its private state and reconciles supported skill progression that occurred while it was absent.
+Disabling SLA hides its interface but leaves AP-granted skill levels in place. Re-enabling it restores SLA state and reconciles supported progression earned while it was absent.
 
 As with any mod-list change, I strongly recommend backing up any ongoing world you care about.
 
@@ -74,7 +74,7 @@ Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonz
 
 ## AI Use
 
-AI was used to write the code in this project. The concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues before release. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.
+AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.
 
 ## Support
 
