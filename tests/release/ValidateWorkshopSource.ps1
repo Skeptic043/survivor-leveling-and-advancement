@@ -314,10 +314,10 @@ foreach ($entry in $linkedMods.GetEnumerator()) {
     Assert-ReleaseCondition ($descriptionText.Contains("[$($entry.Key)]($url)")) "Markdown link for $($entry.Key)"
     Assert-ReleaseCondition ($workshopText.Contains("[url=$url]$($entry.Key)[/url]")) "Workshop link for $($entry.Key)"
 }
-$markdownHookConflictCopy = "- **Potential hook conflicts:** Mods that replace the game's skill-XP award functions or ``Events.AddXP`` handling, vanilla Skills panel/progress-bar methods, online-player context menus, or digital-watch rendering may conflict with the corresponding SLA feature. SLA disables an affected capability when it detects that a required hook has been replaced rather than continuing with potentially incorrect behavior."
-$workshopHookConflictCopy = "description=[*][b]Potential hook conflicts:[/b] Mods that replace the game's skill-XP award functions or Events.AddXP handling, vanilla Skills panel/progress-bar methods, online-player context menus, or digital-watch rendering may conflict with the corresponding SLA feature. SLA disables an affected capability when it detects that a required hook has been replaced rather than continuing with potentially incorrect behavior."
-$markdownCustomProgressionCopy = '- **Custom progression boundary:** Compatible trainable skills that publish a usable XP curve and award XP through supported game events are expected to work. Mods that directly set skill XP or levels, replace skill caps or curves without compatible data, or otherwise bypass supported XP events may not grant Survivor XP or may be unsupported.'
-$workshopCustomProgressionCopy = 'description=[*][b]Custom progression boundary:[/b] Compatible trainable skills that publish a usable XP curve and award XP through supported game events are expected to work. Mods that directly set skill XP or levels, replace skill caps or curves without compatible data, or otherwise bypass supported XP events may not grant Survivor XP or may be unsupported.'
+$markdownHookConflictCopy = '- **Potential hook conflicts:** Mods that replace skill-XP award functions or `Events.AddXP`, the vanilla Skills panel, online-player context menus, or digital-watch rendering may conflict with the related SLA feature. If SLA detects a required hook was replaced, it disables that capability rather than risking incorrect behavior.'
+$workshopHookConflictCopy = 'description=[*][b]Potential hook conflicts:[/b] Mods that replace skill-XP award functions or Events.AddXP, the vanilla Skills panel, online-player context menus, or digital-watch rendering may conflict with the related SLA feature. If SLA detects a required hook was replaced, it disables that capability rather than risking incorrect behavior.'
+$markdownCustomProgressionCopy = '- **Custom progression boundary:** Compatible trainable skills with a usable XP curve and supported XP events are expected to work. Mods that directly set skill XP or levels, replace caps or curves incompatibly, or bypass supported XP events may not grant Survivor XP.'
+$workshopCustomProgressionCopy = 'description=[*][b]Custom progression boundary:[/b] Compatible trainable skills with a usable XP curve and supported XP events are expected to work. Mods that directly set skill XP or levels, replace caps or curves incompatibly, or bypass supported XP events may not grant Survivor XP.'
 $markdownCurrentlyUnsupportedCopy = '- **Currently unsupported: [Beyond Ten - Level 15 Skills](https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705) and [Seesaw Game](https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643)**. These mods directly replace progression rules that SLA relies on.'
 $workshopCurrentlyUnsupportedCopy = 'description=[*][b]Currently unsupported: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705]Beyond Ten - Level 15 Skills[/url] and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643]Seesaw Game[/url][/b]. These mods directly replace progression rules that SLA relies on.'
 $markdownTestedTogetherCopy = "- **Tested together: [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242), [Toughness Skill](https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939), and [Show Skill XP Gain B42.20](https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883)**. This combination worked without issue in testing, but compatibility with every interface or custom-skill mod cannot be guaranteed."
@@ -371,7 +371,46 @@ Assert-ReleaseCondition (-not $readmeText.Contains(';')) 'README prose omits sem
 Assert-ReleaseCondition (-not $descriptionText.Contains(';')) 'Markdown Workshop description prose omits semicolons'
 $workshopDescriptionLines = @($workshopLines | Where-Object { $_.StartsWith('description=', [StringComparison]::Ordinal) })
 Assert-ReleaseCondition (@($workshopDescriptionLines -match ';').Count -eq 0) 'Workshop description lines omit semicolons'
-$aiUseDisclosure = "AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. I'm grateful that AI tools helped me turn the idea into something I can share with the community. If you prefer not to use mods developed with AI assistance, I understand and respect that choice."
+
+function Get-WorkshopDescriptionPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Lines,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Separator
+    )
+
+    $descriptionValues = @(
+        $Lines |
+            Where-Object { $_.StartsWith('description=', [StringComparison]::Ordinal) } |
+            ForEach-Object { $_.Substring('description='.Length) }
+    )
+    return [string]::Join($Separator, $descriptionValues)
+}
+
+function Test-WorkshopDescriptionWithinLimit {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Lines,
+        [Parameter(Mandatory = $true)]
+        [int]$MaximumLength
+    )
+
+    $payload = Get-WorkshopDescriptionPayload -Lines $Lines -Separator "`r`n"
+    return $payload.Length -le $MaximumLength
+}
+
+$workshopDescriptionLimit = 7800
+$workshopDescriptionPayloadLF = Get-WorkshopDescriptionPayload -Lines $workshopLines -Separator "`n"
+$workshopDescriptionPayloadCRLF = Get-WorkshopDescriptionPayload -Lines $workshopLines -Separator "`r`n"
+Assert-ReleaseCondition (Test-WorkshopDescriptionWithinLimit -Lines $workshopLines -MaximumLength $workshopDescriptionLimit) "Workshop description conservative CRLF payload exceeds $workshopDescriptionLimit characters"
+$overLimitWorkshopFixture = @("description=$('x' * ($workshopDescriptionLimit + 1))")
+Assert-ReleaseCondition (-not (Test-WorkshopDescriptionWithinLimit -Lines $overLimitWorkshopFixture -MaximumLength $workshopDescriptionLimit)) 'over-limit Workshop description fixture fails'
+
+$aiUseDisclosure = 'AI was used to write the code in this project. The concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues before release. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.'
 $workshopAIUseDisclosure = "description=$aiUseDisclosure"
 Assert-ReleaseCondition (@($descriptionLines -ceq '## AI Use').Count -eq 1) 'exact Markdown AI Use heading'
 Assert-ReleaseCondition (@($workshopLines -ceq 'description=[h2]AI Use[/h2]').Count -eq 1) 'exact Workshop AI Use heading'
@@ -477,4 +516,5 @@ foreach ($privatePattern in @('C:\\Users\\', 's8a_x', '\.codex')) {
     Assert-ReleaseCondition (-not ($publicText -match $privatePattern)) "public text excludes $privatePattern"
 }
 
+Write-Host "Workshop description payload length: LF=$($workshopDescriptionPayloadLF.Length), CRLF=$($workshopDescriptionPayloadCRLF.Length), limit=$workshopDescriptionLimit."
 Write-Host "Workshop release-source validation passed ($($script:Assertions) assertions)."
