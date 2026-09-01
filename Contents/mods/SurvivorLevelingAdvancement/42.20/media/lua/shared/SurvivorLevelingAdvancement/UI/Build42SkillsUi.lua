@@ -311,6 +311,8 @@ local function projectAllotment(settings)
         survivorMultiplier = true,
         fitnessStrengthNormalization = true,
         automaticCurveNormalization = true,
+        customSkillSurvivorXpEnabled = true,
+        perSkillSurvivorXpEnabled = true,
         allotmentMode = true,
         globalLimit = true,
         perSkillDefault = true,
@@ -324,12 +326,19 @@ local function projectAllotment(settings)
         or not finite(rawget(settings, "fitnessStrengthNormalization"))
         or rawget(settings, "fitnessStrengthNormalization") < 0
         or type(rawget(settings, "automaticCurveNormalization")) ~= "boolean"
+        or type(rawget(settings, "customSkillSurvivorXpEnabled")) ~= "boolean"
         or not nonnegativeInteger(rawget(settings, "globalLimit"))
         or not nonnegativeInteger(rawget(settings, "perSkillDefault"))
         or type(rawget(settings, "inheritanceEnabled")) ~= "boolean"
         or not finite(rawget(settings, "retainedRatio"))
         or rawget(settings, "retainedRatio") < 0
         or rawget(settings, "retainedRatio") > 1 then return nil end
+    local contributionSettings = rawget(settings, "perSkillSurvivorXpEnabled")
+    if type(contributionSettings) ~= "table"
+        or getmetatable(contributionSettings) ~= nil then return nil end
+    for perkId, enabled in pairs(contributionSettings) do
+        if not safeId(perkId, 128) or type(enabled) ~= "boolean" then return nil end
+    end
     local mode = rawget(settings, "allotmentMode")
     if mode == "Global" then
         return { mode = mode, globalLimit = rawget(settings, "globalLimit") }

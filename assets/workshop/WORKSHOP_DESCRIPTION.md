@@ -25,6 +25,7 @@ Survivor Level inheritance is configured through sandbox settings and allows the
 - Integrated directly into the vanilla skills panel
 - A separately configurable Survivor XP multiplier that does not change skill XP
 - Configurable Fitness and Strength contribution to Survivor XP
+- Configurable Survivor XP generation for each vanilla skill and one universal compatible-custom-skill toggle
 - Automatic curve normalization for compatible custom skills
 - Server-authoritative multiplayer progression
 - Online-player administration for inspecting progression, awarding XP or levels, and clearing advancements

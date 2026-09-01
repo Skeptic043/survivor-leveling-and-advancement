@@ -29,7 +29,7 @@ end
 function Build42WatchUi.create(dependencies)
     if type(dependencies) ~= "table" then return failure("invalid_dependencies", "dependencies") end
     local required = {
-        "optionEnabled", "getClock", "minuteStamp", "getPlayer", "isDead", "createPanel",
+        "optionEnabled", "isWorldMapVisible", "getClock", "minuteStamp", "getPlayer", "isDead", "createPanel",
     }
     for index = 1, #required do
         if not callable(rawget(dependencies, required[index])) then
@@ -100,6 +100,11 @@ function Build42WatchUi.create(dependencies)
             hide()
             return
         end
+        local mapVisible = safeCall(dependencies.isWorldMapVisible)
+        if type(mapVisible) ~= "boolean" or mapVisible then
+            hide()
+            return
+        end
         local clock = safeCall(dependencies.getClock)
         local dateVisible = clock ~= nil and safeCall(function() return clock:isDateVisible() end) == true
         if not dateVisible then
@@ -142,6 +147,8 @@ function Build42WatchUi.create(dependencies)
 
     local function render()
         if not display or panel == nil or percentValue == nil then return end
+        local mapVisible = safeCall(dependencies.isWorldMapVisible)
+        if type(mapVisible) ~= "boolean" or mapVisible then hide(); return end
         local widthCalled, width = pcall(panel.width)
         local heightCalled, height = pcall(panel.height)
         if not widthCalled or not heightCalled

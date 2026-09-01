@@ -86,6 +86,8 @@ local function settings(mode, fitnessStrengthNormalization)
         fitnessStrengthNormalization = fitnessStrengthNormalization == nil
             and 0.067 or fitnessStrengthNormalization,
         automaticCurveNormalization = true,
+        customSkillSurvivorXpEnabled = true,
+        perSkillSurvivorXpEnabled = { Axe = true },
         allotmentMode = mode or "Global",
         globalLimit = 6,
         perSkillDefault = 2,
@@ -140,6 +142,7 @@ local function makeEnvironment(options)
         joypadHighlights = {},
         mode = options.mode or "Global",
         fitnessStrengthNormalization = options.fitnessStrengthNormalization,
+        contributionSettingsMutation = options.contributionSettingsMutation,
         pending = { false, false, false, false },
         terminalResults = {},
         reason = options.reason,
@@ -401,6 +404,13 @@ local function makeEnvironment(options)
             if evidence.settingsThrows then error("settings boom") end
             if evidence.malformedSettings then return nil end
             local value = settings(evidence.mode, evidence.fitnessStrengthNormalization)
+            if evidence.contributionSettingsMutation == "custom" then
+                value.customSkillSurvivorXpEnabled = "true"
+            elseif evidence.contributionSettingsMutation == "map" then
+                value.perSkillSurvivorXpEnabled = { ["bad perk"] = true }
+            elseif evidence.contributionSettingsMutation == "value" then
+                value.perSkillSurvivorXpEnabled.Axe = 1
+            end
             evidence.lastRawSettings = value
             return value
         end,
@@ -958,6 +968,13 @@ equal(firstInput.allotment.globalLimit, 6, "Global limit projected")
 expect(environment.lastRawSettings.inheritanceEnabled == true
     and environment.lastRawSettings.retainedRatio == 0.5,
     "live inheritance settings shape is accepted without entering the allotment projection")
+expect(environment.lastRawSettings.customSkillSurvivorXpEnabled == true
+    and environment.lastRawSettings.perSkillSurvivorXpEnabled.Axe == true,
+    "expanded contribution settings shape is accepted")
+equal(firstInput.allotment.customSkillSurvivorXpEnabled, nil,
+    "custom contribution setting does not enter the allotment projection")
+equal(firstInput.allotment.perSkillSurvivorXpEnabled, nil,
+    "per-skill contribution settings do not enter the allotment projection")
 expect(firstInput.rows[1].perkId == "Axe" and firstInput.rows[1].currentLevel == 1
     and firstInput.rows[1].effectiveMaximum == 10, "resolved row projected")
 local axeButton = axe.children[1]
@@ -1537,6 +1554,9 @@ do
     equal(advancementSlots.x, view.parent.width - 4,
         "Global slots bind four logical pixels from the containing-window right edge")
     expect(survivorXp ~= nil, "second row binds exact cached Survivor XP")
+    expect(survivorLevel ~= nil and survivorXp ~= nil and advancementSlots ~= nil
+        and availableAp ~= nil,
+        "expanded provider settings preserve Level, XP, Slots, and AP header model")
     equal(survivorXp.kind, "left", "Survivor XP binds to the second-row left edge")
     equal(survivorXp.x, 4,
         "Survivor XP binds four logical pixels from the left edge")
@@ -2187,6 +2207,25 @@ do
     retryButton:click()
     equal(retryEnvironment.requests[1], 1,
         "new pending state still deduplicates activation after clearing old terminal")
+end
+
+for _, mutation in ipairs({ "custom", "map", "value" }) do
+    local contributionFailureEnvironment = makeEnvironment({
+        contributionSettingsMutation = mutation,
+    })
+    expect(contributionFailureEnvironment.integration.install().ok,
+        "malformed contribution settings integration installs: " .. mutation)
+    local contributionFailureBar = makeBar(contributionFailureEnvironment, "Axe")
+    local contributionFailureView = makeView(
+        contributionFailureEnvironment, 0, { contributionFailureBar }, false)
+    contributionFailureView:prerender()
+    contributionFailureView:render()
+    equal(contributionFailureEnvironment.modelBuilds, 0,
+        "malformed contribution settings fail before model build: " .. mutation)
+    expect(not contributionFailureBar.children[1].enabled,
+        "malformed contribution settings disable SLA presentation: " .. mutation)
+    equal(#contributionFailureView.statusDraws, 0,
+        "malformed contribution settings suppress the SLA header: " .. mutation)
 end
 
 local failureEnvironment = makeEnvironment()

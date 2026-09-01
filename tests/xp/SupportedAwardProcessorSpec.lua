@@ -403,6 +403,13 @@ do
     equal(result.survivorXp, 0, "zero contribution grants no Survivor XP")
     equal(result.naturalEligibleBase, 0, "zero contribution has no eligible Survivor base")
     equal(result.stateWritten, false, "zero contribution does not write Survivor state")
+    equal(env.store.loadCount, 1, "zero contribution Free movement loads accepted state once")
+    equal(env.recovery.count, 1, "zero contribution Free movement still runs recovery")
+    equal(env.accountingMode.count, 1, "zero contribution Free movement still synchronizes accounting")
+    equal(env.store.state.accountingMode, "Free", "zero contribution preserves Free accounting mode")
+    equal(env.resolver.resolveCount, 0, "zero contribution Free movement needs no tracked adapter")
+    equal(env.observation.getCount, 0, "zero contribution Free movement needs no observation read")
+    equal(env.observation.setCount, 0, "zero contribution Free movement needs no observation write")
 end
 do
     local state = freshState()
@@ -411,7 +418,13 @@ do
     local result = env.service.process(env.player, award(10, 10, 10, 20), settings(0, 100))
     expect(result.ok, "tracked zero contribution award succeeds")
     equal(result.survivorXp, 0, "tracked zero contribution grants no Survivor XP")
+    expect(result.stateWritten, "tracked zero contribution persists accepted accounting movement")
+    equal(env.store.saveCount, 1, "tracked zero contribution saves accepted movement once")
+    equal(env.store.state.perks.Aiming.naturalPosition, 20, "tracked zero contribution advances natural position")
     equal(env.store.state.perks.Aiming.highWaterPosition, 20, "tracked zero contribution keeps natural progression")
+    equal(env.store.state.perks.Aiming.observedPosition, 20, "tracked zero contribution persists observed position")
+    equal(env.observation.peek(env.player, "Aiming"), 20, "tracked zero contribution advances volatile observation")
+    equal(env.accountingMode.count, 1, "tracked zero contribution synchronizes accounting once")
 end
 do
     local cases = {

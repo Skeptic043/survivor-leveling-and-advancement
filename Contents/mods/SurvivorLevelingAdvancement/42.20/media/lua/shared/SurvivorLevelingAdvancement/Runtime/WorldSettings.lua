@@ -4,6 +4,8 @@ local allowedRawKeys = {
     survivorMultiplier = true,
     fitnessStrengthNormalization = true,
     automaticCurveNormalization = true,
+    customSkillSurvivorXpEnabled = true,
+    perSkillSurvivorXpEnabled = true,
     allotmentMode = true,
     globalLimit = true,
     perSkillDefault = true,
@@ -86,6 +88,28 @@ local function copyOverrides(overrides)
     return copy
 end
 
+local function copyBooleanMap(values)
+    if not noMetatable(values) then
+        return nil
+    end
+
+    local copy = {}
+    local ok = pcall(function()
+        for perkId, enabled in pairs(values) do
+            if not isSafePerkId(perkId) or type(enabled) ~= "boolean" then
+                error("invalid per-skill Survivor XP setting")
+            end
+            copy[perkId] = enabled
+        end
+    end)
+
+    if not ok then
+        return nil
+    end
+
+    return copy
+end
+
 local function readRaw(provider)
     local called, raw = pcall(provider.read)
     if not called then
@@ -109,6 +133,8 @@ local function readRaw(provider)
     local survivorMultiplier = rawget(raw, "survivorMultiplier")
     local fitnessStrengthNormalization = rawget(raw, "fitnessStrengthNormalization")
     local automaticCurveNormalization = rawget(raw, "automaticCurveNormalization")
+    local customSkillSurvivorXpEnabled = rawget(raw, "customSkillSurvivorXpEnabled")
+    local perSkillSurvivorXpEnabled = rawget(raw, "perSkillSurvivorXpEnabled")
     local allotmentMode = rawget(raw, "allotmentMode")
     local globalLimit = rawget(raw, "globalLimit")
     local perSkillDefault = rawget(raw, "perSkillDefault")
@@ -123,6 +149,7 @@ local function readRaw(provider)
         or not isFiniteNumber(fitnessStrengthNormalization)
         or fitnessStrengthNormalization < 0
         or type(automaticCurveNormalization) ~= "boolean"
+        or type(customSkillSurvivorXpEnabled) ~= "boolean"
         or (allotmentMode ~= "Global" and allotmentMode ~= "PerSkill" and allotmentMode ~= "Free")
         or not isNonnegativeInteger(globalLimit)
         or not isNonnegativeInteger(perSkillDefault) then
@@ -137,11 +164,17 @@ local function readRaw(provider)
     if copiedOverrides == nil then
         return nil, "invalid_settings", "settings contain invalid per-skill overrides"
     end
+    local copiedSurvivorXpSettings = copyBooleanMap(perSkillSurvivorXpEnabled)
+    if copiedSurvivorXpSettings == nil then
+        return nil, "invalid_settings", "settings contain invalid per-skill Survivor XP settings"
+    end
 
     return {
         survivorMultiplier = survivorMultiplier,
         fitnessStrengthNormalization = fitnessStrengthNormalization,
         automaticCurveNormalization = automaticCurveNormalization,
+        customSkillSurvivorXpEnabled = customSkillSurvivorXpEnabled,
+        perSkillSurvivorXpEnabled = copiedSurvivorXpSettings,
         allotmentMode = allotmentMode,
         globalLimit = globalLimit,
         perSkillDefault = perSkillDefault,
@@ -197,7 +230,11 @@ function WorldSettings.create(dependencies)
         end
 
         local normalization = 1
-        if perkId == "Fitness" or perkId == "Strength" then
+        local survivorXpEnabled = raw.perSkillSurvivorXpEnabled[perkId]
+        if survivorXpEnabled == nil then survivorXpEnabled = raw.customSkillSurvivorXpEnabled end
+        if not survivorXpEnabled then
+            normalization = 0
+        elseif perkId == "Fitness" or perkId == "Strength" then
             normalization = raw.fitnessStrengthNormalization
         elseif raw.automaticCurveNormalization then
             normalization = normalizationByPerk[perkId]

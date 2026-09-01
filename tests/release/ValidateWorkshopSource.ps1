@@ -66,6 +66,7 @@ Assert-ReleaseCondition (@($workshopLines -match '^description=').Count -ge 30) 
 $descriptionLines = @(Get-Content -LiteralPath $descriptionPath)
 $descriptionText = Get-Content -Raw -LiteralPath $descriptionPath
 $workshopText = Get-Content -Raw -LiteralPath $workshopPath
+$readmeLines = @(Get-Content -LiteralPath $readmePath)
 $readmeText = Get-Content -Raw -LiteralPath $readmePath
 $changelogLines = @(Get-Content -LiteralPath $changelogPath)
 $steamChangeNoteLines = @(Get-Content -LiteralPath $steamChangeNotesPath)
@@ -97,26 +98,59 @@ function Get-MarkdownSectionBody {
 
 Assert-ReleaseCondition (@($changelogLines -ceq '## 1.0.0 - 2026-08-30').Count -eq 1) 'exact released 1.0.0 changelog heading'
 Assert-ReleaseCondition (@($changelogLines -ceq '## 1.0.0 - Unreleased').Count -eq 0) 'changelog omits stale 1.0.0 Unreleased heading'
-Assert-ReleaseCondition (@($changelogLines -ceq '## Unreleased').Count -eq 1) 'exact one changelog Unreleased heading'
-Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## Next update').Count -eq 1) 'exact one Steam Next update heading'
+Assert-ReleaseCondition (@($changelogLines -ceq '## 1.1.0 - 2026-09-01').Count -eq 1) 'exact released 1.1.0 changelog heading'
+Assert-ReleaseCondition (@($changelogLines -ceq '## Unreleased').Count -eq 0) 'changelog omits stale Unreleased heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.1.0').Count -eq 1) 'exact released Steam 1.1.0 heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## Next update').Count -eq 0) 'Steam notes omit stale Next update heading'
+$authoringReminder = 'Add any further player-visible changes here before the next upload.'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq $authoringReminder).Count -eq 0) 'Steam notes omit the release-authoring reminder'
 Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.0.0').Count -eq 1) 'exact one Steam 1.0.0 heading'
-$unreleasedChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Heading '## Unreleased')
-$nextUpdateBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## Next update')
+$release110ChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Heading '## 1.1.0 - 2026-09-01')
+$release110SteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.1.0')
 $releasedSteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.0.0')
-$unreleasedChangelogContent = @($unreleasedChangelogBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$nextUpdateContent = @($nextUpdateBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$release110ChangelogContent = @($release110ChangelogBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$release110SteamContent = @($release110SteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $releasedSteamContent = @($releasedSteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $expectedNextUpdateBullets = @(
+    '- Fixed the digital-watch Survivor XP percentage remaining visible over the full-screen world map.'
+    '- Added sandbox toggles for Survivor XP generation from each vanilla skill and one universal toggle for compatible custom skills.'
     '- Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.'
     '- Removed semicolons from the public README and Workshop description.'
     '- Clarified the dedicated-server shutdown and save-loss warning.'
 )
-$unreleasedChangelogBullets = @($unreleasedChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
-$nextUpdateBullets = @($nextUpdateBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
-Assert-ReleaseCondition ($unreleasedChangelogContent.Count -gt 0) 'non-empty changelog Unreleased section'
-Assert-ReleaseCondition ($nextUpdateContent.Count -gt 0) 'non-empty Steam Next update section'
-Assert-ReleaseCondition ([string]::Join("`n", $unreleasedChangelogBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact changelog Unreleased update bullets'
-Assert-ReleaseCondition ([string]::Join("`n", $nextUpdateBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact matching Steam Next update bullets'
+$release110ChangelogBullets = @($release110ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+$release110SteamBullets = @($release110SteamBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+Assert-ReleaseCondition ($release110ChangelogContent.Count -gt 0) 'non-empty changelog 1.1.0 section'
+Assert-ReleaseCondition ($release110SteamContent.Count -gt 0) 'non-empty Steam 1.1.0 section'
+Assert-ReleaseCondition ([string]::Join("`n", $release110ChangelogBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact changelog 1.1.0 update bullets'
+Assert-ReleaseCondition ([string]::Join("`n", $release110SteamBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact matching Steam 1.1.0 update bullets'
+$changelogWithoutWatchMapNote = @($release110ChangelogBullets | Where-Object { $_ -cne $expectedNextUpdateBullets[0] })
+$steamWithoutContributionNote = @($release110SteamBullets | Where-Object { $_ -cne $expectedNextUpdateBullets[1] })
+Assert-ReleaseCondition (-not ([string]::Join("`n", $changelogWithoutWatchMapNote) -ceq [string]::Join("`n", $expectedNextUpdateBullets))) 'missing watch-map changelog note fixture fails exact bullets'
+Assert-ReleaseCondition (-not ([string]::Join("`n", $steamWithoutContributionNote) -ceq [string]::Join("`n", $expectedNextUpdateBullets))) 'missing contribution Steam note fixture fails exact bullets'
+
+function Test-NoStaleReleaseAuthoring {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Changelog,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$SteamNotes
+    )
+
+    return @($Changelog -ceq '## Unreleased').Count -eq 0 `
+        -and @($SteamNotes -ceq '## Next update').Count -eq 0 `
+        -and @($SteamNotes -ceq $authoringReminder).Count -eq 0
+}
+
+Assert-ReleaseCondition (Test-NoStaleReleaseAuthoring -Changelog $changelogLines -SteamNotes $steamChangeNoteLines) 'release cut contains no stale authoring markers'
+$staleChangelogHeadingFixture = @($changelogLines + '## Unreleased')
+$staleSteamHeadingFixture = @($steamChangeNoteLines + '## Next update')
+$staleSteamReminderFixture = @($steamChangeNoteLines + $authoringReminder)
+Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $staleChangelogHeadingFixture -SteamNotes $steamChangeNoteLines)) 'stale Unreleased heading fixture fails'
+Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $changelogLines -SteamNotes $staleSteamHeadingFixture)) 'stale Next update heading fixture fails'
+Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $changelogLines -SteamNotes $staleSteamReminderFixture)) 'stale authoring reminder fixture fails'
 Assert-ReleaseCondition ($releasedSteamContent.Count -gt 0) 'non-empty Steam 1.0.0 section'
 $howItWorksCopy = "SLA gives each character a Survivor Level separate from normal skills. Supported trainable skill XP also earns Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level. The final advancement to a skill's effective maximum, normally level 9 to level 10, requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery only requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost."
 $staleHowItWorksCopy = "Trainable skill XP also earns you Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla Skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. By default, you are limited to 3 Advancement Slots across all skills. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level."
@@ -146,6 +180,18 @@ $featureCopy = @(
     'Optional Survivor Level inheritance after death'
     'Optional Player 1 Survivor XP percentage inside the digital watch, enabled through Mod Options in the settings menu'
 )
+$readmeContributionDisclosure = '- Let hosts enable or disable Survivor XP generation for individual vanilla skills and all compatible custom skills.'
+$markdownContributionDisclosure = '- Configurable Survivor XP generation for each vanilla skill and one universal compatible-custom-skill toggle'
+$workshopContributionDisclosure = 'description=[*]Configurable Survivor XP generation for each vanilla skill and one universal compatible-custom-skill toggle'
+Assert-ReleaseCondition (@($readmeLines -ceq $readmeContributionDisclosure).Count -eq 1) 'exact README per-skill contribution disclosure'
+Assert-ReleaseCondition (@($descriptionLines -ceq $markdownContributionDisclosure).Count -eq 1) 'exact Markdown per-skill contribution disclosure'
+Assert-ReleaseCondition (@($workshopLines -ceq $workshopContributionDisclosure).Count -eq 1) 'exact Workshop per-skill contribution disclosure'
+$readmeWithoutContributionDisclosure = @($readmeLines | Where-Object { $_ -cne $readmeContributionDisclosure })
+$markdownWithoutContributionDisclosure = @($descriptionLines | Where-Object { $_ -cne $markdownContributionDisclosure })
+$workshopWithoutContributionDisclosure = @($workshopLines | Where-Object { $_ -cne $workshopContributionDisclosure })
+Assert-ReleaseCondition (-not (@($readmeWithoutContributionDisclosure -ceq $readmeContributionDisclosure).Count -eq 1)) 'missing README contribution disclosure fixture fails'
+Assert-ReleaseCondition (-not (@($markdownWithoutContributionDisclosure -ceq $markdownContributionDisclosure).Count -eq 1)) 'missing Markdown contribution disclosure fixture fails'
+Assert-ReleaseCondition (-not (@($workshopWithoutContributionDisclosure -ceq $workshopContributionDisclosure).Count -eq 1)) 'missing Workshop contribution disclosure fixture fails'
 Assert-ReleaseCondition (@($descriptionLines -ceq $howItWorksCopy).Count -eq 1) 'exact Markdown separate Survivor Level and lower-case skills-panel opening'
 Assert-ReleaseCondition (@($workshopLines -ceq "description=$howItWorksCopy").Count -eq 1) 'exact Workshop separate Survivor Level and lower-case skills-panel opening'
 Assert-ReleaseCondition (-not $descriptionText.Contains($staleHowItWorksCopy)) 'Markdown omits replaced capitalized Skills-panel opening'

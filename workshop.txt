@@ -26,6 +26,7 @@ description=[list]
 description=[*]Integrated directly into the vanilla skills panel
 description=[*]A separately configurable Survivor XP multiplier that does not change skill XP
 description=[*]Configurable Fitness and Strength contribution to Survivor XP
+description=[*]Configurable Survivor XP generation for each vanilla skill and one universal compatible-custom-skill toggle
 description=[*]Automatic curve normalization for compatible custom skills
 description=[*]Server-authoritative multiplayer progression
 description=[*]Online-player administration for inspecting progression, awarding XP or levels, and clearing advancements

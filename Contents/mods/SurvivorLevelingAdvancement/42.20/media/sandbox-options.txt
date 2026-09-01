@@ -28,6 +28,14 @@ option SurvivorLevelingAdvancement.AutomaticCurveNormalization
     translation = SLA_AutomaticCurveNormalization,
 }
 
+option SurvivorLevelingAdvancement.CustomSkillSurvivorXp
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_CustomSkillSurvivorXp,
+}
+
 option SurvivorLevelingAdvancement.EnableSurvivorLevelInheritance
 {
     type = boolean,
@@ -424,4 +432,284 @@ option SurvivorLevelingAdvancement.PerSkillLimit_Glassmaking
     page = SLA,
     translation = SLA_PerSkill_Glassmaking,
     valueTranslation = SLA_PerSkillLimit,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Fitness
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Fitness,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Strength
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Strength,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Sprinting
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Sprinting,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Lightfoot
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Lightfoot,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Nimble
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Nimble,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Sneak
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Sneak,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Axe
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Axe,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Blunt
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Blunt,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_SmallBlunt
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_SmallBlunt,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_LongBlade
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_LongBlade,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_SmallBlade
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_SmallBlade,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Spear
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Spear,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Maintenance
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Maintenance,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Farming
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Farming,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Husbandry
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Husbandry,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Woodwork
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Woodwork,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Carving
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Carving,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Cooking
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Cooking,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Electricity
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Electricity,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Doctor
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Doctor,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_FlintKnapping
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_FlintKnapping,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Masonry
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Masonry,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Mechanics
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Mechanics,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Blacksmith
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Blacksmith,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Pottery
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Pottery,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Tailoring
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Tailoring,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_MetalWelding
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_MetalWelding,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Aiming
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Aiming,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Reloading
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Reloading,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Fishing
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Fishing,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_PlantScavenging
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_PlantScavenging,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Tracking
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Tracking,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Trapping
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Trapping,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Butchering
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Butchering,
+}
+
+option SurvivorLevelingAdvancement.SkillSurvivorXp_Glassmaking
+{
+    type = boolean,
+    default = true,
+    page = SLA,
+    translation = SLA_SkillSurvivorXp_Glassmaking,
 }
