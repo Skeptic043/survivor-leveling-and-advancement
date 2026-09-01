@@ -115,7 +115,6 @@ $expectedNextUpdateBullets = @(
     '- Fixed the digital-watch Survivor XP percentage remaining visible over the full-screen world map.'
     '- Added sandbox toggles for Survivor XP generation from each vanilla skill and one universal toggle for compatible custom skills.'
     '- Replaced the SLA-only Workshop browse thumbnail with the full-name artwork.'
-    '- Removed semicolons from the public README and Workshop description.'
     '- Clarified the dedicated-server shutdown and save-loss warning.'
 )
 $release110ChangelogBullets = @($release110ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
@@ -124,10 +123,47 @@ Assert-ReleaseCondition ($release110ChangelogContent.Count -gt 0) 'non-empty cha
 Assert-ReleaseCondition ($release110SteamContent.Count -gt 0) 'non-empty Steam 1.1.0 section'
 Assert-ReleaseCondition ([string]::Join("`n", $release110ChangelogBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact changelog 1.1.0 update bullets'
 Assert-ReleaseCondition ([string]::Join("`n", $release110SteamBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact matching Steam 1.1.0 update bullets'
+Assert-ReleaseCondition ([string]::Join("`n", $release110ChangelogBullets) -ceq [string]::Join("`n", $release110SteamBullets)) 'exact ordered equality between changelog and Steam 1.1.0 bullets'
 $changelogWithoutWatchMapNote = @($release110ChangelogBullets | Where-Object { $_ -cne $expectedNextUpdateBullets[0] })
 $steamWithoutContributionNote = @($release110SteamBullets | Where-Object { $_ -cne $expectedNextUpdateBullets[1] })
 Assert-ReleaseCondition (-not ([string]::Join("`n", $changelogWithoutWatchMapNote) -ceq [string]::Join("`n", $expectedNextUpdateBullets))) 'missing watch-map changelog note fixture fails exact bullets'
 Assert-ReleaseCondition (-not ([string]::Join("`n", $steamWithoutContributionNote) -ceq [string]::Join("`n", $expectedNextUpdateBullets))) 'missing contribution Steam note fixture fails exact bullets'
+
+$developerFacingHousekeepingPatterns = @(
+    '(?i)\bsemicolons?\b|;'
+    '(?i)\bpunctuation\b'
+    '(?i)\bformatting\b'
+    '(?i)\brefactor(?:ed|ing|s)?\b'
+    '(?i)\btest suite\b'
+    '(?i)\bvalidator\b'
+    '(?i)\bCI\b'
+)
+
+function Test-NoDeveloperFacingReleaseHousekeeping {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Bullets
+    )
+
+    $bulletText = [string]::Join("`n", $Bullets)
+    return @($developerFacingHousekeepingPatterns | Where-Object { $bulletText -match $_ }).Count -eq 0
+}
+
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release110ChangelogBullets) 'current changelog 1.1.0 bullets omit developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release110SteamBullets) 'current Steam 1.1.0 bullets omit developer-facing housekeeping'
+$developerFacingHousekeepingFixtures = @(
+    '- Removed semicolons from public copy.'
+    '- Updated punctuation in public copy.'
+    '- Adjusted formatting in public copy.'
+    '- Refactored the release workflow.'
+    '- Expanded the test suite.'
+    '- Updated the release validator.'
+    '- Adjusted CI checks.'
+)
+foreach ($fixture in $developerFacingHousekeepingFixtures) {
+    Assert-ReleaseCondition (-not (Test-NoDeveloperFacingReleaseHousekeeping -Bullets @($fixture))) "developer-facing housekeeping fixture is rejected: $fixture"
+}
 
 function Test-NoStaleReleaseAuthoring {
     param(
@@ -410,7 +446,7 @@ Assert-ReleaseCondition (Test-WorkshopDescriptionWithinLimit -Lines $workshopLin
 $overLimitWorkshopFixture = @("description=$('x' * ($workshopDescriptionLimit + 1))")
 Assert-ReleaseCondition (-not (Test-WorkshopDescriptionWithinLimit -Lines $overLimitWorkshopFixture -MaximumLength $workshopDescriptionLimit)) 'over-limit Workshop description fixture fails'
 
-$aiUseDisclosure = 'AI was used to write the code in this project. The concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues before release. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.'
+$aiUseDisclosure = 'AI was used to write all of the code in this project. The original concept, design direction, testing, debugging, and release decisions are my own. I spent many hours personally testing SLA and working through issues to make sure it behaves as intended. If you prefer not to use mods developed with AI assistance, I understand and respect that choice.'
 $workshopAIUseDisclosure = "description=$aiUseDisclosure"
 Assert-ReleaseCondition (@($descriptionLines -ceq '## AI Use').Count -eq 1) 'exact Markdown AI Use heading'
 Assert-ReleaseCondition (@($workshopLines -ceq 'description=[h2]AI Use[/h2]').Count -eq 1) 'exact Workshop AI Use heading'
