@@ -152,7 +152,12 @@ Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $staleCha
 Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $changelogLines -SteamNotes $staleSteamHeadingFixture)) 'stale Next update heading fixture fails'
 Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $changelogLines -SteamNotes $staleSteamReminderFixture)) 'stale authoring reminder fixture fails'
 Assert-ReleaseCondition ($releasedSteamContent.Count -gt 0) 'non-empty Steam 1.0.0 section'
-$howItWorksCopy = "SLA gives each character a Survivor Level separate from normal skills. Supported trainable skill XP also earns Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level. The final advancement to a skill's effective maximum, normally level 9 to level 10, requires 2 AP to 'master' the skill along with 2 free Advancement Slots, and clears any active Advancement Slots on the skill. If you have Global or Per Skill Advancement Slot limits set to 1, then mastery only requires 1 free Advancement Slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while retaining the 2 AP cost."
+$openingSummaryCopy = 'Level your skills through normal play while also progressing your Survivor Level and earning Advancement Points to boost selected skills while keeping natural progression important.'
+$howItWorksCopy = @(
+    'SLA gives each character a Survivor Level separate from their normal skills. By default, XP earned in supported trainable skills also earns Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent directly in the vanilla skills panel to raise the level of a selected skill.'
+    "Advancing a skill with AP occupies the required number of Advancement Slots. To earn a slot back, you must naturally earn the XP that the AP allowed you to bypass. That XP still applies toward the skill's next level, allowing AP to boost your progress without replacing natural skill progression."
+    "The final advancement to a skill's effective maximum, normally level 9 to level 10, is considered mastering the skill. Mastery costs 2 AP and requires 2 free Advancement Slots, then clears any active Advancement Slots on that skill. If the Global or Per Skill slot limit is set to 1, mastery only requires 1 free slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while still retaining the 2 AP cost."
+)
 $staleHowItWorksCopy = "Trainable skill XP also earns you Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent in the vanilla Skills panel to raise the level of a selected skill, spending the required AP and occupying the required number of Advancement Slots. By default, you are limited to 3 Advancement Slots across all skills. In order to earn a slot back, you must naturally earn the XP in the skill the AP was spent to bypass, while that same XP still applies toward your next level."
 $advancementModeCopy = @(
     '**Global:** Shares one configurable pool of Advancement Slots across every skill, with a default limit of 3 active slots in total.'
@@ -167,7 +172,53 @@ $workshopAdvancementModeCopy = @(
 $staleFreeModeCopy = 'Free mode does not track catch-up or recovery.'
 $modeRecoveryCopy = 'In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts that skill into a recovery state that grants no Survivor XP until the lost progress is recovered.'
 $modeAccountingNote = 'Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved catch-up or recovery, and switching back to Global or Per Skill restores only what remains.'
-$levelInheritanceCopy = "Survivor Level inheritance is configured through sandbox settings and allows the host to set a percentage of a deceased character's Survivor Level that passes to that player's next eligible survivor. This allows you to continue playing in a world you've invested significant progress, while still retaining some of the downside of becoming Zomboid chow."
+$levelInheritanceCopy = "Survivor Level inheritance is configured through sandbox settings and allows the host to set a percentage of a deceased character's Survivor Level that passes to that player's next eligible survivor. This allows you to continue playing in a world you've invested significant progress in, while still retaining some of the downside of becoming Zomboid chow."
+$orderedContentContract = @(
+    [pscustomobject]@{ Markdown = '## Features'; Workshop = 'description=[h2]Features[/h2]' }
+    [pscustomobject]@{ Markdown = '## How it works'; Workshop = 'description=[h2]How it works[/h2]' }
+    [pscustomobject]@{ Markdown = $howItWorksCopy[0]; Workshop = "description=$($howItWorksCopy[0])" }
+    [pscustomobject]@{ Markdown = $howItWorksCopy[1]; Workshop = "description=$($howItWorksCopy[1])" }
+    [pscustomobject]@{ Markdown = $howItWorksCopy[2]; Workshop = "description=$($howItWorksCopy[2])" }
+    [pscustomobject]@{ Markdown = '## Advancement modes'; Workshop = 'description=[h2]Advancement modes[/h2]' }
+    [pscustomobject]@{ Markdown = '## Optional level inheritance'; Workshop = 'description=[h2]Optional level inheritance[/h2]' }
+    [pscustomobject]@{ Markdown = '## Adding or removing SLA'; Workshop = 'description=[h2]Adding or removing SLA[/h2]' }
+    [pscustomobject]@{ Markdown = '## Dedicated servers and hosting'; Workshop = 'description=[h2]Dedicated servers and hosting[/h2]' }
+    [pscustomobject]@{ Markdown = '## Compatibility'; Workshop = 'description=[h2]Compatibility[/h2]' }
+    [pscustomobject]@{ Markdown = '## Current limits'; Workshop = 'description=[h2]Current limits[/h2]' }
+)
+
+function Test-ExactOrderedReleaseCopy {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Lines,
+        [Parameter(Mandatory = $true)]
+        [string[]]$ExpectedLines
+    )
+
+    $previousIndex = -1
+    foreach ($expectedLine in $ExpectedLines) {
+        $currentIndex = [Array]::IndexOf($Lines, $expectedLine)
+        if ($currentIndex -le $previousIndex -or [Array]::LastIndexOf($Lines, $expectedLine) -ne $currentIndex) {
+            return $false
+        }
+
+        $previousIndex = $currentIndex
+    }
+
+    return $true
+}
+
+$orderedMarkdownLines = @($orderedContentContract | ForEach-Object { $_.Markdown })
+$orderedWorkshopLines = @($orderedContentContract | ForEach-Object { $_.Workshop })
+Assert-ReleaseCondition (Test-ExactOrderedReleaseCopy -Lines $descriptionLines -ExpectedLines $orderedMarkdownLines) 'exact ordered Markdown release-copy contract'
+Assert-ReleaseCondition (Test-ExactOrderedReleaseCopy -Lines $workshopLines -ExpectedLines $orderedWorkshopLines) 'exact ordered Workshop release-copy contract'
+$reorderedWorkshopFixture = [string[]]$workshopLines.Clone()
+$firstWorkshopParagraphIndex = [Array]::IndexOf($reorderedWorkshopFixture, $orderedContentContract[2].Workshop)
+$secondWorkshopParagraphIndex = [Array]::IndexOf($reorderedWorkshopFixture, $orderedContentContract[3].Workshop)
+$reorderedWorkshopFixture[$firstWorkshopParagraphIndex] = $orderedContentContract[3].Workshop
+$reorderedWorkshopFixture[$secondWorkshopParagraphIndex] = $orderedContentContract[2].Workshop
+Assert-ReleaseCondition (-not (Test-ExactOrderedReleaseCopy -Lines $reorderedWorkshopFixture -ExpectedLines $orderedWorkshopLines)) 'reordered Workshop How-it-works paragraph fixture fails'
 $featureCopy = @(
     'Integrated directly into the vanilla skills panel'
     'A separately configurable Survivor XP multiplier that does not change skill XP'
@@ -181,8 +232,8 @@ $featureCopy = @(
     'Optional Player 1 Survivor XP percentage inside the digital watch, enabled through Mod Options in the settings menu'
 )
 $readmeContributionDisclosure = '- Let hosts enable or disable Survivor XP generation for individual vanilla skills and all compatible custom skills.'
-$markdownContributionDisclosure = '- Configurable Survivor XP generation for each vanilla skill and one universal compatible-custom-skill toggle'
-$workshopContributionDisclosure = 'description=[*]Configurable Survivor XP generation for each vanilla skill and one universal compatible-custom-skill toggle'
+$markdownContributionDisclosure = '- Individually enable or disable Survivor XP generation for each vanilla skill, plus one universal toggle for compatible custom skills'
+$workshopContributionDisclosure = 'description=[*]Individually enable or disable Survivor XP generation for each vanilla skill, plus one universal toggle for compatible custom skills'
 Assert-ReleaseCondition (@($readmeLines -ceq $readmeContributionDisclosure).Count -eq 1) 'exact README per-skill contribution disclosure'
 Assert-ReleaseCondition (@($descriptionLines -ceq $markdownContributionDisclosure).Count -eq 1) 'exact Markdown per-skill contribution disclosure'
 Assert-ReleaseCondition (@($workshopLines -ceq $workshopContributionDisclosure).Count -eq 1) 'exact Workshop per-skill contribution disclosure'
@@ -192,8 +243,34 @@ $workshopWithoutContributionDisclosure = @($workshopLines | Where-Object { $_ -c
 Assert-ReleaseCondition (-not (@($readmeWithoutContributionDisclosure -ceq $readmeContributionDisclosure).Count -eq 1)) 'missing README contribution disclosure fixture fails'
 Assert-ReleaseCondition (-not (@($markdownWithoutContributionDisclosure -ceq $markdownContributionDisclosure).Count -eq 1)) 'missing Markdown contribution disclosure fixture fails'
 Assert-ReleaseCondition (-not (@($workshopWithoutContributionDisclosure -ceq $workshopContributionDisclosure).Count -eq 1)) 'missing Workshop contribution disclosure fixture fails'
-Assert-ReleaseCondition (@($descriptionLines -ceq $howItWorksCopy).Count -eq 1) 'exact Markdown separate Survivor Level and lower-case skills-panel opening'
-Assert-ReleaseCondition (@($workshopLines -ceq "description=$howItWorksCopy").Count -eq 1) 'exact Workshop separate Survivor Level and lower-case skills-panel opening'
+$markdownWithMutatedContributionDisclosure = @(
+    $descriptionLines | ForEach-Object {
+        if ($_ -ceq $markdownContributionDisclosure) {
+            $_.Replace('Individually enable or disable', 'Enable or disable')
+        } else {
+            $_
+        }
+    }
+)
+Assert-ReleaseCondition (-not (@($markdownWithMutatedContributionDisclosure -ceq $markdownContributionDisclosure).Count -eq 1)) 'mutated Markdown contribution disclosure fixture fails'
+Assert-ReleaseCondition (@($descriptionLines -ceq $openingSummaryCopy).Count -eq 1) 'exact Markdown opening summary'
+Assert-ReleaseCondition (@($workshopLines -ceq "description=$openingSummaryCopy").Count -eq 1) 'exact Workshop opening summary'
+foreach ($paragraph in $howItWorksCopy) {
+    Assert-ReleaseCondition (@($descriptionLines -ceq $paragraph).Count -eq 1) "exact Markdown How-it-works paragraph: $paragraph"
+    Assert-ReleaseCondition (@($workshopLines -ceq "description=$paragraph").Count -eq 1) "exact Workshop How-it-works paragraph: $paragraph"
+}
+$markdownWithoutHowItWorksParagraph = @($descriptionLines | Where-Object { $_ -cne $howItWorksCopy[1] })
+$workshopWithMutatedHowItWorksParagraph = @(
+    $workshopLines | ForEach-Object {
+        if ($_ -ceq "description=$($howItWorksCopy[0])") {
+            $_.Replace('By default', 'Typically')
+        } else {
+            $_
+        }
+    }
+)
+Assert-ReleaseCondition (-not (@($markdownWithoutHowItWorksParagraph -ceq $howItWorksCopy[1]).Count -eq 1)) 'missing Markdown How-it-works paragraph fixture fails'
+Assert-ReleaseCondition (-not (@($workshopWithMutatedHowItWorksParagraph -ceq "description=$($howItWorksCopy[0])").Count -eq 1)) 'mutated Workshop How-it-works paragraph fixture fails'
 Assert-ReleaseCondition (-not $descriptionText.Contains($staleHowItWorksCopy)) 'Markdown omits replaced capitalized Skills-panel opening'
 Assert-ReleaseCondition (-not $workshopText.Contains("description=$staleHowItWorksCopy")) 'Workshop omits replaced capitalized Skills-panel opening'
 Assert-ReleaseCondition (@($descriptionLines -ceq '## Advancement modes').Count -eq 1) 'exact Markdown Advancement modes heading'
@@ -210,10 +287,16 @@ Assert-ReleaseCondition (@($descriptionLines -ceq $modeRecoveryCopy).Count -eq 1
 Assert-ReleaseCondition (@($workshopLines -ceq "description=$modeRecoveryCopy").Count -eq 1) 'exact Workshop Global and Per Skill recovery copy'
 Assert-ReleaseCondition (@($descriptionLines -ceq "**Note:** $modeAccountingNote").Count -eq 1) 'exact Markdown preserved mode-accounting note'
 Assert-ReleaseCondition (@($workshopLines -ceq "description=[b]Note:[/b] $modeAccountingNote").Count -eq 1) 'exact Workshop preserved mode-accounting note'
-Assert-ReleaseCondition (@($descriptionLines -ceq '## Level Inheritance').Count -eq 1) 'exact Markdown Level Inheritance heading'
-Assert-ReleaseCondition (@($workshopLines -ceq 'description=[h2]Level Inheritance[/h2]').Count -eq 1) 'exact Workshop Level Inheritance heading'
-Assert-ReleaseCondition (@($descriptionLines -ceq $levelInheritanceCopy).Count -eq 1) 'exact Markdown Level Inheritance copy'
-Assert-ReleaseCondition (@($workshopLines -ceq "description=$levelInheritanceCopy").Count -eq 1) 'exact Workshop Level Inheritance copy'
+Assert-ReleaseCondition (@($descriptionLines -ceq '## Optional level inheritance').Count -eq 1) 'exact Markdown Optional level inheritance heading'
+Assert-ReleaseCondition (@($workshopLines -ceq 'description=[h2]Optional level inheritance[/h2]').Count -eq 1) 'exact Workshop Optional level inheritance heading'
+Assert-ReleaseCondition (@($descriptionLines -ceq $levelInheritanceCopy).Count -eq 1) 'exact Markdown Optional level inheritance copy'
+Assert-ReleaseCondition (@($workshopLines -ceq "description=$levelInheritanceCopy").Count -eq 1) 'exact Workshop Optional level inheritance copy'
+$markdownFeaturesIndex = [Array]::IndexOf($descriptionLines, '## Features')
+$markdownHowItWorksIndex = [Array]::IndexOf($descriptionLines, '## How it works')
+$workshopFeaturesIndex = [Array]::IndexOf($workshopLines, 'description=[h2]Features[/h2]')
+$workshopHowItWorksIndex = [Array]::IndexOf($workshopLines, 'description=[h2]How it works[/h2]')
+Assert-ReleaseCondition ($markdownFeaturesIndex -ge 0 -and $markdownFeaturesIndex -lt $markdownHowItWorksIndex) 'Markdown Features section before How it works'
+Assert-ReleaseCondition ($workshopFeaturesIndex -ge 0 -and $workshopFeaturesIndex -lt $workshopHowItWorksIndex) 'Workshop Features section before How it works'
 foreach ($feature in $featureCopy) {
     Assert-ReleaseCondition (@($descriptionLines -ceq "- $feature").Count -eq 1) "exact Markdown feature copy: $feature"
     Assert-ReleaseCondition (@($workshopLines -ceq "description=[*]$feature").Count -eq 1) "exact Workshop feature copy: $feature"
@@ -235,27 +318,53 @@ $markdownHookConflictCopy = "- **Potential hook conflicts:** Mods that replace t
 $workshopHookConflictCopy = "description=[*][b]Potential hook conflicts:[/b] Mods that replace the game's skill-XP award functions or Events.AddXP handling, vanilla Skills panel/progress-bar methods, online-player context menus, or digital-watch rendering may conflict with the corresponding SLA feature. SLA disables an affected capability when it detects that a required hook has been replaced rather than continuing with potentially incorrect behavior."
 $markdownCustomProgressionCopy = '- **Custom progression boundary:** Compatible trainable skills that publish a usable XP curve and award XP through supported game events are expected to work. Mods that directly set skill XP or levels, replace skill caps or curves without compatible data, or otherwise bypass supported XP events may not grant Survivor XP or may be unsupported.'
 $workshopCustomProgressionCopy = 'description=[*][b]Custom progression boundary:[/b] Compatible trainable skills that publish a usable XP curve and award XP through supported game events are expected to work. Mods that directly set skill XP or levels, replace skill caps or curves without compatible data, or otherwise bypass supported XP events may not grant Survivor XP or may be unsupported.'
+$markdownCurrentlyUnsupportedCopy = '- **Currently unsupported: [Beyond Ten - Level 15 Skills](https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705) and [Seesaw Game](https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643)**. These mods directly replace progression rules that SLA relies on.'
+$workshopCurrentlyUnsupportedCopy = 'description=[*][b]Currently unsupported: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705]Beyond Ten - Level 15 Skills[/url] and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643]Seesaw Game[/url][/b]. These mods directly replace progression rules that SLA relies on.'
+$markdownTestedTogetherCopy = "- **Tested together: [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242), [Toughness Skill](https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939), and [Show Skill XP Gain B42.20](https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883)**. This combination worked without issue in testing, but compatibility with every interface or custom-skill mod cannot be guaranteed."
+$workshopTestedTogetherCopy = "description=[*][b]Tested together: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url], [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939]Toughness Skill[/url], and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883]Show Skill XP Gain B42.20[/url][/b]. This combination worked without issue in testing, but compatibility with every interface or custom-skill mod cannot be guaranteed."
+Assert-ReleaseCondition (@($descriptionLines -ceq $markdownCurrentlyUnsupportedCopy).Count -eq 1) 'exact Markdown currently-unsupported compatibility entry'
+Assert-ReleaseCondition (@($workshopLines -ceq $workshopCurrentlyUnsupportedCopy).Count -eq 1) 'exact Workshop currently-unsupported compatibility entry'
+Assert-ReleaseCondition (@($descriptionLines -ceq $markdownTestedTogetherCopy).Count -eq 1) 'exact Markdown tested-together compatibility entry'
+Assert-ReleaseCondition (@($workshopLines -ceq $workshopTestedTogetherCopy).Count -eq 1) 'exact Workshop tested-together compatibility entry'
 Assert-ReleaseCondition (@($descriptionLines -ceq $markdownHookConflictCopy).Count -eq 1) 'exact Markdown potential-hook-conflicts boundary'
 Assert-ReleaseCondition (@($workshopLines -ceq $workshopHookConflictCopy).Count -eq 1) 'exact Workshop potential-hook-conflicts boundary'
 Assert-ReleaseCondition (@($descriptionLines -ceq $markdownCustomProgressionCopy).Count -eq 1) 'exact Markdown custom-progression boundary'
 Assert-ReleaseCondition (@($workshopLines -ceq $workshopCustomProgressionCopy).Count -eq 1) 'exact Workshop custom-progression boundary'
+$markdownTestedTogetherIndex = [Array]::IndexOf($descriptionLines, $markdownTestedTogetherCopy)
+$markdownHookConflictIndex = [Array]::IndexOf($descriptionLines, $markdownHookConflictCopy)
+$markdownCustomProgressionIndex = [Array]::IndexOf($descriptionLines, $markdownCustomProgressionCopy)
+$workshopTestedTogetherIndex = [Array]::IndexOf($workshopLines, $workshopTestedTogetherCopy)
+$workshopHookConflictIndex = [Array]::IndexOf($workshopLines, $workshopHookConflictCopy)
+$workshopCustomProgressionIndex = [Array]::IndexOf($workshopLines, $workshopCustomProgressionCopy)
+Assert-ReleaseCondition ($markdownTestedTogetherIndex -ge 0 -and $markdownTestedTogetherIndex -lt $markdownHookConflictIndex -and $markdownHookConflictIndex -lt $markdownCustomProgressionIndex) 'Markdown Tested together before generalized compatibility boundaries'
+Assert-ReleaseCondition ($workshopTestedTogetherIndex -ge 0 -and $workshopTestedTogetherIndex -lt $workshopHookConflictIndex -and $workshopHookConflictIndex -lt $workshopCustomProgressionIndex) 'Workshop Tested together before generalized compatibility boundaries'
 Assert-ReleaseCondition ($descriptionText.Contains('[Ko-fi](https://ko-fi.com/skeptic043)')) 'Markdown Ko-fi link'
 Assert-ReleaseCondition ($workshopText.Contains('[url=https://ko-fi.com/skeptic043]Ko-fi[/url]')) 'Workshop Ko-fi link'
 Assert-ReleaseCondition ($descriptionText.Contains('Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are strictly optional and no mod features are locked behind a paywall.')) 'Markdown support copy'
 Assert-ReleaseCondition ($workshopText.Contains('description=Optional support: [url=https://ko-fi.com/skeptic043]Ko-fi[/url]. All donations are strictly optional and no mod features are locked behind a paywall.')) 'Workshop support copy'
 $administrationCopy = 'Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Panel > Users List", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel. Administration is limited to online players.'
 $workshopAdministrationLine = "description=$administrationCopy"
-$dedicatedSaveLimitCopy = "Dedicated servers should set the native SaveWorldEveryMinutes option to a nonzero value. Closing the server any other way than using the 'quit' command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure."
-$markdownDedicatedSaveLimitLine = "- Dedicated servers should set the native ``SaveWorldEveryMinutes`` option to a nonzero value. Closing the server any other way than using the 'quit' command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure."
-$workshopDedicatedSaveLimitLine = "description=[*]$dedicatedSaveLimitCopy"
-$backupRecommendationCopy = 'Regardless of design, I strongly recommend backing up your save before changing the mod list of an ongoing world you care about.'
+$dedicatedSaveLimitCopy = 'Dedicated servers should set the native SaveWorldEveryMinutes option to a nonzero value. Closing the server by any method other than the quit command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure.'
+$markdownDedicatedSaveLimitLine = 'Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonzero value. Closing the server by any method other than the `quit` command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure.'
+$workshopDedicatedSaveLimitLine = "description=$dedicatedSaveLimitCopy"
+$backupRecommendationCopy = 'As with any mod-list change, I strongly recommend backing up any ongoing world you care about.'
 $staleWatchSettingsCopy = "Optional sandbox settings also provide Survivor Level inheritance and a small digital watch integration."
+Assert-ReleaseCondition (@($descriptionLines -ceq '## Dedicated servers and hosting').Count -eq 1) 'exact Markdown Dedicated servers and hosting heading'
+Assert-ReleaseCondition (@($workshopLines -ceq 'description=[h2]Dedicated servers and hosting[/h2]').Count -eq 1) 'exact Workshop Dedicated servers and hosting heading'
 Assert-ReleaseCondition (@($workshopLines -ceq $workshopAdministrationLine).Count -eq 1) 'exact Workshop online-player administration copy for Mini Scoreboard and Users List'
 Assert-ReleaseCondition (@($descriptionLines -ceq $administrationCopy).Count -eq 1) 'exact Markdown online-player administration copy for Mini Scoreboard and Users List'
 Assert-ReleaseCondition (@($workshopLines -ceq $workshopDedicatedSaveLimitLine).Count -eq 1) 'exact Workshop dedicated SaveWorldEveryMinutes limitation copy'
 Assert-ReleaseCondition (@($descriptionLines -ceq $markdownDedicatedSaveLimitLine).Count -eq 1) 'exact Markdown dedicated SaveWorldEveryMinutes limitation copy'
-Assert-ReleaseCondition (@($descriptionLines -ceq $backupRecommendationCopy).Count -eq 1) 'exact Markdown strengthened backup recommendation'
-Assert-ReleaseCondition (@($workshopLines -ceq "description=$backupRecommendationCopy").Count -eq 1) 'exact Workshop strengthened backup recommendation'
+Assert-ReleaseCondition (@($descriptionLines -ceq $backupRecommendationCopy).Count -eq 1) 'exact Markdown revised backup recommendation'
+Assert-ReleaseCondition (@($workshopLines -ceq "description=$backupRecommendationCopy").Count -eq 1) 'exact Workshop revised backup recommendation'
+$markdownDedicatedHeadingIndex = [Array]::IndexOf($descriptionLines, '## Dedicated servers and hosting')
+$markdownAdministrationIndex = [Array]::IndexOf($descriptionLines, $administrationCopy)
+$markdownDedicatedSaveIndex = [Array]::IndexOf($descriptionLines, $markdownDedicatedSaveLimitLine)
+$workshopDedicatedHeadingIndex = [Array]::IndexOf($workshopLines, 'description=[h2]Dedicated servers and hosting[/h2]')
+$workshopAdministrationIndex = [Array]::IndexOf($workshopLines, $workshopAdministrationLine)
+$workshopDedicatedSaveIndex = [Array]::IndexOf($workshopLines, $workshopDedicatedSaveLimitLine)
+Assert-ReleaseCondition ($markdownDedicatedHeadingIndex -ge 0 -and $markdownDedicatedHeadingIndex -lt $markdownAdministrationIndex -and $markdownAdministrationIndex -lt $markdownDedicatedSaveIndex) 'Markdown dedicated-server copy in non-list section order'
+Assert-ReleaseCondition ($workshopDedicatedHeadingIndex -ge 0 -and $workshopDedicatedHeadingIndex -lt $workshopAdministrationIndex -and $workshopAdministrationIndex -lt $workshopDedicatedSaveIndex) 'Workshop dedicated-server copy in non-list section order'
 Assert-ReleaseCondition (-not $descriptionText.Contains($staleWatchSettingsCopy)) 'Markdown omits stale combined sandbox-settings watch copy'
 Assert-ReleaseCondition (-not $workshopText.Contains("description=$staleWatchSettingsCopy")) 'Workshop omits stale combined sandbox-settings watch copy'
 Assert-ReleaseCondition (-not $readmeText.Contains(';')) 'README prose omits semicolons'
