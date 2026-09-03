@@ -1,11 +1,11 @@
-# Local orchestration and agent state
-.project/
-AGENTS.md
-.agents/
-.codex/
-.claude/
-.cursor/
-CLAUDE.md
+# Private local orchestration and agent state
+/.project/
+/AGENTS.md
+/.agents/
+/.codex/
+/.claude/
+/.cursor/
+/CLAUDE.md
 
 # Isolated local worktrees
 .worktrees/
