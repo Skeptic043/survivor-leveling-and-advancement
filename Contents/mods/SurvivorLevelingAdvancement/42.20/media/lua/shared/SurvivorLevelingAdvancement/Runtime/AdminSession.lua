@@ -168,6 +168,7 @@ function AdminSession.create(dependencies)
             SurvivorEconomy = true,
             NaturalLedger = true,
             ActualObservation = true,
+            offlineStore = true,
         },
         { "store", "catalog", "ownerSession", "SurvivorEconomy", "NaturalLedger", "ActualObservation" }
     ) then
@@ -221,6 +222,15 @@ function AdminSession.create(dependencies)
         or type(actualObservation.clearPlayer) ~= "function" then
         return failure("invalid_dependencies", "ActualObservation.clearPlayer is required")
     end
+    local offlineStore = dependencies.offlineStore
+    if offlineStore ~= nil and (type(offlineStore) ~= "table"
+        or getmetatable(offlineStore) ~= nil
+        or type(offlineStore.enumerate) ~= "function"
+        or type(offlineStore.inspect) ~= "function"
+        or type(offlineStore.replace) ~= "function"
+        or type(offlineStore.resolvePlayer) ~= "function") then
+        return failure("invalid_dependencies", "offlineStore capabilities are required")
+    end
 
     local load = store.load
     local save = store.save
@@ -233,6 +243,10 @@ function AdminSession.create(dependencies)
     local baseline = naturalLedger.baseline
     local clearObservation = actualObservation.clearPlayer
     local session = {}
+
+    local function offlineUnavailable()
+        return failure("offline_unavailable", "offline profiles are server-only")
+    end
 
     local function requireReady(target)
         if target == nil then return failure("invalid_target", "target is required") end
@@ -295,6 +309,90 @@ function AdminSession.create(dependencies)
                 availableAp = available.availableAp,
             },
         }
+    end
+
+    local function copyMailbox(mailbox)
+        if mailbox == nil then return nil end
+        local copy = {
+            kind = mailbox.kind,
+            status = mailbox.status,
+            incarnationId = mailbox.incarnationId,
+        }
+        if mailbox.stateRevision ~= nil then copy.stateRevision = mailbox.stateRevision end
+        if mailbox.queuedPersistenceRevision ~= nil then
+            copy.queuedPersistenceRevision = mailbox.queuedPersistenceRevision
+        end
+        if mailbox.code ~= nil then copy.code = mailbox.code end
+        return copy
+    end
+
+    local function offlineSummary(record)
+        if record.mailbox ~= nil
+            and record.mailbox.incarnationId ~= record.incarnationId then
+            return failure("mailbox_incarnation_mismatch", "offline profile")
+        end
+        local summarized = summaryFor(record.state)
+        if not summarized.ok then return summarized end
+        local summary = summarized.summary
+        summary.revision = record.persistenceRevision
+        summary.username = record.username
+        summary.profileIndex = record.profileIndex
+        summary.incarnationId = record.incarnationId
+        summary.initialized = record.initialized
+        summary.dead = record.deathRecorded
+        summary.mailbox = copyMailbox(record.mailbox)
+        return { ok = true, summary = summary }
+    end
+
+    local function offlineSelector(value)
+        if not exactPlainTable(value, {
+            username = true, profileIndex = true, incarnationId = true,
+        }, { "username", "profileIndex", "incarnationId" })
+            or type(value.username) ~= "string" or value.username == ""
+            or #value.username > 64 or not safeInteger(value.profileIndex)
+            or value.profileIndex > 3 or type(value.incarnationId) ~= "string"
+            or value.incarnationId == "" or #value.incarnationId > 64 then return nil end
+        return {
+            username = value.username,
+            profileIndex = value.profileIndex,
+            incarnationId = value.incarnationId,
+        }
+    end
+
+    local function loadOffline(selector)
+        if offlineStore == nil then return offlineUnavailable() end
+        local loaded, callError = protectedCall(offlineStore.inspect, selector, loadOptions)
+        if callError then return failure("offline_store_threw", "offlineStore.inspect threw") end
+        if type(loaded) ~= "table" or rawget(loaded, "ok") ~= true
+            or type(rawget(loaded, "record")) ~= "table" then
+            return failure("offline_store_failed", "offlineStore.inspect failed")
+        end
+        local valid = validateStateShape(loaded.record.state)
+        if not valid.ok then return valid end
+        return { ok = true, record = loaded.record }
+    end
+
+    local function replaceOffline(selector, revision, state, mailbox)
+        local saved, callError = protectedCall(
+            offlineStore.replace, selector, revision, state, mailbox
+        )
+        if callError then return failure("offline_store_threw", "offlineStore.replace threw") end
+        if type(saved) ~= "table" then return failure("offline_store_invalid", "offlineStore.replace") end
+        if rawget(saved, "ok") ~= true then
+            return failure("offline_store_failed", "offlineStore.replace failed")
+        end
+        if rawget(saved, "saved") == false and rawget(saved, "code") == "stale_revision"
+            and type(rawget(saved, "record")) == "table" then
+            local summary = offlineSummary(saved.record)
+            if not summary.ok then return summary end
+            return { ok = true, saved = false, summary = summary.summary }
+        end
+        if rawget(saved, "saved") ~= true or type(rawget(saved, "record")) ~= "table" then
+            return failure("offline_store_invalid", "offlineStore.replace")
+        end
+        local summary = offlineSummary(saved.record)
+        if not summary.ok then return summary end
+        return { ok = true, saved = true, summary = summary.summary, record = saved.record }
     end
 
     local function saveState(target, state)
@@ -527,6 +625,246 @@ function AdminSession.create(dependencies)
             levelsGained = levelsGained,
             apGained = apGained,
             summary = summarized.summary,
+        }
+    end
+
+    function session.enumerateOffline(username)
+        if offlineStore == nil then return offlineUnavailable() end
+        if type(username) ~= "string" or username == "" or #username > 64 then
+            return failure("invalid_username", "username")
+        end
+        local called, result = pcall(offlineStore.enumerate, username, loadOptions)
+        if not called then return failure("offline_store_threw", "offlineStore.enumerate threw") end
+        if type(result) ~= "table" or rawget(result, "ok") ~= true
+            or type(rawget(result, "profiles")) ~= "table" then
+            return failure("offline_store_failed", "offlineStore.enumerate failed")
+        end
+        local profiles = {}
+        for index = 1, #result.profiles do
+            local summarized = offlineSummary(result.profiles[index])
+            if not summarized.ok then return summarized end
+            profiles[index] = summarized.summary
+        end
+        return { ok = true, profiles = profiles }
+    end
+
+    function session.inspectOffline(selector)
+        selector = offlineSelector(selector)
+        if selector == nil then return failure("invalid_target", "offline profile") end
+        local loaded = loadOffline(selector)
+        if not loaded.ok then return loaded end
+        local summarized = offlineSummary(loaded.record)
+        if not summarized.ok then return summarized end
+        return { ok = true, summary = summarized.summary }
+    end
+
+    function session.requestOffline(selector, request)
+        selector = offlineSelector(selector)
+        if selector == nil then return failure("invalid_target", "offline profile") end
+        if type(request) ~= "table" or getmetatable(request) ~= nil then
+            return failure("invalid_request", "offline request")
+        end
+        local kind = rawget(request, "kind")
+        local allowed
+        if kind == "awardSurvivorXp" then
+            allowed = exactPlainTable(request, {
+                kind = true, expectedRevision = true, amount = true,
+            }, { "kind", "expectedRevision", "amount" })
+                and safeInteger(request.expectedRevision)
+                and finite(request.amount) and request.amount > 0
+        elseif kind == "awardSurvivorLevels" then
+            allowed = exactPlainTable(request, {
+                kind = true, expectedRevision = true, count = true,
+            }, { "kind", "expectedRevision", "count" })
+                and safeInteger(request.expectedRevision) and positiveSafeInteger(request.count)
+        elseif kind == "queueClearAdvancementSlots" or kind == "cancelMailbox"
+            or kind == "acknowledgeMailbox" then
+            allowed = exactPlainTable(request, {
+                kind = true, expectedRevision = true,
+            }, { "kind", "expectedRevision" }) and safeInteger(request.expectedRevision)
+        else
+            allowed = false
+        end
+        if not allowed then return failure("invalid_request", "offline request") end
+
+        local loaded = loadOffline(selector)
+        if not loaded.ok then return loaded end
+        local record = loaded.record
+        local current = offlineSummary(record)
+        if not current.ok then return current end
+        local mailbox = copyMailbox(record.mailbox)
+        local terminalAcknowledgement = kind == "acknowledgeMailbox" and mailbox ~= nil
+            and mailbox.status ~= "pending"
+
+        if not record.initialized and not terminalAcknowledgement then
+            return failure("profile_uninitialized", "offline profile")
+        end
+        if record.deathRecorded and not terminalAcknowledgement then
+            return failure("profile_dead", "offline profile")
+        end
+
+        if kind == "queueClearAdvancementSlots" and record.mailbox ~= nil
+            and record.mailbox.status == "pending"
+            and record.mailbox.incarnationId == selector.incarnationId
+            and record.mailbox.queuedPersistenceRevision == request.expectedRevision then
+            return {
+                ok = true, applied = true, kind = kind,
+                levelsGained = 0, apGained = 0, summary = current.summary,
+            }
+        end
+        if request.expectedRevision ~= record.persistenceRevision then
+            return {
+                ok = true, applied = false, kind = kind, code = "stale_revision",
+                detail = "expected revision does not match current revision",
+                summary = current.summary,
+            }
+        end
+        local candidate, cloneError = cloneValue(record.state)
+        if candidate == nil then return failure("invalid_state", "offline state: " .. cloneError) end
+        local levelsGained, apGained = 0, 0
+
+        if kind == "awardSurvivorXp" then
+            if candidate.revision == MAX_SAFE_INTEGER then
+                return failure("revision_overflow", "revision cannot be incremented safely")
+            end
+            local applied, callError = protectedCall(applyXp, candidate.survivor, request.amount)
+            if callError or not validateEconomyResult(
+                applied,
+                { ok = true, state = true, effects = true },
+                { "ok", "state", "effects" }
+            ) then return failure("economy_apply_invalid", "SurvivorEconomy.applyXp") end
+            candidate.survivor = applied.state
+            levelsGained, apGained = applied.effects.levelsGained, applied.effects.apGained
+            if not safeInteger(levelsGained) or apGained ~= levelsGained then
+                return failure("economy_apply_invalid", "SurvivorEconomy.applyXp")
+            end
+            candidate.revision = candidate.revision + 1
+        elseif kind == "awardSurvivorLevels" then
+            if candidate.revision == MAX_SAFE_INTEGER
+                or request.count > MAX_SAFE_INTEGER - candidate.survivor.level then
+                return failure("level_overflow", "Survivor level cannot be incremented safely")
+            end
+            candidate.survivor.level = candidate.survivor.level + request.count
+            candidate.revision = candidate.revision + 1
+            levelsGained, apGained = request.count, request.count
+        elseif kind == "queueClearAdvancementSlots" then
+            if candidate.accountingMode ~= "Tracked" then
+                return failure("accounting_mode_free", "Advancement Slots cannot be cleared in Free mode")
+            end
+            if mailbox ~= nil then return failure("mailbox_occupied", "offline profile") end
+            mailbox = {
+                kind = "clearAdvancementSlots", status = "pending",
+                incarnationId = selector.incarnationId,
+                stateRevision = candidate.revision,
+                queuedPersistenceRevision = request.expectedRevision,
+            }
+        elseif kind == "cancelMailbox" then
+            if mailbox == nil or mailbox.status ~= "pending" then
+                return failure("mailbox_not_pending", "offline profile")
+            end
+            mailbox = {
+                kind = "clearAdvancementSlots", status = "cancelled",
+                incarnationId = selector.incarnationId, code = "cancelled_by_admin",
+            }
+        else
+            if mailbox == nil or mailbox.status == "pending" then
+                return failure("mailbox_not_terminal", "offline profile")
+            end
+            mailbox = nil
+        end
+
+        local saved = replaceOffline(
+            selector, request.expectedRevision, candidate, mailbox
+        )
+        if not saved.ok then return saved end
+        if not saved.saved then
+            return {
+                ok = true, applied = false, kind = kind, code = "stale_revision",
+                detail = "expected revision does not match current revision",
+                summary = saved.summary,
+            }
+        end
+        local result = {
+            ok = true, applied = true, kind = kind,
+            levelsGained = levelsGained, apGained = apGained,
+            summary = saved.summary,
+        }
+        if kind == "awardSurvivorXp" then result.amount = request.amount end
+        if kind == "awardSurvivorLevels" then result.count = request.count end
+        return result
+    end
+
+    function session.resolveProfile(player)
+        if offlineStore == nil then return offlineUnavailable() end
+        local called, result = pcall(offlineStore.resolvePlayer, player)
+        if not called or type(result) ~= "table" or rawget(result, "ok") ~= true
+            or type(rawget(result, "profile")) ~= "table" then
+            return failure("profile_resolution_failed", "offlineStore.resolvePlayer")
+        end
+        return {
+            ok = true,
+            profile = {
+                username = result.profile.username,
+                profileIndex = result.profile.profileIndex,
+            },
+        }
+    end
+
+    function session.deliverPending(player)
+        if offlineStore == nil then return offlineUnavailable() end
+        local resolved = session.resolveProfile(player)
+        if not resolved.ok then return resolved end
+        local enumerated = session.enumerateOffline(resolved.profile.username)
+        if not enumerated.ok then return enumerated end
+        local selected = nil
+        for index = 1, #enumerated.profiles do
+            if enumerated.profiles[index].profileIndex == resolved.profile.profileIndex then
+                selected = enumerated.profiles[index]
+                break
+            end
+        end
+        if selected == nil or selected.mailbox == nil
+            or selected.mailbox.status ~= "pending" then
+            return { ok = true, delivered = false }
+        end
+        local selector = {
+            username = resolved.profile.username,
+            profileIndex = resolved.profile.profileIndex,
+            incarnationId = selected.incarnationId,
+        }
+        local live = loadState(player)
+        local applied
+        if live.ok and live.state.revision == selected.mailbox.stateRevision then
+            applied = session.request(player, {
+                kind = "clearAdvancementSlots",
+                expectedRevision = live.state.revision,
+            })
+        elseif live.ok then
+            applied = failure("stale_state", "queued state revision changed")
+        else
+            applied = live
+        end
+        local current = loadOffline(selector)
+        if not current.ok then return current end
+        local terminalStatus = type(applied) == "table" and applied.ok == true
+            and applied.applied == true and "applied"
+            or (type(applied) == "table" and applied.code == "stale_state"
+                and "cancelled" or "failed")
+        local code = terminalStatus == "applied" and "applied"
+            or (type(applied) == "table" and type(applied.code) == "string"
+                and string.match(applied.code, "^[%w%._:%-]+$") and applied.code
+                or "delivery_failed")
+        local terminal = {
+            kind = "clearAdvancementSlots", status = terminalStatus,
+            incarnationId = selector.incarnationId, code = code,
+        }
+        local saved = replaceOffline(
+            selector, current.record.persistenceRevision, current.record.state, terminal
+        )
+        if not saved.ok or not saved.saved then return failure("delivery_terminal_failed", "mailbox") end
+        return {
+            ok = true, delivered = terminalStatus == "applied",
+            terminal = terminalStatus, summary = saved.summary,
         }
     end
 

@@ -16,7 +16,7 @@ if evidence == nil then
         getOption = function(_, id) evidence.optionId = id; return nil end,
         addTickBox = function(_, id, name, value, tooltip)
             evidence.adds = evidence.adds + 1
-            evidence.optionArgs = { id, name, value, tooltip }
+            if id == "ShowWatchProgress" then evidence.optionArgs = { id, name, value, tooltip } end
             return evidence.option
         end,
     }
@@ -42,6 +42,7 @@ if evidence == nil then
         evidence.requires[path] = (evidence.requires[path] or 0) + 1
         if path == "SurvivorLevelingAdvancement/Bootstrap" then return evidence.owner end
         if path == "SurvivorLevelingAdvancement/UI/Build42WatchUi" then return evidence.module end
+        if path == "SurvivorLevelingAdvancement/ClientOptions" then return ClientOptions end
         return true
     end
     ISUIElement = { new = function(_, x, y, width, height)
@@ -75,6 +76,7 @@ if evidence == nil then
     } })
     MainOptions = { instance = mainOptionsInstance }
     getGameTime = function() return { getMinutesStamp = function() return 12 end } end
+    getTimestampMs = function() return 123456 end
     getSpecificPlayer = function(slot) return { slot = slot } end
     getText = function(key) return key end
     getCore = function() return { getOptionClockSize = function() return evidence.clockSize or 1 end } end
@@ -96,7 +98,7 @@ if evidence == nil then
     end
     rawset(_G, key, nil)
 elseif evidence.phase == 1 then
-    check(evidence.creates == 1 and evidence.adds == 1 and evidence.moduleCreates == 1, "first load creates option and module once")
+    check(evidence.creates == 1 and evidence.adds == 2 and evidence.moduleCreates == 1, "first load creates both options and module once")
     check(evidence.installs == 1, "first load installs once")
     check(evidence.optionPageAdds == 1, "save-loaded mod adds the absent vanilla Mods page once")
     check(evidence.groupArgs[1] == "SurvivorLevelingAdvancement"
@@ -107,6 +109,7 @@ elseif evidence.phase == 1 then
     check(evidence.dependencies.owner == evidence.owner, "exact lifecycle owner injected")
     check(evidence.dependencies.optionEnabled() == false
         and evidence.dependencies.minuteStamp() == 12, "option and engine minute capabilities")
+    check(evidence.dependencies.clockMillis() == 123456, "engine real-time millisecond capability")
     check(evidence.dependencies.getPlayer(0).slot == 0, "player one lookup capability")
     check(evidence.dependencies.isWorldMapVisible() == false, "nil world map is not visible")
     local worldMap = { visible = true, visibilityReads = 0 }
@@ -157,7 +160,7 @@ elseif evidence.phase == 1 then
         "no event or persistence surface")
     evidence.phase = 2
 elseif evidence.phase == 2 then
-    check(evidence.creates == 1 and evidence.adds == 1 and evidence.moduleCreates == 1, "reload reuses sentinel")
+    check(evidence.creates == 1 and evidence.adds == 2 and evidence.moduleCreates == 1, "reload reuses sentinel")
     check(evidence.installs == 2, "reload calls idempotent integration install")
     rawset(_G, key, { signature = "wrong", integration = evidence.integration })
     evidence.phase = 3

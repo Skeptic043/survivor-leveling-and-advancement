@@ -82,6 +82,11 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
             elseif request.kind == "awardSurvivorLevels" then result.count = request.count end
             return result
         end,
+        enumerateOffline = function() return { ok = true, profiles = {} } end,
+        inspectOffline = function() return { ok = false, code = "unavailable", detail = "offline", committed = false } end,
+        requestOffline = function() return { ok = false, code = "unavailable", detail = "offline", committed = false } end,
+        resolveProfile = function() return { ok = true, profile = { username = "User", profileIndex = 0 } } end,
+        deliverPending = function() return { ok = true, delivered = false } end,
     }
     local source = {
         install = function() calls[#calls + 1] = { "install_source" }; return { ok = true } end,
@@ -107,7 +112,7 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
     }
     local serverTransport = {
         handle = function(module, command, player, args) calls[#calls + 1] = { "server_handle", module, command, player, args }; return { ok = true, handled = true } end,
-        clearPlayer = function() return { ok = true } end,
+        clearPlayer = function(player) calls[#calls + 1] = { "server_clear", player }; return { ok = true } end,
         publish = function(player, completion) calls[#calls + 1] = { "owner_publish", player, completion }; return { ok = true } end,
     }
     local advancementServer = {
@@ -220,11 +225,20 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
         Capability = { CanSeePlayersStats = "inspect", CanModifyPlayerStatsInThePlayerStatsUI = "mutate" },
         getPlayerByOnlineID = function() end,
         getOnlinePlayers = function() end,
+        getRoles = function() end,
+        getRandomUUID = function() return "uuid:lifecycle" end,
+        getTimestampMs = function() return 0 end,
         writeLog = function(name, line) calls[#calls + 1] = { "write_log", name, line } end,
         HaloTextHelper = {},
         getText = function(key) return key end,
     }
-    if configure ~= nil then configure({ modules = modules, globals = globals, events = events, specificPlayers = specificPlayers, localClient = localClient, session = session, inheritanceSession = inheritanceSession, advancementSession = advancementSession, adminSession = adminSession, source = source, serverTransport = serverTransport, advancementClient = advancementClient, advancementServer = advancementServer, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
+    if configure ~= nil then configure({ modules = modules, globals = globals,
+        runtime = runtime, events = events,
+        specificPlayers = specificPlayers, localClient = localClient, session = session,
+        inheritanceSession = inheritanceSession, advancementSession = advancementSession,
+        adminSession = adminSession, source = source, serverTransport = serverTransport,
+        advancementClient = advancementClient, advancementServer = advancementServer,
+        adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary }) end
     local created = Build42Lifecycle.create({
         modules = modules,
         globals = globals,
@@ -232,7 +246,8 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
         pendingLocalPlayers = pendingLocalPlayers,
     })
     return created, { calls = calls, events = events, modules = modules, globals = globals, session = session, source = source, runtime = runtime, localClient = localClient, serverTransport = serverTransport,
-        inheritanceSession = inheritanceSession, advancementSession = advancementSession, advancementClient = advancementClient, advancementServer = advancementServer,
+        inheritanceSession = inheritanceSession,
+        advancementSession = advancementSession, advancementClient = advancementClient, advancementServer = advancementServer,
         adminSession = adminSession, adminClient = adminClient, adminServer = adminServer, adminBoundary = adminBoundary,
         factoryCalls = function() return factoryCalls end, clientCreates = function() return clientCreates end, serverCreates = function() return serverCreates end,
         advancementClientCreates = function() return advancementClientCreates end, advancementServerCreates = function() return advancementServerCreates end,
@@ -275,6 +290,7 @@ do
     eq(f.events.OnClientCommand.adds(), 1, "one client-command callback")
     eq(f.events.OnNewGame.adds(), 1, "server owns one new-game callback")
     eq(f.events.OnCharacterDeath.adds(), 1, "server owns one death callback")
+    eq(f.events.OnTick.adds(), 0, "native server saving needs no SLA tick")
     eq(f.events.OnCreatePlayer.adds(), 0, "server event set has no create-player callback")
     eq(f.events.OnMiniScoreboardUpdate.adds(), 0, "server event set has no post-ack callback")
     f.events.OnServerStarted.fire()
@@ -284,18 +300,101 @@ do
     eq(f.calls[4][1], "install_source", "source installs after factory")
     eq(f.calls[5][1], "create_server", "server transport follows source install")
     eq(f.calls[5][2].snapshotValidator.validate, f.validator, "server receives construction-captured validator")
+    local beforeTick = #f.calls
+    f.events.OnTick.fire()
+    eq(#f.calls, beforeTick, "server tick performs no SLA saving work")
+    local beforeReady = #f.calls
     f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", {}, { correlationId = "x" })
+    eq(f.calls[beforeReady + 1][1], "server_handle",
+        "lifecycle delegates without prevalidation recovery")
     eq(f.calls[#f.calls][1], "server_handle", "server command delegated")
     f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerRefresh", {}, { correlationId = "x" })
     eq(f.calls[#f.calls][3], "ownerRefresh", "server refresh exact-dispatched")
     local inheritedPlayer = {}
     f.events.OnNewGame.fire(inheritedPlayer)
+    eq(f.calls[#f.calls - 1][1], "server_clear", "new lifecycle clears readiness attempt state")
     eq(f.calls[#f.calls][1], "inheritance_token", "server OnNewGame only tokens")
     eq(f.calls[#f.calls][2], inheritedPlayer, "server token keeps exact player")
     f.events.OnCharacterDeath.fire(inheritedPlayer)
+    eq(f.calls[#f.calls - 1][1], "server_clear", "death clears readiness attempt state")
     eq(f.calls[#f.calls][1], "inheritance_death", "server death only records")
     yes(created.owner.status().started, "server started")
     no(created.owner.clientState(0).ok, "server has no client state")
+end
+
+do
+    local fileCalls, saveCalls = 0, 0
+    local created, f = fixture(true, false, function(values)
+        local function fileCall() fileCalls = fileCalls + 1; error("custom file access") end
+        local function saveCall() saveCalls = saveCalls + 1; error("broad save") end
+        values.globals.getFileInput, values.globals.getFileOutput = fileCall, fileCall
+        values.globals.save, values.globals.saveGame = saveCall, saveCall
+        values.globals.ModData = { save = saveCall }
+    end)
+    yes(created.owner.install().ok, "native-only lifecycle installs")
+    f.events.OnServerStarted.fire()
+    yes(created.owner.status().started, "native-only lifecycle starts")
+    eq(f.serverCreates(), 1, "native-only lifecycle creates owner endpoint")
+    local before = #f.calls
+    f.events.OnTick.fire()
+    eq(#f.calls, before, "server tick performs no persistence work")
+    local player = {}
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", player, {})
+    eq(f.calls[#f.calls][1], "server_handle",
+        "native saving preserves owner readiness")
+    eq(f.calls[#f.calls][4], player, "native owner readiness preserves player")
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerRefresh", player, {})
+    f.events.OnNewGame.fire(player)
+    f.events.OnCharacterDeath.fire(player)
+    eq(fileCalls, 0, "startup readiness refresh and lifecycle never open custom files")
+    eq(saveCalls, 0, "startup readiness refresh and lifecycle never trigger broad saves")
+end
+
+for _, tickMutation in ipairs({
+    function(values) values.globals.Events.OnTick = nil end,
+    function(values) values.events.OnTick.Add = function() error("tick add") end end,
+}) do
+    local created, f = fixture(true, false, tickMutation)
+    yes(created.ok and created.owner.install().ok,
+        "missing or throwing optional server tick cannot block install")
+    f.events.OnServerStarted.fire()
+    yes(created.owner.status().started,
+        "missing or throwing optional server tick cannot block startup")
+    local player = {}
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", player, {})
+    eq(f.calls[#f.calls][1], "server_handle",
+        "missing or throwing optional server tick cannot block owner readiness")
+end
+
+do
+    local player = { username = "MailboxOwner" }
+    local created, f = fixture(true, false)
+    local deliveries = 0
+    f.adminSession.deliverPending = function(received)
+        deliveries = deliveries + 1
+        eq(received, player, "mailbox delivery keeps the exact ready player")
+        eq(f.calls[#f.calls][1], "server_handle",
+            "mailbox delivery remains after ordinary owner readiness")
+        return { ok = true, delivered = true }
+    end
+    yes(created.owner.install().ok, "mailbox delivery fixture installs")
+    f.events.OnServerStarted.fire()
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", player, {})
+    eq(deliveries, 1, "successful owner readiness triggers one pending delivery attempt")
+    local publications = callsNamed(f.calls, "owner_publish")
+    eq(#publications, 1, "applied pending mailbox republishes one owner snapshot")
+    eq(publications[1][2], player, "mailbox publication keeps the exact ready player")
+end
+
+do
+    local created, f = fixture(true, false)
+    yes(created.owner.install().ok, "server ownership-loss fixture installs")
+    eq(f.events.OnTick.adds(), 0, "server creates no persistence tick")
+    f.globals.Events = {}
+    f.events.OnServerStarted.fire()
+    eq(f.factoryCalls(), 0, "lost lifecycle ownership cannot start authority")
+    eq(created.owner.status().failure.code, "event_ownership_lost",
+        "server event ownership loss is retained")
 end
 
 do
@@ -589,6 +688,8 @@ do
     local created, f = fixture(false, true)
     yes(created.ok, "client creates")
     eq(f.clientCreates(), 1, "client transport created at construction")
+    eq(callsNamed(f.calls, "create_client")[1][2].nowMilliseconds, f.globals.getTimestampMs,
+        "client readiness retries use lifecycle clock")
     yes(created.owner.install().ok, "client installs")
     eq(f.events.OnCreatePlayer.adds(), 0, "client owns no create-player callback")
     eq(f.events.OnNewGame.adds(), 0, "client owns no new-game callback")

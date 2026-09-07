@@ -606,4 +606,44 @@ for _, candidate in pairs({ view, pending.view, perSkill.view, lowAp.view }) do
     end
 end
 
+do
+    for _, mode in ipairs({ "Global", "PerSkill" }) do
+        for _, limit in ipairs({ 0, 1, 2, 4 }) do
+            for _, level in ipairs({ 2, 9 }) do
+                for _, occupied in ipairs({ false, true }) do
+                    local source = snapshot()
+                    source.perks = {
+                        Cooking = { effectiveMaximum = 10, naturalPosition = 0, highWaterPosition = 0,
+                            activeTargets = occupied and { { targetLevel = 1, targetPosition = 10 } } or {} },
+                    }
+                    local config = mode == "Global" and { mode = mode, globalLimit = limit }
+                        or { mode = mode, perSkillDefault = 7, perSkillOverrides = { Cooking = limit } }
+                    local result = build(model, source, config, false, {
+                        { perkId = "Cooking", currentLevel = level, effectiveMaximum = 10 },
+                    })
+                    expect(result.ok, "slot requirement matrix builds")
+                    local needed = math.min(level == 9 and 2 or 1, limit)
+                    local row = result.view.rows.Cooking
+                    expectEqual(row.requiredSlots, limit > 0 and needed or nil,
+                        "effective slot requirement uses configured limit and mastery")
+                    local reason = limit == 0 and "allotment_disabled"
+                        or ((occupied and 1 or 0) + needed > limit and "allotment_capacity" or nil)
+                    expectEqual(row.reasonCode, reason, "requirement projection preserves eligibility")
+                    if level == 2 then
+                        source.perks.Cooking.activeTargets = { { targetLevel = 3, targetPosition = 100 } }
+                        local reboost = build(model, source, config, false, {
+                            { perkId = "Cooking", currentLevel = level, effectiveMaximum = 10 },
+                        }).view.rows.Cooking
+                        expectEqual(reboost.requiredSlots, nil, "reboost exposes no new slot requirement")
+                        expectEqual(reboost.enabled, true, "reboost preserves capacity bypass")
+                    end
+                end
+            end
+        end
+    end
+    expectEqual(free.view.rows.Aiming.requiredSlots, nil, "Free mastery has no slot requirement")
+    expectEqual(pending.view.rows.Cooking.reasonCode, "pending", "pending still precedes capacity")
+    expectEqual(lowAp.view.rows.Aiming.reasonCode, "insufficient_ap", "AP blocker still precedes capacity")
+end
+
 return assertions

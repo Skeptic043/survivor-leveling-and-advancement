@@ -1,6 +1,7 @@
 local Build42WatchUi = {}
 
 local REFRESH_MINUTES = 10
+local RATIO_INTERVAL_MS = 1000
 
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }
@@ -29,7 +30,7 @@ end
 function Build42WatchUi.create(dependencies)
     if type(dependencies) ~= "table" then return failure("invalid_dependencies", "dependencies") end
     local required = {
-        "optionEnabled", "isWorldMapVisible", "getClock", "minuteStamp", "getPlayer", "isDead", "createPanel",
+        "optionEnabled", "isWorldMapVisible", "getClock", "minuteStamp", "clockMillis", "getPlayer", "isDead", "createPanel",
     }
     for index = 1, #required do
         if not callable(rawget(dependencies, required[index])) then
@@ -46,7 +47,10 @@ function Build42WatchUi.create(dependencies)
     local installed = false
     local display = false
     local ownerSlot = nil
+    local ownerPlayer = nil
     local percentValue = nil
+    local cachedPercent = nil
+    local lastRatioMillis = nil
     local nextMinute = nil
 
     local function resolveOwner()
@@ -56,7 +60,11 @@ function Build42WatchUi.create(dependencies)
         local deadCalled, dead = pcall(dependencies.isDead, player)
         if not deadCalled or type(dead) ~= "boolean" then return nil end
         if dead then return false end
-        return { slot = 0 }
+        return player
+    end
+
+    local function resetOwner()
+        ownerSlot, ownerPlayer, nextMinute, cachedPercent = nil, nil, nil, nil
     end
 
     local function hide()
@@ -96,7 +104,7 @@ function Build42WatchUi.create(dependencies)
 
     local function prerender()
         if safeCall(dependencies.optionEnabled) ~= true then
-            ownerSlot, nextMinute = nil, nil
+            resetOwner()
             hide()
             return
         end
@@ -108,35 +116,46 @@ function Build42WatchUi.create(dependencies)
         local clock = safeCall(dependencies.getClock)
         local dateVisible = clock ~= nil and safeCall(function() return clock:isDateVisible() end) == true
         if not dateVisible then
-            ownerSlot, nextMinute = nil, nil
+            resetOwner()
             hide()
             return
         end
         local stamp = safeCall(dependencies.minuteStamp)
         if not finite(stamp) then
-            ownerSlot, nextMinute = nil, nil
+            resetOwner()
             hide()
             return
         end
+        local resolved = resolveOwner()
+        if resolved == nil or resolved == false then
+            resetOwner()
+            hide()
+            return
+        end
+        if resolved ~= ownerPlayer then
+            resetOwner()
+            ownerPlayer, ownerSlot = resolved, 0
+        end
         if due(stamp) then
             nextMinute = stamp + REFRESH_MINUTES
-            local resolved = resolveOwner()
-            if resolved == nil or resolved == false then
-                ownerSlot = nil
-                hide()
-                return
-            end
-            ownerSlot = resolved.slot
             safeCall(owner.refreshOwner, ownerSlot)
         end
-        if ownerSlot == nil then hide(); return end
-        local currentRatio = readRatio(ownerSlot)
-        if currentRatio == nil then hide(); return end
         local x, y, width, height = clockGeometry(clock)
         if x == nil then hide(); return end
+        local millis = safeCall(dependencies.clockMillis)
+        if not finite(millis) then cachedPercent = nil; hide(); return end
+        if lastRatioMillis ~= nil and millis < lastRatioMillis then
+            lastRatioMillis, cachedPercent = millis, nil
+        end
+        if lastRatioMillis == nil or millis - lastRatioMillis >= RATIO_INTERVAL_MS then
+            lastRatioMillis = millis
+            local currentRatio = readRatio(ownerSlot)
+            cachedPercent = currentRatio ~= nil and math.floor(currentRatio * 100) or nil
+        end
+        if cachedPercent == nil then hide(); return end
         local geometryCalled = pcall(panel.setGeometry, x, y, width, height)
         if not geometryCalled then hide(); return end
-        percentValue = math.floor(currentRatio * 100)
+        percentValue = cachedPercent
         display = true
     end
 

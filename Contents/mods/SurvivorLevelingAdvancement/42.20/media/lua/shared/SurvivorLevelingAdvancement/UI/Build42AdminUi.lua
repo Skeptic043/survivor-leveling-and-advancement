@@ -102,12 +102,59 @@ local function validTarget(value)
         and boundedUsername(rawget(value, "username"))
 end
 
+local function validProfileTarget(value)
+    return exactPlainTable(value, {
+        username = true, profileIndex = true, incarnationId = true,
+    }) and boundedUsername(rawget(value, "username"))
+        and nonnegativeInteger(rawget(value, "profileIndex"))
+        and rawget(value, "profileIndex") <= 3
+        and safeId(rawget(value, "incarnationId"), 64)
+end
+
 local function copyTarget(value)
+    if rawget(value, "profileIndex") ~= nil then
+        return {
+            username = rawget(value, "username"),
+            profileIndex = rawget(value, "profileIndex"),
+            incarnationId = rawget(value, "incarnationId"),
+        }
+    end
     return { onlineId = rawget(value, "onlineId"), username = rawget(value, "username") }
 end
 
+local function copyMailbox(value)
+    if value == nil or type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+    local status = rawget(value, "status")
+    local fields = { kind = true, status = true, incarnationId = true }
+    if status == "pending" then
+        fields.stateRevision = true
+        fields.queuedPersistenceRevision = true
+    else
+        fields.code = true
+    end
+    if not exactPlainTable(value, fields)
+        or rawget(value, "kind") ~= "clearAdvancementSlots"
+        or not safeId(rawget(value, "incarnationId"), 64) then return nil end
+    if status == "pending" then
+        if not nonnegativeInteger(rawget(value, "stateRevision"))
+            or not nonnegativeInteger(rawget(value, "queuedPersistenceRevision")) then return nil end
+        return {
+            kind = "clearAdvancementSlots", status = status,
+            incarnationId = value.incarnationId, stateRevision = value.stateRevision,
+            queuedPersistenceRevision = value.queuedPersistenceRevision,
+        }
+    end
+    if status ~= "applied" and status ~= "failed" and status ~= "cancelled"
+        or not safeId(rawget(value, "code"), 64) then return nil end
+    return {
+        kind = "clearAdvancementSlots", status = status,
+        incarnationId = value.incarnationId, code = value.code,
+    }
+end
+
 local function validSummary(value)
-    if not exactPlainTable(value, {
+    local offline = type(value) == "table" and rawget(value, "profileIndex") ~= nil
+    local fields = {
         accountingMode = true,
         revision = true,
         level = true,
@@ -115,7 +162,27 @@ local function validSummary(value)
         xpForNextLevel = true,
         spent = true,
         availableAp = true,
-    }) then return false end
+    }
+    if offline then
+        fields.username = true
+        fields.profileIndex = true
+        fields.incarnationId = true
+        fields.initialized = true
+        fields.dead = true
+        if rawget(value, "mailbox") ~= nil then fields.mailbox = true end
+    end
+    local mailbox = copyMailbox(rawget(value, "mailbox"))
+    if not exactPlainTable(value, fields)
+        or (rawget(value, "mailbox") ~= nil and mailbox == nil)
+        or (mailbox ~= nil and mailbox.incarnationId ~= rawget(value, "incarnationId")) then
+        return false
+    end
+    if offline and (not boundedUsername(rawget(value, "username"))
+        or not nonnegativeInteger(rawget(value, "profileIndex"))
+        or rawget(value, "profileIndex") > 3
+        or not safeId(rawget(value, "incarnationId"), 64)
+        or type(rawget(value, "initialized")) ~= "boolean"
+        or type(rawget(value, "dead")) ~= "boolean") then return false end
     return (rawget(value, "accountingMode") == "Tracked"
             or rawget(value, "accountingMode") == "Free")
         and nonnegativeInteger(rawget(value, "revision"))
@@ -132,7 +199,7 @@ local function validSummary(value)
 end
 
 local function copySummary(value)
-    return {
+    local result = {
         accountingMode = rawget(value, "accountingMode"),
         revision = rawget(value, "revision"),
         level = rawget(value, "level"),
@@ -141,6 +208,15 @@ local function copySummary(value)
         spent = rawget(value, "spent"),
         availableAp = rawget(value, "availableAp"),
     }
+    if rawget(value, "profileIndex") ~= nil then
+        result.username = value.username
+        result.profileIndex = value.profileIndex
+        result.incarnationId = value.incarnationId
+        result.initialized = value.initialized
+        result.dead = value.dead
+        result.mailbox = copyMailbox(value.mailbox)
+    end
+    return result
 end
 
 local function parsePositiveNumber(value)
@@ -292,9 +368,13 @@ function Build42AdminUi.create(dependencies)
     end
 
     local function targetMatches(left, right)
-        return validTarget(left) and validTarget(right)
-            and rawget(left, "onlineId") == rawget(right, "onlineId")
-            and rawget(left, "username") == rawget(right, "username")
+        if validTarget(left) and validTarget(right) then
+            return rawget(left, "onlineId") == rawget(right, "onlineId")
+                and rawget(left, "username") == rawget(right, "username")
+        end
+        return validProfileTarget(left) and validProfileTarget(right)
+            and left.username == right.username and left.profileIndex == right.profileIndex
+            and left.incarnationId == right.incarnationId
     end
 
     local function statusRoute(value)
@@ -304,7 +384,8 @@ function Build42AdminUi.create(dependencies)
             or not safeId(rawget(value, "requestId"), 64) then return nil end
         local operation = rawget(value, "operation")
         local target = rawget(value, "target")
-        if operation ~= "inspect" or type(target) ~= "table" or getmetatable(target) ~= nil
+        if (operation ~= "inspect" and operation ~= "enumerateOfflineProfiles")
+            or type(target) ~= "table" or getmetatable(target) ~= nil
             or not exactPlainTable(target, { username = true })
             or not boundedUsername(rawget(target, "username")) then return nil end
         return { operation = operation, username = rawget(target, "username") }
@@ -318,7 +399,9 @@ function Build42AdminUi.create(dependencies)
     end
 
     local function validClearGains(result, operation, outcome)
-        return operation ~= "clearAdvancementSlots" or outcome ~= "applied"
+        return (operation ~= "clearAdvancementSlots" and operation ~= "queueClearAdvancementSlots"
+                and operation ~= "cancelMailbox" and operation ~= "acknowledgeMailbox")
+            or outcome ~= "applied"
             or (rawget(result, "levelsGained") == 0
                 and rawget(result, "apGained") == 0)
     end
@@ -326,28 +409,40 @@ function Build42AdminUi.create(dependencies)
     local function validStatusTerminal(result)
         if type(result) ~= "table" or getmetatable(result) ~= nil then return false end
         local operation = rawget(result, "operation")
-        if operation ~= "inspect" and operation ~= "awardSurvivorXp"
-            and operation ~= "awardSurvivorLevels"
-            and operation ~= "clearAdvancementSlots" then return false end
+        if operation ~= "inspect" and operation ~= "enumerateOfflineProfiles"
+            and operation ~= "inspectOfflineProfile" and operation ~= "awardSurvivorXp"
+            and operation ~= "awardSurvivorLevels" and operation ~= "clearAdvancementSlots"
+            and operation ~= "queueClearAdvancementSlots" and operation ~= "cancelMailbox"
+            and operation ~= "acknowledgeMailbox" then return false end
         local succeeded = rawget(result, "ok")
         if type(succeeded) ~= "boolean" then return false end
         if rawget(result, "protocolVersion") ~= nil then return false end
         if mode == "multiplayer" then
             if not safeId(rawget(result, "requestId"), 64) then return false end
             local target = rawget(result, "target")
-            if operation == "inspect" and not succeeded then
+            if (operation == "inspect" or operation == "enumerateOfflineProfiles")
+                and not succeeded then
                 if not exactPlainTable(target, { username = true })
                     or not boundedUsername(rawget(target, "username")) then return false end
-            elseif not validTarget(target) then
+            elseif not validTarget(target) and not validProfileTarget(target) then
                 return false
             end
         elseif rawget(result, "requestId") ~= nil or rawget(result, "target") ~= nil then
             return false
         end
         if not succeeded then return type(rawget(result, "committed")) == "boolean" end
+        if operation == "enumerateOfflineProfiles" then
+            local profiles = rawget(result, "profiles")
+            if rawget(result, "outcome") ~= "enumerated" or type(profiles) ~= "table"
+                or #profiles > 4 then return false end
+            for index = 1, #profiles do if not validSummary(profiles[index]) then return false end end
+            return true
+        end
         if not validSummary(rawget(result, "summary")) then return false end
         local outcome = rawget(result, "outcome")
-        if operation == "inspect" then return outcome == "inspected" end
+        if operation == "inspect" or operation == "inspectOfflineProfile" then
+            return outcome == "inspected"
+        end
         return (outcome == "applied" and validClearGains(result, operation, outcome))
             or (outcome == "rejected" and rawget(result, "code") == "stale_revision")
     end
@@ -370,13 +465,15 @@ function Build42AdminUi.create(dependencies)
             or not safeId(rawget(value, "requestId"), 64) then return false end
         local operation = rawget(value, "operation")
         local target = rawget(value, "target")
-        if operation == "inspect" then
+        if operation == "inspect" or operation == "enumerateOfflineProfiles" then
             return exactPlainTable(target, { username = true })
                 and boundedUsername(rawget(target, "username"))
         end
         return (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
-                or operation == "clearAdvancementSlots")
-            and validTarget(target)
+                or operation == "clearAdvancementSlots" or operation == "inspectOfflineProfile"
+                or operation == "queueClearAdvancementSlots" or operation == "cancelMailbox"
+                or operation == "acknowledgeMailbox")
+            and (validTarget(target) or validProfileTarget(target))
     end
 
     local function pendingMatches(state, value)
@@ -384,7 +481,7 @@ function Build42AdminUi.create(dependencies)
             or rawget(value, "requestId") ~= state.pendingRequestId
             or rawget(value, "operation") ~= state.pendingOperation then return false end
         local target = rawget(value, "target")
-        if state.pendingOperation == "inspect" then
+        if state.pendingOperation == "inspect" or state.pendingOperation == "enumerateOfflineProfiles" then
             return exactPlainTable(target, { username = true })
                 and rawget(target, "username") == state.selectedUsername
         end
@@ -420,17 +517,85 @@ function Build42AdminUi.create(dependencies)
         return callable(setter) and pcall(setter, control, visible)
     end
 
+    local function setControlTitle(control, title)
+        local setter = type(control) == "table" and control.setTitle or nil
+        if type(control) ~= "table" or title == nil then return false end
+        if callable(setter) then return pcall(setter, control, title) end
+        rawset(control, "title", title)
+        return true
+    end
+
+    local function profileLabel(profileIndex)
+        return localized(profileIndex == 0 and "IGUI_SLA_Admin_ProfilePrimary"
+            or "IGUI_SLA_Admin_ProfileCoop", profileIndex + 1)
+    end
+
+    local function restoreAdminControls(state)
+        rawset(state.awardXpButton, "internal", "XP")
+        rawset(state.awardLevelsButton, "internal", "LEVELS")
+        rawset(state.clearSlotsButton, "internal", "CLEAR")
+        rawset(state.refreshButton, "internal", "REFRESH")
+        setControlTitle(state.awardXpButton, localized("IGUI_SLA_Admin_AwardXp"))
+        setControlTitle(state.awardLevelsButton, localized("IGUI_SLA_Admin_AwardLevels"))
+        setControlTitle(state.clearSlotsButton, localized("IGUI_SLA_Admin_ClearSlots"))
+        setControlTitle(state.refreshButton, localized("IGUI_SLA_Admin_Refresh"))
+        setVisible(state.xpEntry, true)
+        setVisible(state.levelsEntry, true)
+        setVisible(state.awardXpButton, true)
+        setVisible(state.awardLevelsButton, true)
+        setVisible(state.refreshButton, true)
+    end
+
+    local function updateProfileSelectionControls(state)
+        local buttons = {
+            state.awardXpButton, state.awardLevelsButton,
+            state.clearSlotsButton, state.refreshButton,
+        }
+        setVisible(state.xpEntry, false)
+        setVisible(state.levelsEntry, false)
+        for index = 1, #buttons do
+            local choice = state.profileChoices[index]
+            local visible = choice ~= nil
+            setVisible(buttons[index], visible)
+            setEnabled(buttons[index], visible and state.access and not state.waiting)
+            if visible then
+                rawset(buttons[index], "internal", "PROFILE:" .. tostring(choice.profileIndex))
+                setControlTitle(buttons[index], profileLabel(choice.profileIndex))
+            end
+        end
+    end
+
     local function updateControls(state)
         local access = launcherAvailable(state.slot)
         state.access = access
+        if state.profileChoices ~= nil then
+            updateProfileSelectionControls(state)
+            return
+        end
+        restoreAdminControls(state)
         local mutationEnabled = access and not state.waiting and state.summary ~= nil
+            and state.summary.initialized ~= false and state.summary.dead ~= true
         local refreshEnabled = access and not state.waiting
-        local clearVisible = state.summary ~= nil
+        local tracked = state.summary ~= nil
             and state.summary.accountingMode == "Tracked"
+        local terminalAcknowledgement = state.offline and state.summary ~= nil
+            and state.summary.mailbox ~= nil and state.summary.mailbox.status ~= "pending"
+        local clearVisible = tracked or terminalAcknowledgement
+        local acknowledgementEnabled = access and not state.waiting
+            and terminalAcknowledgement
         setEnabled(state.awardXpButton, mutationEnabled)
         setEnabled(state.awardLevelsButton, mutationEnabled)
         setVisible(state.clearSlotsButton, clearVisible)
-        setEnabled(state.clearSlotsButton, mutationEnabled and clearVisible)
+        setEnabled(state.clearSlotsButton,
+            (mutationEnabled and tracked) or acknowledgementEnabled)
+        if state.offline and state.summary ~= nil then
+            local mailbox = state.summary.mailbox
+            setControlTitle(state.clearSlotsButton, localized(
+                mailbox == nil and "IGUI_SLA_Admin_QueueClear"
+                    or mailbox.status == "pending" and "IGUI_SLA_Admin_CancelPending"
+                    or "IGUI_SLA_Admin_Acknowledge"
+            ))
+        end
         setEnabled(state.refreshButton, refreshEnabled)
         setEditable(state.xpEntry, mutationEnabled)
         setEditable(state.levelsEntry, mutationEnabled)
@@ -438,11 +603,13 @@ function Build42AdminUi.create(dependencies)
 
     local function requestShape(state, operation, operandName, operand)
         local request = { operation = operation }
-        if operation == "inspect" then
+        if operation == "inspect" or operation == "enumerateOfflineProfiles" then
             if mode == "multiplayer" then
                 local username = state.target and state.target.username or state.selectedUsername
                 request.target = { username = username }
             end
+        elseif operation == "inspectOfflineProfile" then
+            request.target = copyTarget(state.target)
         else
             if mode == "multiplayer" then request.target = copyTarget(state.target) end
             request.expectedRevision = state.summary.revision
@@ -461,7 +628,10 @@ function Build42AdminUi.create(dependencies)
                 or rawget(result, "requestId") ~= state.pendingRequestId
                 or not safeId(rawget(result, "requestId"), 64) then return false end
             local target = rawget(result, "target")
-            if expectedOperation == "inspect" then
+            if expectedOperation == "enumerateOfflineProfiles" then
+                if not exactPlainTable(target, { username = true })
+                    or target.username ~= state.selectedUsername then return false end
+            elseif expectedOperation == "inspect" then
                 if rawget(result, "ok") == true then
                     if not validTarget(target) or target.username ~= state.selectedUsername then return false end
                 elseif not exactPlainTable(target, { username = true })
@@ -478,6 +648,39 @@ function Build42AdminUi.create(dependencies)
         end
 
         if rawget(result, "ok") == true then
+            if expectedOperation == "enumerateOfflineProfiles" then
+                local profiles = rawget(result, "profiles")
+                if rawget(result, "outcome") ~= "enumerated" or type(profiles) ~= "table"
+                    or #profiles < 1 or #profiles > 4 then return false end
+                for index = 1, #profiles do
+                    if not validSummary(profiles[index])
+                        or profiles[index].username ~= state.selectedUsername then return false end
+                end
+                if #profiles > 1 then
+                    state.profileChoices = {}
+                    for index = 1, #profiles do
+                        state.profileChoices[index] = copySummary(profiles[index])
+                    end
+                    state.summary = nil
+                    state.target = nil
+                    state.offline = true
+                    state.message = localized("IGUI_SLA_Admin_SelectProfile")
+                    state.waiting, state.pendingRequestId, state.pendingOperation = false, nil, nil
+                    return state.message ~= nil
+                end
+                local selected = profiles[1]
+                state.summary = copySummary(selected)
+                state.target = {
+                    username = selected.username,
+                    profileIndex = selected.profileIndex,
+                    incarnationId = selected.incarnationId,
+                }
+                state.offline = true
+                state.message = localized("IGUI_SLA_Admin_ProfileSelected",
+                    profileLabel(selected.profileIndex))
+                state.waiting, state.pendingRequestId, state.pendingOperation = false, nil, nil
+                return state.message ~= nil
+            end
             local summary = rawget(result, "summary")
             if not validSummary(summary) then return false end
             local outcome = rawget(result, "outcome")
@@ -527,7 +730,8 @@ function Build42AdminUi.create(dependencies)
 
     local function beginRequest(state, operation, operandName, operand)
         if state.waiting or not state.access then return false end
-        if operation ~= "inspect" and state.summary == nil then return false end
+        if operation ~= "inspect" and operation ~= "enumerateOfflineProfiles"
+            and state.summary == nil then return false end
         local request = requestShape(state, operation, operandName, operand)
         local called, result = pcall(requestAdmin, state.slot, request)
         if not called or type(result) ~= "table" or getmetatable(result) ~= nil then
@@ -565,8 +769,30 @@ function Build42AdminUi.create(dependencies)
         updateControls(state)
         if not state.access or state.waiting then return end
         local action = rawget(button, "internal")
+        if type(action) == "string" and string.sub(action, 1, 8) == "PROFILE:" then
+            local selectedIndex = tonumber(string.sub(action, 9))
+            local choices = state.profileChoices
+            if choices == nil then return end
+            for index = 1, #choices do
+                local selected = choices[index]
+                if selected.profileIndex == selectedIndex then
+                    state.profileChoices = nil
+                    state.summary = copySummary(selected)
+                    state.target = {
+                        username = selected.username,
+                        profileIndex = selected.profileIndex,
+                        incarnationId = selected.incarnationId,
+                    }
+                    state.message = localized("IGUI_SLA_Admin_ProfileSelected",
+                        profileLabel(selected.profileIndex))
+                    updateControls(state)
+                    return
+                end
+            end
+            return
+        end
         if action == "REFRESH" then
-            beginRequest(state, "inspect")
+            beginRequest(state, state.offline and "inspectOfflineProfile" or "inspect")
             return
         end
         if state.summary == nil then return end
@@ -584,8 +810,16 @@ function Build42AdminUi.create(dependencies)
                 return
             end
             beginRequest(state, "awardSurvivorLevels", "count", count)
-        elseif action == "CLEAR" and state.summary.accountingMode == "Tracked" then
-            beginRequest(state, "clearAdvancementSlots")
+        elseif action == "CLEAR" then
+            local mailbox = state.summary.mailbox
+            if state.offline and mailbox ~= nil and mailbox.status ~= "pending" then
+                beginRequest(state, "acknowledgeMailbox")
+            elseif state.summary.accountingMode == "Tracked" then
+                local operation = not state.offline and "clearAdvancementSlots"
+                    or mailbox == nil and "queueClearAdvancementSlots"
+                    or "cancelMailbox"
+                beginRequest(state, operation)
+            end
         end
     end
 
@@ -601,6 +835,7 @@ function Build42AdminUi.create(dependencies)
             drawLine(localized("IGUI_SLA_Admin_Target", username), 16, 34)
         end
         local summary = state.summary
+        local readOnly = false
         if summary ~= nil then
             drawLine(localized("IGUI_SLA_Admin_Level", summary.level), 16, 58)
             local current = formatSurvivorXp(summary.xpIntoLevel)
@@ -609,10 +844,28 @@ function Build42AdminUi.create(dependencies)
                 drawLine(localized("IGUI_SLA_Admin_Xp", current, required), 16, 78)
             end
             drawLine(localized("IGUI_SLA_Admin_Ap", summary.availableAp), 16, 98)
+            if summary.dead == true then
+                drawLine(localized("IGUI_SLA_Admin_ProfileDead"), 16, 118)
+                readOnly = true
+            elseif summary.initialized == false then
+                drawLine(localized("IGUI_SLA_Admin_ProfileUninitialized"), 16, 118)
+                readOnly = true
+            end
+            if summary.mailbox ~= nil then
+                local key = summary.mailbox.status == "pending" and "IGUI_SLA_Admin_MailboxPending"
+                    or summary.mailbox.status == "applied" and "IGUI_SLA_Admin_MailboxApplied"
+                    or summary.mailbox.status == "failed" and "IGUI_SLA_Admin_MailboxFailed"
+                    or "IGUI_SLA_Admin_MailboxCancelled"
+                drawLine(localized(key), 16, readOnly and 138 or 118)
+            end
         end
-        drawLine(state.message, 16, 122)
-        drawLine(localized("IGUI_SLA_Admin_XpInput"), 16, 151)
-        drawLine(localized("IGUI_SLA_Admin_LevelsInput"), 16, 211)
+        if not (readOnly and summary.mailbox ~= nil) then
+            drawLine(state.message, 16, state.summary ~= nil and 138 or 58)
+        end
+        if state.profileChoices == nil then
+            drawLine(localized("IGUI_SLA_Admin_XpInput"), 16, 151)
+            drawLine(localized("IGUI_SLA_Admin_LevelsInput"), 16, 211)
+        end
     end
 
     local function closePanel(state)
@@ -690,7 +943,7 @@ function Build42AdminUi.create(dependencies)
         updateControls(state)
     end
 
-    local function createPanel(slot, username)
+    local function createPanel(slot, username, offline)
         local viewportCalled, viewportLeft, viewportTop, viewportWidth, viewportHeight = pcall(viewport, slot)
         if not viewportCalled or not finite(viewportLeft) or not finite(viewportTop)
             or not finite(viewportWidth) or not finite(viewportHeight)
@@ -709,11 +962,13 @@ function Build42AdminUi.create(dependencies)
         local state = {
             slot = slot,
             selectedUsername = username,
+            offline = offline == true,
             target = nil,
             summary = nil,
             waiting = false,
             pendingOperation = nil,
             pendingRequestId = nil,
+            profileChoices = nil,
             access = launcherAvailable(slot),
             message = localized("IGUI_SLA_Admin_Waiting"),
             window = window,
@@ -782,7 +1037,7 @@ function Build42AdminUi.create(dependencies)
             local route = statusRoute(current)
             if route ~= nil and route.username == state.selectedUsername then
                 state.waiting = true
-                state.pendingOperation = "inspect"
+                state.pendingOperation = state.offline and "enumerateOfflineProfiles" or "inspect"
                 state.pendingRequestId = rawget(current, "requestId")
                 updateControls(state)
                 return true
@@ -796,10 +1051,10 @@ function Build42AdminUi.create(dependencies)
             updateControls(state)
             return false
         end
-        return beginRequest(state, "inspect")
+        return beginRequest(state, state.offline and "enumerateOfflineProfiles" or "inspect")
     end
 
-    local function open(slot, username)
+    local function open(slot, username, offline)
         if not validSlot(slot) then return failure("invalid_slot", "localSlot") end
         if mode == "singleplayer" then
             if username ~= nil then return failure("invalid_target", "single player") end
@@ -815,7 +1070,8 @@ function Build42AdminUi.create(dependencies)
         if type(existing) == "table" then
             local state = rawget(existing, "__slaAdminState")
             if type(state) == "table" and not state.closed
-                and (mode == "singleplayer" or state.selectedUsername == username) then
+                and (mode == "singleplayer" or (state.selectedUsername == username
+                    and state.offline == (offline == true))) then
                 local bring = existing.bringToTop
                 if callable(bring) then pcall(bring, existing) end
                 if not state.waiting then attachOrInspect(state) end
@@ -824,7 +1080,7 @@ function Build42AdminUi.create(dependencies)
             if type(state) == "table" then closePanel(state) end
         end
 
-        local state, createFailure = createPanel(slot, username)
+        local state, createFailure = createPanel(slot, username, offline)
         if state == nil then return createFailure end
         rawset(state.window, "__slaAdminState", state)
         attachOrInspect(state)
@@ -862,17 +1118,22 @@ function Build42AdminUi.create(dependencies)
         local onlineCalled, online = pcall(isOnline, item)
         local usernameCalled, username = pcall(getUsername, item)
         local slotCalled, slot = pcall(getPlayerNum, actor)
-        if not onlineCalled or online ~= true or not usernameCalled or not boundedUsername(username)
+        if not onlineCalled or type(online) ~= "boolean" or not usernameCalled or not boundedUsername(username)
             or not slotCalled or not validSlot(slot) then return end
         local menuCalled, menu = pcall(getPlayerContextMenu, slot)
         local addOption = type(menu) == "table" and menu.addOption or nil
         local title = localized("IGUI_SLA_Admin_Menu")
-        if not menuCalled or not callable(addOption) or title == nil then return end
-        local controller = { slot = slot, username = username }
-        controller.activate = function(target)
-            open(target.slot, target.username)
+        local offlineTitle = localized("IGUI_SLA_Admin_SelectProfile")
+        if not menuCalled or not callable(addOption) or title == nil or offlineTitle == nil then return end
+        local function append(titleValue, offline)
+            local controller = { slot = slot, username = username, offline = offline }
+            controller.activate = function(target)
+                open(target.slot, target.username, target.offline)
+            end
+            pcall(addOption, menu, titleValue, controller, controller.activate)
         end
-        pcall(addOption, menu, title, controller, controller.activate)
+        append(title, not online)
+        if online then append(offlineTitle, true) end
     end
 
     scoreboardWrapper = function(scoreboard, player, x, y, ...)

@@ -43,6 +43,9 @@ local CLEAR_REQUEST_FIELDS = {
 }
 local USERNAME_TARGET_FIELDS = { username = true }
 local TARGET_FIELDS = { onlineId = true, username = true }
+local PROFILE_TARGET_FIELDS = {
+    username = true, profileIndex = true, incarnationId = true,
+}
 local SUMMARY_FIELDS = {
     accountingMode = true,
     revision = true,
@@ -119,6 +122,10 @@ local INSPECTION_RESPONSE_FIELDS = {
     ok = true,
     outcome = true,
     summary = true,
+}
+local ENUMERATION_RESPONSE_FIELDS = {
+    protocolVersion = true, requestId = true, operation = true, target = true,
+    ok = true, outcome = true, profiles = true,
 }
 local APPLIED_RESPONSE_FIELDS = {
     protocolVersion = true,
@@ -252,14 +259,82 @@ local function copyUsernameTarget(value)
     return { username = rawget(value, "username") }
 end
 
+local function copyProfileTarget(value)
+    if not exactPlainTable(value, PROFILE_TARGET_FIELDS)
+        or not safeUsername(rawget(value, "username"))
+        or not safeInteger(rawget(value, "profileIndex"))
+        or rawget(value, "profileIndex") > 3
+        or not safeId(rawget(value, "incarnationId"), 64) then return nil end
+    return {
+        username = rawget(value, "username"),
+        profileIndex = rawget(value, "profileIndex"),
+        incarnationId = rawget(value, "incarnationId"),
+    }
+end
+
 local function copyResponseTarget(value)
     local canonical = copyTarget(value)
     if canonical ~= nil then return canonical end
+    local profile = copyProfileTarget(value)
+    if profile ~= nil then return profile end
     return copyUsernameTarget(value)
 end
 
+local function copyMailbox(value)
+    if value == nil then return nil, true end
+    if type(value) ~= "table" or getmetatable(value) ~= nil
+        or rawget(value, "kind") ~= "clearAdvancementSlots"
+        or not safeId(rawget(value, "incarnationId"), 64) then return nil, false end
+    local status = rawget(value, "status")
+    if status == "pending" and exactPlainTable(value, {
+        kind = true, status = true, incarnationId = true,
+        stateRevision = true, queuedPersistenceRevision = true,
+    }) and safeInteger(rawget(value, "stateRevision"))
+        and safeInteger(rawget(value, "queuedPersistenceRevision")) then
+        return {
+            kind = "clearAdvancementSlots", status = status,
+            incarnationId = value.incarnationId, stateRevision = value.stateRevision,
+            queuedPersistenceRevision = value.queuedPersistenceRevision,
+        }, true
+    end
+    if (status == "applied" or status == "failed" or status == "cancelled")
+        and exactPlainTable(value, {
+            kind = true, status = true, incarnationId = true, code = true,
+        }) and safeCode(rawget(value, "code")) then
+        return {
+            kind = "clearAdvancementSlots", status = status,
+            incarnationId = value.incarnationId, code = value.code,
+        }, true
+    end
+    return nil, false
+end
+
 local function copySummary(value)
-    if not exactPlainTable(value, SUMMARY_FIELDS) then return nil end
+    local offline = type(value) == "table" and rawget(value, "profileIndex") ~= nil
+    if not offline and not exactPlainTable(value, SUMMARY_FIELDS) then return nil end
+    if offline then
+        local mailbox, mailboxValid = copyMailbox(rawget(value, "mailbox"))
+        if not mailboxValid or (mailbox ~= nil
+            and mailbox.incarnationId ~= rawget(value, "incarnationId")) then return nil end
+        local count = 0
+        local allowed = {
+            accountingMode = true, revision = true, level = true, xpIntoLevel = true,
+            xpForNextLevel = true, spent = true, availableAp = true, username = true,
+            profileIndex = true, incarnationId = true, initialized = true, dead = true,
+            mailbox = true,
+        }
+        for key in pairs(value) do
+            if type(key) ~= "string" or not allowed[key] then return nil end
+            count = count + 1
+        end
+        if count ~= (mailbox == nil and 12 or 13)
+            or not safeUsername(rawget(value, "username"))
+            or not safeInteger(rawget(value, "profileIndex"))
+            or rawget(value, "profileIndex") > 3
+            or not safeId(rawget(value, "incarnationId"), 64)
+            or type(rawget(value, "initialized")) ~= "boolean"
+            or type(rawget(value, "dead")) ~= "boolean" then return nil end
+    end
     local accountingMode = rawget(value, "accountingMode")
     local revision = rawget(value, "revision")
     local level = rawget(value, "level")
@@ -278,7 +353,7 @@ local function copySummary(value)
         or not safeInteger(availableAp) or availableAp ~= level - spent then
         return nil
     end
-    return {
+    local result = {
         accountingMode = accountingMode,
         revision = revision,
         level = level,
@@ -287,6 +362,15 @@ local function copySummary(value)
         spent = spent,
         availableAp = availableAp,
     }
+    if offline then
+        result.username = value.username
+        result.profileIndex = value.profileIndex
+        result.incarnationId = value.incarnationId
+        result.initialized = value.initialized
+        result.dead = value.dead
+        result.mailbox = copyMailbox(value.mailbox)
+    end
+    return result
 end
 
 local function validateRequestEnvelope(value)
@@ -298,13 +382,15 @@ local function validateRequestEnvelope(value)
 
     local operation = rawget(value, "operation")
     local fields
-    if operation == "inspect" then
+    if operation == "inspect" or operation == "enumerateOfflineProfiles"
+        or operation == "inspectOfflineProfile" then
         fields = INSPECT_REQUEST_FIELDS
     elseif operation == "awardSurvivorXp" then
         fields = XP_REQUEST_FIELDS
     elseif operation == "awardSurvivorLevels" then
         fields = LEVEL_REQUEST_FIELDS
-    elseif operation == "clearAdvancementSlots" then
+    elseif operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+        or operation == "cancelMailbox" or operation == "acknowledgeMailbox" then
         fields = CLEAR_REQUEST_FIELDS
     else
         return nil
@@ -312,10 +398,14 @@ local function validateRequestEnvelope(value)
     if not exactPlainTable(value, fields) then return nil end
 
     local target
-    if operation == "inspect" then
+    if operation == "inspect" or operation == "enumerateOfflineProfiles" then
         target = copyUsernameTarget(rawget(value, "target"))
+    elseif operation == "inspectOfflineProfile"
+        or operation == "queueClearAdvancementSlots" or operation == "cancelMailbox"
+        or operation == "acknowledgeMailbox" then
+        target = copyProfileTarget(rawget(value, "target"))
     else
-        target = copyTarget(rawget(value, "target"))
+        target = copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target"))
     end
     if target == nil then return nil end
     if operation == "awardSurvivorXp" then
@@ -328,7 +418,8 @@ local function validateRequestEnvelope(value)
             or not positiveSafeInteger(rawget(value, "count")) then
             return nil
         end
-    elseif operation == "clearAdvancementSlots" then
+    elseif operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+        or operation == "cancelMailbox" or operation == "acknowledgeMailbox" then
         if not safeInteger(rawget(value, "expectedRevision")) then return nil end
     end
 
@@ -384,14 +475,18 @@ local function validDependencySuccess(result)
 end
 
 local function validateBoundaryResult(result)
-    if not exactPlainTable(result, { ok = true, target = true, targetRef = true })
-        or rawget(result, "ok") ~= true
-        or rawget(result, "target") == nil then
-        return nil, nil
+    if exactPlainTable(result, { ok = true, target = true, targetRef = true })
+        and rawget(result, "ok") == true and rawget(result, "target") ~= nil then
+        local targetRef = copyTarget(rawget(result, "targetRef"))
+        if targetRef ~= nil then return rawget(result, "target"), targetRef, false end
     end
-    local targetRef = copyTarget(rawget(result, "targetRef"))
-    if targetRef == nil then return nil, nil end
-    return rawget(result, "target"), targetRef
+    if exactPlainTable(result, { ok = true, offline = true, targetRef = true })
+        and rawget(result, "ok") == true and rawget(result, "offline") == true then
+        local targetRef = copyProfileTarget(rawget(result, "targetRef"))
+            or copyUsernameTarget(rawget(result, "targetRef"))
+        if targetRef ~= nil then return false, targetRef, true end
+    end
+    return nil, nil, nil
 end
 
 local function validateInspectionResult(result)
@@ -410,11 +505,11 @@ local function validGains(levelsGained, apGained, summary)
 end
 
 local function validateAppliedResult(result, request)
-    local fields = LEVEL_APPLIED_FIELDS
+    local fields = CLEAR_APPLIED_FIELDS
     if request.operation == "awardSurvivorXp" then
         fields = XP_APPLIED_FIELDS
-    elseif request.operation == "clearAdvancementSlots" then
-        fields = CLEAR_APPLIED_FIELDS
+    elseif request.operation == "awardSurvivorLevels" then
+        fields = LEVEL_APPLIED_FIELDS
     end
     if not exactPlainTable(result, fields)
         or rawget(result, "ok") ~= true
@@ -475,6 +570,14 @@ local function inspectionEnvelope(request, targetRef, summary)
     return result
 end
 
+local function enumerationEnvelope(request, targetRef, profiles)
+    local result = responseBase(request, targetRef)
+    result.ok = true
+    result.outcome = "enumerated"
+    result.profiles = profiles
+    return result
+end
+
 local function appliedEnvelope(request, targetRef, sessionResult, summary)
     local result = responseBase(request, targetRef)
     result.ok = true
@@ -531,6 +634,9 @@ function Build42AdminTransport.createServer(dependencies)
     local authorizeAndResolve = rawget(adminBoundary, "authorizeAndResolve")
     local inspect = rawget(adminSession, "inspect")
     local requestMutation = rawget(adminSession, "request")
+    local enumerateOffline = rawget(adminSession, "enumerateOffline")
+    local inspectOffline = rawget(adminSession, "inspectOffline")
+    local requestOffline = rawget(adminSession, "requestOffline")
     local publish = rawget(ownerPublisher, "publish")
     local createCompletion = rawget(completionFactory, "create")
     local record = rawget(audit, "record")
@@ -544,10 +650,7 @@ function Build42AdminTransport.createServer(dependencies)
         local request = validateRequestEnvelope(args)
         if request == nil then return failure("invalid_request", "request", false) end
 
-        local selector = { username = request.target.username }
-        if request.operation ~= "inspect" then
-            selector.onlineId = request.target.onlineId
-        end
+        local selector = copyResponseTarget(request.target)
         local boundaryCalled, boundaryResult = pcall(
             authorizeAndResolve,
             actor,
@@ -556,11 +659,39 @@ function Build42AdminTransport.createServer(dependencies)
         )
         if not boundaryCalled then return publicBoundaryFailure(request, sender, actor) end
 
-        local target, targetRef = validateBoundaryResult(boundaryResult)
+        local target, targetRef, offline = validateBoundaryResult(boundaryResult)
         if target == nil then return publicBoundaryFailure(request, sender, actor) end
 
-        if request.operation == "inspect" then
-            local sessionCalled, sessionResult = pcall(inspect, target)
+        if request.operation == "enumerateOfflineProfiles" then
+            local sessionCalled, sessionResult = pcall(enumerateOffline, targetRef.username)
+            if not sessionCalled or type(sessionResult) ~= "table"
+                or rawget(sessionResult, "ok") ~= true
+                or type(rawget(sessionResult, "profiles")) ~= "table" then
+                return sendResult(sender, actor, failureEnvelope(
+                    request, request.target, "session_failed", "unavailable", false
+                ), false)
+            end
+            local profiles = {}
+            for index = 1, #sessionResult.profiles do
+                profiles[index] = copySummary(sessionResult.profiles[index])
+                if profiles[index] == nil then
+                    return sendResult(sender, actor, failureEnvelope(
+                        request, request.target, "session_failed", "malformed", false
+                    ), false)
+                end
+            end
+            return sendResult(
+                sender, actor, enumerationEnvelope(request, targetRef, profiles), false
+            )
+        end
+
+        if request.operation == "inspect" or request.operation == "inspectOfflineProfile" then
+            local sessionCalled, sessionResult
+            if offline then
+                sessionCalled, sessionResult = pcall(inspectOffline, targetRef)
+            else
+                sessionCalled, sessionResult = pcall(inspect, target)
+            end
             if not sessionCalled then
                 return sendResult(sender, actor, failureEnvelope(
                     request, request.target, "session_failed", "unavailable", false
@@ -585,7 +716,12 @@ function Build42AdminTransport.createServer(dependencies)
             sessionRequest.count = request.count
         end
 
-        local sessionCalled, sessionResult = pcall(requestMutation, target, sessionRequest)
+        local sessionCalled, sessionResult
+        if offline then
+            sessionCalled, sessionResult = pcall(requestOffline, targetRef, sessionRequest)
+        else
+            sessionCalled, sessionResult = pcall(requestMutation, target, sessionRequest)
+        end
         if not sessionCalled then
             return sendResult(sender, actor, failureEnvelope(
                 request, targetRef, "session_failed", "unavailable", false
@@ -597,10 +733,7 @@ function Build42AdminTransport.createServer(dependencies)
             local auditCalled, auditResult = pcall(
                 record,
                 actor,
-                {
-                    onlineId = targetRef.onlineId,
-                    username = targetRef.username,
-                },
+                copyResponseTarget(targetRef),
                 request.operation,
                 "committed"
             )
@@ -617,7 +750,10 @@ function Build42AdminTransport.createServer(dependencies)
                     completion = rawget(completionResult, "completion")
                 end
             end
-            local publicationCalled, publicationResult = pcall(publish, target, completion)
+            local publicationCalled, publicationResult = true, { ok = true }
+            if not offline then
+                publicationCalled, publicationResult = pcall(publish, target, completion)
+            end
             local auditSucceeded = auditCalled and validDependencySuccess(auditResult)
             local publicationSucceeded = publicationCalled
                 and validDependencySuccess(publicationResult)
@@ -678,13 +814,15 @@ local function validateLogicalRequest(value)
 
     local operation = rawget(value, "operation")
     local fields
-    if operation == "inspect" then
+    if operation == "inspect" or operation == "enumerateOfflineProfiles"
+        or operation == "inspectOfflineProfile" then
         fields = INSPECT_LOGICAL_REQUEST_FIELDS
     elseif operation == "awardSurvivorXp" then
         fields = XP_LOGICAL_REQUEST_FIELDS
     elseif operation == "awardSurvivorLevels" then
         fields = LEVEL_LOGICAL_REQUEST_FIELDS
-    elseif operation == "clearAdvancementSlots" then
+    elseif operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+        or operation == "cancelMailbox" or operation == "acknowledgeMailbox" then
         fields = CLEAR_LOGICAL_REQUEST_FIELDS
     else
         return nil
@@ -692,10 +830,13 @@ local function validateLogicalRequest(value)
     if not exactPlainTable(value, fields) then return nil end
 
     local target
-    if operation == "inspect" then
+    if operation == "inspect" or operation == "enumerateOfflineProfiles" then
         target = copyUsernameTarget(rawget(value, "target"))
+    elseif operation == "inspectOfflineProfile" or operation == "queueClearAdvancementSlots"
+        or operation == "cancelMailbox" or operation == "acknowledgeMailbox" then
+        target = copyProfileTarget(rawget(value, "target"))
     else
-        target = copyTarget(rawget(value, "target"))
+        target = copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target"))
     end
     if target == nil then return nil end
     if operation == "awardSurvivorXp" then
@@ -708,7 +849,8 @@ local function validateLogicalRequest(value)
             or not positiveSafeInteger(rawget(value, "count")) then
             return nil
         end
-    elseif operation == "clearAdvancementSlots" then
+    elseif operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+        or operation == "cancelMailbox" or operation == "acknowledgeMailbox" then
         if not safeInteger(rawget(value, "expectedRevision")) then return nil end
     end
 
@@ -727,9 +869,11 @@ local function copyResponseBase(value, target)
         return nil
     end
     local operation = rawget(value, "operation")
-    if operation ~= "inspect" and operation ~= "awardSurvivorXp"
-        and operation ~= "awardSurvivorLevels"
-        and operation ~= "clearAdvancementSlots" then
+    if operation ~= "inspect" and operation ~= "enumerateOfflineProfiles"
+        and operation ~= "inspectOfflineProfile" and operation ~= "awardSurvivorXp"
+        and operation ~= "awardSurvivorLevels" and operation ~= "clearAdvancementSlots"
+        and operation ~= "queueClearAdvancementSlots" and operation ~= "cancelMailbox"
+        and operation ~= "acknowledgeMailbox" then
         return nil
     end
     if target == nil then return nil end
@@ -744,10 +888,26 @@ local function validateResponseEnvelope(value)
     if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
     local operation = rawget(value, "operation")
 
+    if rawget(value, "ok") == true and rawget(value, "outcome") == "enumerated"
+        and exactPlainTable(value, ENUMERATION_RESPONSE_FIELDS)
+        and operation == "enumerateOfflineProfiles" then
+        local base = copyResponseBase(value, copyUsernameTarget(rawget(value, "target")))
+        local source = rawget(value, "profiles")
+        if base == nil or type(source) ~= "table" or getmetatable(source) ~= nil
+            or #source > 4 then return nil end
+        base.ok, base.outcome, base.profiles = true, "enumerated", {}
+        for index = 1, #source do
+            base.profiles[index] = copySummary(source[index])
+            if base.profiles[index] == nil then return nil end
+        end
+        return base
+    end
+
     if rawget(value, "ok") == true and rawget(value, "outcome") == "inspected"
         and exactPlainTable(value, INSPECTION_RESPONSE_FIELDS)
-        and operation == "inspect" then
-        local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
+        and (operation == "inspect" or operation == "inspectOfflineProfile") then
+        local base = copyResponseBase(value,
+            copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target")))
         local summary = copySummary(rawget(value, "summary"))
         if base == nil or summary == nil then return nil end
         base.ok = true
@@ -759,13 +919,16 @@ local function validateResponseEnvelope(value)
     if rawget(value, "ok") == true and rawget(value, "outcome") == "applied"
         and exactPlainTable(value, APPLIED_RESPONSE_FIELDS)
         and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
-            or operation == "clearAdvancementSlots") then
-        local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
+            or operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+            or operation == "cancelMailbox" or operation == "acknowledgeMailbox") then
+        local base = copyResponseBase(value,
+            copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target")))
         local levelsGained = rawget(value, "levelsGained")
         local apGained = rawget(value, "apGained")
         local summary = copySummary(rawget(value, "summary"))
         if base == nil or summary == nil or not validGains(levelsGained, apGained, summary)
-            or (operation == "clearAdvancementSlots"
+            or ((operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+                    or operation == "cancelMailbox" or operation == "acknowledgeMailbox")
                 and (levelsGained ~= 0 or apGained ~= 0)) then
             return nil
         end
@@ -780,10 +943,12 @@ local function validateResponseEnvelope(value)
     if rawget(value, "ok") == true and rawget(value, "outcome") == "rejected"
         and exactPlainTable(value, REJECTION_RESPONSE_FIELDS)
         and (operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
-            or operation == "clearAdvancementSlots")
+            or operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+            or operation == "cancelMailbox" or operation == "acknowledgeMailbox")
         and rawget(value, "code") == "stale_revision"
         and safeDetail(rawget(value, "detail")) then
-        local base = copyResponseBase(value, copyTarget(rawget(value, "target")))
+        local base = copyResponseBase(value,
+            copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target")))
         local summary = copySummary(rawget(value, "summary"))
         if base == nil or summary == nil then
             return nil
@@ -801,13 +966,16 @@ local function validateResponseEnvelope(value)
         and safeDetail(rawget(value, "detail"))
         and type(rawget(value, "committed")) == "boolean" then
         local committed = rawget(value, "committed")
-        if operation == "inspect" and committed ~= false then return nil end
+        if (operation == "inspect" or operation == "enumerateOfflineProfiles"
+            or operation == "inspectOfflineProfile") and committed ~= false then return nil end
         local target
-        if operation == "inspect" then
+        if operation == "inspect" or operation == "enumerateOfflineProfiles" then
             target = copyUsernameTarget(rawget(value, "target"))
-        elseif operation == "awardSurvivorXp" or operation == "awardSurvivorLevels"
-            or operation == "clearAdvancementSlots" then
-            target = copyTarget(rawget(value, "target"))
+        elseif operation == "inspectOfflineProfile" or operation == "awardSurvivorXp"
+            or operation == "awardSurvivorLevels" or operation == "clearAdvancementSlots"
+            or operation == "queueClearAdvancementSlots" or operation == "cancelMailbox"
+            or operation == "acknowledgeMailbox" then
+            target = copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target"))
         end
         local base = copyResponseBase(value, target)
         if base == nil then return nil end
@@ -822,17 +990,27 @@ local function validateResponseEnvelope(value)
 end
 
 local function sameTarget(left, right)
-    return left.onlineId == right.onlineId and left.username == right.username
+    return left.username == right.username and left.onlineId == right.onlineId
+        and left.profileIndex == right.profileIndex
+        and left.incarnationId == right.incarnationId
 end
 
 local function responseMatchesRoute(terminal, route)
     if terminal.operation ~= route.operation then return false end
+    if route.operation == "enumerateOfflineProfiles" then
+        return terminal.target.username == route.target.username
+            and (not terminal.ok or terminal.outcome == "enumerated")
+    end
     if route.operation == "inspect" then
         if terminal.target.username ~= route.target.username then return false end
         if terminal.ok then
             return terminal.outcome == "inspected" and safeInteger(terminal.target.onlineId)
         end
         return terminal.target.onlineId == nil and terminal.committed == false
+    end
+    if route.operation == "inspectOfflineProfile" then
+        return sameTarget(terminal.target, route.target)
+            and (not terminal.ok or terminal.outcome == "inspected")
     end
     if not sameTarget(terminal.target, route.target) then return false end
     if terminal.outcome == "applied" then
@@ -843,7 +1021,10 @@ local function responseMatchesRoute(terminal, route)
         if terminal.operation == "awardSurvivorLevels" then
             return terminal.levelsGained == route.count and terminal.apGained == route.count
         end
-        return terminal.operation ~= "clearAdvancementSlots"
+        return (terminal.operation ~= "clearAdvancementSlots"
+                and terminal.operation ~= "queueClearAdvancementSlots"
+                and terminal.operation ~= "cancelMailbox"
+                and terminal.operation ~= "acknowledgeMailbox")
             or (terminal.levelsGained == 0 and terminal.apGained == 0)
     end
     if terminal.outcome == "rejected" then
@@ -854,8 +1035,7 @@ end
 
 local function copyTerminal(value)
     if value == nil then return nil end
-    local target = { username = value.target.username }
-    if value.target.onlineId ~= nil then target.onlineId = value.target.onlineId end
+    local target = copyResponseTarget(value.target)
     local result = {
         ok = value.ok,
         requestId = value.requestId,
@@ -864,14 +1044,19 @@ local function copyTerminal(value)
     }
     if value.ok then
         result.outcome = value.outcome
-        if value.outcome == "applied" then
+        if value.outcome == "enumerated" then
+            result.profiles = {}
+            for index = 1, #value.profiles do
+                result.profiles[index] = copySummary(value.profiles[index])
+            end
+        elseif value.outcome == "applied" then
             result.levelsGained = value.levelsGained
             result.apGained = value.apGained
         elseif value.outcome == "rejected" then
             result.code = value.code
             result.detail = value.detail
         end
-        result.summary = copySummary(value.summary)
+        if value.summary ~= nil then result.summary = copySummary(value.summary) end
     else
         result.code = value.code
         result.detail = value.detail
@@ -919,8 +1104,12 @@ function Build42AdminTransport.createClient(dependencies)
             operation = logical.operation,
             target = { username = logical.target.username },
         }
-        if logical.operation ~= "inspect" then
+        if logical.target.onlineId ~= nil then
             envelope.target.onlineId = logical.target.onlineId
+        end
+        if logical.target.profileIndex ~= nil then
+            envelope.target.profileIndex = logical.target.profileIndex
+            envelope.target.incarnationId = logical.target.incarnationId
         end
         if logical.operation == "awardSurvivorXp" then
             envelope.expectedRevision = logical.expectedRevision
@@ -928,7 +1117,10 @@ function Build42AdminTransport.createClient(dependencies)
         elseif logical.operation == "awardSurvivorLevels" then
             envelope.expectedRevision = logical.expectedRevision
             envelope.count = logical.count
-        elseif logical.operation == "clearAdvancementSlots" then
+        elseif logical.operation == "clearAdvancementSlots"
+            or logical.operation == "queueClearAdvancementSlots"
+            or logical.operation == "cancelMailbox"
+            or logical.operation == "acknowledgeMailbox" then
             envelope.expectedRevision = logical.expectedRevision
         end
         pendingBySlot[localSlot] = {
@@ -951,8 +1143,12 @@ function Build42AdminTransport.createClient(dependencies)
                 detail = "sendClientCommand",
                 committed = false,
             }
-            if logical.operation ~= "inspect" then
+            if logical.target.onlineId ~= nil then
                 failedTerminal.target.onlineId = logical.target.onlineId
+            end
+            if logical.target.profileIndex ~= nil then
+                failedTerminal.target.profileIndex = logical.target.profileIndex
+                failedTerminal.target.incarnationId = logical.target.incarnationId
             end
             terminalBySlot[localSlot] = failedTerminal
             return failure("send_failed", "sendClientCommand", false)
@@ -998,8 +1194,12 @@ function Build42AdminTransport.createClient(dependencies)
                     username = route.target.username,
                 },
             }
-            if route.operation ~= "inspect" then
+            if route.target.onlineId ~= nil then
                 result.target.onlineId = route.target.onlineId
+            end
+            if route.target.profileIndex ~= nil then
+                result.target.profileIndex = route.target.profileIndex
+                result.target.incarnationId = route.target.incarnationId
             end
             return result
         end

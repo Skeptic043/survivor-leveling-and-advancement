@@ -140,7 +140,7 @@ Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance -eq 'Enable Sur
 Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance_tooltip -eq "Allows an eligible new character to inherit part of the previous character's Survivor Level for the same player profile.") 'inheritance enabled tooltip'
 Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent -eq 'Percentage of Survivor Level Retained') 'inheritance percentage label'
 Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent_tooltip -eq "Percentage of the previous character's Survivor Level inherited by an eligible new character.") 'inheritance percentage tooltip'
-Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes Advancement Slots, catch-up tracking, and recovery restrictions. Natural skill XP still grants Survivor XP.') 'allotment tooltip wording'
+Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes advancement slot, catch-up, and recovery restrictions. Existing tracked progress is preserved. Natural skill XP still grants Survivor XP.') 'allotment tooltip wording'
 Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
 Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value. Vanilla skills can override it below.') 'default limit tooltip wording'
 $sandboxTooltips = @($translations.PSObject.Properties | Where-Object Name -like '*_tooltip')
@@ -203,8 +203,13 @@ $requiredUi = [ordered]@{
     'IGUI_SLA_Reason_AtMaximum' = 'This skill is already at its maximum.'
     'IGUI_SLA_Reason_RedRecovery' = 'Recover natural XP before advancing again.'
     'IGUI_SLA_Reason_InsufficientAp' = 'Not enough AP.'
+    'IGUI_SLA_Reason_RequiredAp' = 'Requires %1 AP.'
     'IGUI_SLA_Reason_AllotmentDisabled' = 'Advancement spending is disabled for this skill.'
-    'IGUI_SLA_Reason_AllotmentCapacity' = 'Advancement slot unavailable.'
+    'IGUI_SLA_Reason_AllotmentCapacity' = 'Requires 1 free advancement slot.'
+    'IGUI_SLA_Reason_AllotmentCapacityTwo' = $null
+    'IGUI_SLA_SlotsHelp' = $null
+    'IGUI_SLA_HighContrastOption' = $null
+    'IGUI_SLA_HighContrastOption_Tooltip' = $null
     'IGUI_SLA_Advancement_Stale' = 'Survivor data changed. Refresh and try again.'
     'IGUI_SLA_Advancement_SendFailed' = 'The advancement request could not be sent. Try again.'
     'IGUI_SLA_Advancement_Committed' = 'The advancement may have applied. Refresh before trying again.'
@@ -231,6 +236,19 @@ $requiredUi = [ordered]@{
     'IGUI_SLA_Admin_InvalidXp' = 'Enter a positive XP amount.'
     'IGUI_SLA_Admin_InvalidLevels' = 'Enter a positive whole level count.'
     'IGUI_SLA_Admin_PendingOther' = 'Another admin request is pending.'
+    'IGUI_SLA_Admin_ProfilePrimary' = 'Primary profile'
+    'IGUI_SLA_Admin_ProfileCoop' = 'Co-op profile %1'
+    'IGUI_SLA_Admin_ProfileSelected' = 'Profile: %1'
+    'IGUI_SLA_Admin_SelectProfile' = 'Offline character profiles'
+    'IGUI_SLA_Admin_ProfileDead' = 'Read-only: this character is dead.'
+    'IGUI_SLA_Admin_ProfileUninitialized' = 'Read-only: Survivor progression is not initialized.'
+    'IGUI_SLA_Admin_QueueClear' = 'Queue Clear Advancements'
+    'IGUI_SLA_Admin_CancelPending' = 'Cancel Pending'
+    'IGUI_SLA_Admin_Acknowledge' = 'Acknowledge'
+    'IGUI_SLA_Admin_MailboxPending' = 'Pending: Clear Advancements — applies when this profile next connects'
+    'IGUI_SLA_Admin_MailboxApplied' = 'Applied: Clear Advancements'
+    'IGUI_SLA_Admin_MailboxFailed' = 'Failed: Clear Advancements'
+    'IGUI_SLA_Admin_MailboxCancelled' = 'Cancelled: Clear Advancements'
     'IGUI_SLA_LevelGain_Singular' = 'Survivor Level +%1'
     'IGUI_SLA_LevelGain_Plural' = 'Survivor Levels +%1'
     'IGUI_SLA_LevelGain_AP' = 'AP +%1'
@@ -249,7 +267,11 @@ Assert ($actualUiKeys.Count -eq $requiredUi.Count) 'exact SLA UI translation cou
 Assert (($actualUiKeys -join ',') -eq (@($requiredUi.Keys) -join ',')) 'exact ordered SLA UI translation keys'
 foreach ($key in $requiredUi.Keys) {
     $value = $uiTranslations.$key
-    Assert ($value -eq $requiredUi[$key]) "exact SLA UI wording $key"
+    if ($null -ne $requiredUi[$key]) {
+        Assert ($value -eq $requiredUi[$key]) "exact SLA UI wording $key"
+    } else {
+        Assert (-not [string]::IsNullOrWhiteSpace($value)) "SLA UI translation exists $key"
+    }
     Assert ($value -notmatch ';') "SLA UI copy has no semicolon $key"
 }
 Write-Output "Public sandbox settings: $assertions assertions passed."

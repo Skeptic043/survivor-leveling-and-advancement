@@ -893,4 +893,71 @@ do
     equal(isolated.status(1).route, "active", "slot reset leaves other refresh route intact")
 end
 
+for _, fault in ipairs({ "not_ready", "ready_throw", "dropped_reply", "send_throw" }) do
+    local now, readyCalls, snapshotCalls, sends = 0, 0, 0, 0
+    local mode, clearFails = fault, false
+    local recoveryPlayer = {}
+    local recoveryClient, recoveryServer
+    recoveryServer = Build42OwnerTransport.createServer({
+        ownerSession = {
+            ready = function()
+                readyCalls = readyCalls + 1
+                if mode == "ready_throw" then error("temporary ready failure") end
+                return { ok = true, snapshot = snapshot(readyCalls, 5, 5, mode ~= "not_ready") }
+            end,
+            snapshot = function()
+                snapshotCalls = snapshotCalls + 1
+                return { ok = true, snapshot = snapshot(100 + snapshotCalls, 5, 5, true) }
+            end,
+            clearPlayer = function()
+                if clearFails then error("clear failure") end
+                return { ok = true }
+            end,
+        },
+        snapshotValidator = ClientOwnerState,
+        completionValidator = LevelGainCompletion,
+        sendServerCommand = function(_, module, command, envelope)
+            if mode == "send_throw" then error("send failed") end
+            if mode ~= "dropped_reply" then recoveryClient.handle(module, command, envelope) end
+        end,
+    }).server
+    recoveryClient = Build42OwnerTransport.createClient({
+        ClientOwnerState = ClientOwnerState,
+        completionValidator = LevelGainCompletion,
+        nowMilliseconds = function() return now end,
+        sendClientCommand = function(player, module, command, envelope)
+            sends = sends + 1
+            recoveryServer.handle(module, command, player, envelope)
+        end,
+    }).client
+    for index = 1, 100 do
+        recoveryServer.handle("SurvivorLevelingAdvancement", "ownerReady", recoveryPlayer, { correlationId = "bad" })
+        recoveryServer.handle("SurvivorLevelingAdvancement", "ownerReady", 5, request("bad-player"))
+    end
+    equal(readyCalls, 0, "malformed ready never reaches owner initialization")
+    expect(recoveryClient.ready(0, recoveryPlayer).ok, "initial ready sends")
+    equal(readyCalls, 1, "first validated ready initializes the native owner session")
+    for index = 1, 100 do
+        recoveryClient.refresh(0, recoveryPlayer)
+    end
+    equal(sends, 1, "client refresh cadence does not flood readiness retries")
+    local beforeReady = readyCalls
+    mode, now = nil, 30000
+    expect(recoveryClient.refresh(0, recoveryPlayer).ok, "ordinary refresh retries readiness after cooldown")
+    expect(recoveryClient.get(0).snapshot.ready, "actual client becomes ready after transient failure")
+    if fault == "dropped_reply" or fault == "send_throw" then
+        equal(readyCalls, beforeReady, "reply loss retries snapshot without repeating initialization")
+    end
+    local initializedCount = readyCalls
+    now = 60000
+    expect(recoveryClient.ready(0, recoveryPlayer).ok, "repeated successful ready rebinds")
+    equal(readyCalls, initializedCount, "successful lifecycle initializes only once")
+    clearFails = true
+    equal(recoveryServer.clearPlayer(recoveryPlayer).ok, false, "teardown dependency failure is explicit")
+    expect(recoveryClient.ready(0, recoveryPlayer).ok, "teardown resets readiness even if dependency fails")
+    equal(readyCalls, initializedCount + 1, "same-object lifecycle reset permits initialization")
+    expect(recoveryClient.ready(1, {}).ok, "new player object reconnect remains independent")
+    equal(readyCalls, initializedCount + 2, "replacement player receives initialization")
+end
+
 return assertions

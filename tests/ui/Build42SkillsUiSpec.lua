@@ -44,8 +44,11 @@ local translations = {
     IGUI_SLA_Reason_AtMaximum = "This skill is already at its maximum.",
     IGUI_SLA_Reason_RedRecovery = "Recover natural XP before advancing again.",
     IGUI_SLA_Reason_InsufficientAp = "Not enough AP.",
+    IGUI_SLA_Reason_RequiredAp = "Requires %1 AP.",
     IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
-    IGUI_SLA_Reason_AllotmentCapacity = "Advancement slot unavailable.",
+    IGUI_SLA_Reason_AllotmentCapacity = "Requires 1 free advancement slot.",
+    IGUI_SLA_Reason_AllotmentCapacityTwo = "Requires 2 free advancement slots.",
+    IGUI_SLA_SlotsHelp = "Slot help translation",
     IGUI_SLA_Advancement_Stale = "Survivor data changed. Refresh and try again.",
     IGUI_SLA_Advancement_SendFailed = "The advancement request could not be sent. Try again.",
     IGUI_SLA_Advancement_Committed = "The advancement may have applied. Refresh before trying again.",
@@ -146,6 +149,7 @@ local function makeEnvironment(options)
         pending = { false, false, false, false },
         terminalResults = {},
         reason = options.reason,
+        omitTargetCost = options.omitTargetCost,
         malformedSettings = false,
         modelFailure = false,
         incompleteEnabled = false,
@@ -213,6 +217,12 @@ local function makeEnvironment(options)
         end
     end
 
+    function CharacterInfo.updateTooltipForJoypad(self)
+        if self.barWithTooltip then self.barWithTooltip:removeTooltip() end
+        self.barWithTooltip = self.progressBars[self.joypadIndex]
+        if self.barWithTooltip then self.barWithTooltip:updateTooltip(self.barWithTooltip.level) end
+    end
+
     function CharacterInfo.onJoypadDirUp(self)
         evidence.priorJoypadUp = evidence.priorJoypadUp + 1
         if not self.joypadIndex or self.joypadIndex == 1 then
@@ -220,6 +230,7 @@ local function makeEnvironment(options)
         else
             self.joypadIndex = self.joypadIndex - 1
         end
+        self:updateTooltipForJoypad()
     end
 
     function CharacterInfo.onJoypadDirDown(self)
@@ -229,15 +240,21 @@ local function makeEnvironment(options)
         else
             self.joypadIndex = self.joypadIndex + 1
         end
+        self:updateTooltipForJoypad()
     end
 
     function CharacterInfo.onJoypadDirLeft() evidence.priorJoypadLeft = evidence.priorJoypadLeft + 1 end
     function CharacterInfo.onJoypadDirRight() evidence.priorJoypadRight = evidence.priorJoypadRight + 1 end
     function CharacterInfo.onGainJoypadFocus(self)
         evidence.priorJoypadGain = evidence.priorJoypadGain + 1
+        self.joyfocus = true
         self.joypadIndex = nil
+        self.barWithTooltip = nil
     end
-    function CharacterInfo.onLoseJoypadFocus() evidence.priorJoypadLose = evidence.priorJoypadLose + 1 end
+    function CharacterInfo.onLoseJoypadFocus(self)
+        evidence.priorJoypadLose = evidence.priorJoypadLose + 1
+        self.joyfocus = nil
+    end
     function CharacterInfo.onMouseWheel(self, delta)
         evidence.priorMouseWheel = evidence.priorMouseWheel + 1
         evidence.wheelDeltas[#evidence.wheelDeltas + 1] = delta
@@ -260,6 +277,20 @@ local function makeEnvironment(options)
         evidence.priorRemoveTooltip = evidence.priorRemoveTooltip + 1
         if evidence.removeTooltipThrows then error("remove tooltip boom") end
         self.message = nil
+        if self.tooltip then self.tooltip.removed = true end
+        self.tooltip = nil
+    end
+
+    function ProgressBar.render(self)
+        self:renderPerkRect()
+        if self.tooltip ~= nil and (self.tooltip.mouseOver or self.mouseX < 0) then self:removeTooltip() end
+        if self.message ~= nil then
+            if self.tooltip == nil then
+                evidence.skillTooltipCreates = (evidence.skillTooltipCreates or 0) + 1
+                self.tooltip = { prerender = function() end }
+            end
+            self.tooltip.description = self.message
+        end
     end
 
     function ProgressBar.activate(self)
@@ -443,6 +474,11 @@ local function makeEnvironment(options)
                     row.highWaterPosition = evidence.highWaterPosition == nil and 150 or evidence.highWaterPosition
                 end
                 if reason ~= nil then row.reasonCode = reason end
+                if evidence.omitTargetCost then
+                    row.nextTargetLevel = nil
+                    row.apCost = nil
+                end
+                if reason == "allotment_capacity" then row.requiredSlots = evidence.requiredSlots or 1 end
                 if input.allotment.mode == "PerSkill" then
                     row.activeCount = 1
                     row.limit = input.allotment.perSkillOverrides[source.perkId]
@@ -566,7 +602,27 @@ local function makeEnvironment(options)
         measureText = function(text) return #text * (evidence.measureScale or 1) end,
         smallFont = "small-font",
         joypadAButton = "A",
+        highContrastEnabled = function()
+            evidence.contrastReads = (evidence.contrastReads or 0) + 1
+            if evidence.contrastThrows then error("option read") end
+            return evidence.highContrast == true
+        end,
     }
+    if options.headerTooltip then
+        dependencies.fontHeight = function() return 12 end
+        dependencies.ISToolTip = { new = function()
+            local tooltip = { visible = false, managed = false }
+            function tooltip:setOwner(value) self.owner = value end
+            function tooltip:setAlwaysOnTop(value) self.alwaysOnTop = value end
+            function tooltip:setVisible(value) self.visible = value end
+            function tooltip:removeFromUIManager() self.managed = false end
+            function tooltip:addToUIManager() self.managed = true end
+            function tooltip:prerender() self.preDraws = (self.preDraws or 0) + 1 end
+            function tooltip:render() self.draws = (self.draws or 0) + 1 end
+            evidence.headerTooltip = tooltip
+            return tooltip
+        end }
+    end
     if options.adminLauncher then
         dependencies.adminLauncher = {
             install = function()
@@ -618,6 +674,9 @@ local function makeParent(width, height, ancestor, x, y)
     function parent:getY() return self.y end
     function parent:getWidth() return self.width end
     function parent:getHeight() return self.height end
+    function parent:isMouseOver() return self.mouseOver == true end
+    function parent:getMouseX() return self.mouseX or -100 end
+    function parent:getMouseY() return self.mouseY or -100 end
     function parent:setX(value)
         if self.keepOnScreen then
             value = math.max(0, math.min(value, self.screenWidth - self.width))
@@ -783,6 +842,10 @@ local function makeView(environment, slot, bars, delayed)
         if environment.vanillaRenderClampsScroll then self.yScroll = 0 end
     end
     function view:isVisible() return self.visible ~= false end
+    function view:isReallyVisible()
+        return self:isVisible() and self.parent ~= nil and self.parent.hidden ~= true
+            and self.outer.hidden ~= true and self.removed ~= true
+    end
     function view:setVisible(value)
         self.visibleTransitions = self.visibleTransitions + 1
         self.visible = value
@@ -913,8 +976,8 @@ equal(environment.listenerSets, 1, "repeat install does not replace listener")
 expect(exact(environment.integration.status(), { ok = true, installed = true }), "status surface exact")
 local installedMouseUp = environment.ProgressBar.onMouseUp
 local installedRemoveTooltip = environment.ProgressBar.removeTooltip
-expect(installedRemoveTooltip == vanillaRemoveTooltip,
-    "vanilla tooltip-removal ownership remains unpatched")
+expect(installedRemoveTooltip ~= vanillaRemoveTooltip,
+    "tooltip removal has one owned controller retention guard")
 
 local player = { identity = "exact-player" }
 local axe = makeBar(environment, "Axe", { player = player })
@@ -1863,12 +1926,52 @@ for index = 1, #reasons do
     equal(string.find(tooltip, "secret", 1, true), nil, "reason tooltip omits detail " .. reasons[index])
     expect(not reasonBar.children[1].enabled, "reason disables button " .. reasons[index])
     if reasons[index] == "insufficient_ap" then
-        equal(tooltip, "Not enough AP.", "disabled plus owns exact insufficient-AP copy")
+        equal(tooltip, "Requires 1 AP.", "disabled plus owns exact insufficient-AP copy")
         reasonBar.mouseX = 35
         reasonBar:updateTooltip()
-        equal(string.find(reasonBar.message, "Not enough AP.", 1, true), nil,
+        equal(string.find(reasonBar.message, "Requires 1 AP.", 1, true), nil,
             "vanilla skill tooltip omits insufficient-AP copy")
+    else
+        equal(string.find(tooltip, " AP.", 1, true), nil,
+            "other blocking reasons do not gain AP requirements " .. reasons[index])
     end
+end
+
+do
+    local apModes = { "Global", "PerSkill", "Free" }
+    local cases = {
+        { level = 1, available = 0, cost = 1 },
+        { level = 9, available = 0, cost = 2 },
+        { level = 9, available = 1, cost = 2 },
+    }
+    for modeIndex = 1, #apModes do
+        local mode = apModes[modeIndex]
+        local suffix = mode == "PerSkill" and " <LINE> Advancement Slots: 1/4." or ""
+        for caseIndex = 1, #cases do
+            local case = cases[caseIndex]
+            local env = makeEnvironment({ mode = mode, reason = "insufficient_ap",
+                availableAp = case.available, spentAp = 5 - case.available })
+            expect(env.integration.install().ok, "AP requirement integration installs")
+            local bar = makeBar(env, "Axe", { level = case.level })
+            local view = makeView(env, 0, { bar })
+            view:prerender()
+            equal(bar.children[1].tooltip, "Requires " .. case.cost .. " AP." .. suffix,
+                mode .. " reports full row cost with " .. case.available .. " AP available")
+            expect(not bar.children[1].enabled, "insufficient AP keeps advancement disabled")
+            env.pending[1] = true
+            env.now = 1000
+            view:prerender()
+            equal(bar.children[1].tooltip, "An advancement request is pending." .. suffix,
+                mode .. " pending reason takes priority over AP cost")
+        end
+    end
+
+    local env = makeEnvironment({ reason = "insufficient_ap", omitTargetCost = true })
+    expect(env.integration.install().ok, "no-cost fallback integration installs")
+    local bar = makeBar(env, "Axe")
+    local view = makeView(env, 0, { bar })
+    view:prerender()
+    equal(bar.children[1].tooltip, "Not enough AP.", "missing row cost keeps generic AP fallback")
 end
 
 do
@@ -2793,5 +2896,271 @@ equal(offsetAdminView.parent.width, offsetAdminButton.x + offsetAdminButton.widt
 
 equal(environment.adminRequests, 0, "Skills UI never calls admin request")
 equal(environment.adminStatusReads, 0, "Skills UI never reads admin status")
+
+do
+    local function runHeaderCases()
+    local env = makeEnvironment({ headerTooltip = true, adminLauncher = true })
+    expect(env.integration.install().ok, "C58 integration installs")
+    local bar = makeBar(env, "Axe")
+    local view = makeView(env, 0, { bar })
+    view:prerender()
+    view:render()
+    local slots = lastDrawText(view.statusDraws, "Advancement Slots: 2/6")
+    expect(slots ~= nil, "Global slot label exists")
+    local parent = view.parent
+    parent.mouseOver = true
+    parent.mouseX, parent.mouseY = slots.x - 1, slots.y + 1
+    view:render()
+    local tip = env.headerTooltip
+    expect(tip ~= nil and tip.visible and tip.managed, "exact header region shows native tooltip")
+    equal(tip.description, translations.IGUI_SLA_SlotsHelp, "header uses localized help")
+    env.now = env.now + 1000
+    view:prerender()
+    view:render()
+    equal(env.headerTooltip, tip, "ordinary cache refresh reuses an already-visible tooltip")
+    equal(#parent.children, 2, "tooltip adds no input-capturing header child")
+    local width, height = parent.width, parent.height
+    parent.mouseX = slots.x
+    tip:prerender()
+    expect(not tip.visible and not tip.managed, "right edge excludes neighboring controls without Skills redraw")
+    for _, edge in ipairs({ "left", "above", "below" }) do
+        parent.mouseX = edge == "left" and slots.x - #slots.text - 1 or slots.x - 1
+        parent.mouseY = edge == "above" and slots.y - 1 or edge == "below" and slots.y + 12 or slots.y + 1
+        view:render()
+        expect(not env.headerTooltip.visible, "header hit region excludes " .. edge)
+    end
+    local function show()
+        parent.mouseX, parent.mouseY = slots.x - 1, slots.y + 1
+        view:render()
+        expect(env.headerTooltip.visible, "header tooltip can reopen")
+        return env.headerTooltip
+    end
+    tip = show()
+    view:setVisible(false)
+    expect(not tip.visible and not tip.managed, "tab hide immediately detaches help")
+    view:setVisible(true)
+    tip = show()
+    parent.hidden = true
+    tip:prerender()
+    expect(not tip.visible and not tip.managed, "hidden ancestor clears help without Skills callback")
+    parent.hidden = false
+    tip = show()
+    view.outer.isCollapsed = true
+    tip:render()
+    expect(not tip.visible and not tip.managed, "collapsed ancestor clears help without Skills callback")
+    view.outer.isCollapsed = false
+    tip = show()
+    view.parent = makeParent()
+    tip:prerender()
+    expect(not tip.visible and not tip.managed, "parent replacement detaches old help")
+    view.parent = parent
+    tip = show()
+    view.removed = true
+    tip:prerender()
+    expect(not tip.visible and not tip.managed, "removed owner detaches help")
+    view.removed = false
+    tip = show()
+    env.mode = "Free"
+    env.listener(0)
+    view:prerender()
+    view:render()
+    expect(not tip.visible and not tip.managed, "Free rebuild detaches help")
+    env.mode = "PerSkill"
+    env.listener(0)
+    view:prerender()
+    view:render()
+    expect(not tip.visible and not tip.managed, "Per Skill has no Global header help")
+    equal(parent.width, width, "header help has no width effect")
+    equal(parent.height, height, "header help has no height effect")
+    env.mode = "Global"
+    env.listener(0)
+    view:prerender()
+    tip = show()
+    env.CharacterInfo.render = function() end
+    expect(not env.integration.status().installed, "lost ownership reports disabled integration")
+    expect(not tip.visible and not tip.managed, "disabled integration detaches help")
+    end
+    runHeaderCases()
+end
+
+do
+    local function runContrastCases()
+    local env = makeEnvironment()
+    expect(env.integration.install().ok, "contrast integration installs")
+    local bar = makeBar(env, "Axe")
+    local view = makeView(env, 0, { bar })
+    view:prerender()
+    view:render()
+    bar:renderPerkRect()
+    local original = bar.draws
+    local reads = env.contrastReads
+    for index = 1, 5 do view:prerender(); bar:renderPerkRect() end
+    equal(env.contrastReads, reads, "frames do not read client setting")
+    bar.draws = {}
+    env.highContrast = true
+    env.now = env.now + 1000
+    view:prerender()
+    bar:renderPerkRect()
+    equal(#bar.draws, 10, "contrast adds narrow black outlines to both marker types")
+    equal(bar.draws[1].r, 0, "target has black inner outline")
+    equal(bar.draws[2].b, 1, "target remains blue")
+    expect(bar.draws[6].b > bar.draws[6].r, "catch-up position remains blue")
+    expect(bar.draws[10].r > bar.draws[10].b, "recovery position remains red")
+    local otherBar = makeBar(env, "Cooking")
+    local otherView = makeView(env, 1, { otherBar })
+    otherView:prerender(); otherView:render(); otherBar:renderPerkRect()
+    equal(#otherBar.draws, 10, "all local Skills views use the shared setting")
+    for _, fails in ipairs({ false, true }) do
+        env.highContrast = fails
+        env.contrastThrows = fails
+        env.now = env.now + 1000
+        view:prerender()
+        bar.draws = {}
+        bar:renderPerkRect()
+        equal(#bar.draws, 5, "off or failed setting restores original draw count")
+        for index = 1, #bar.draws do
+            for key, value in pairs(bar.draws[index]) do
+                equal(value, original[index][key], "off or failed setting retains original geometry and palette")
+            end
+        end
+        expect(bar.children[1].enabled, "option failure does not disable Skills")
+    end
+    env.contrastThrows = false
+    env.highContrast = true
+    env.mode = "Free"
+    env.listener(0)
+    view:prerender()
+    bar.draws = {}
+    bar:renderPerkRect()
+    equal(#bar.draws, 0, "Free suppresses high-contrast overlays")
+    env.mode = "Global"
+    env.reason = "allotment_capacity"
+    for _, required in ipairs({ 1, 2 }) do
+        env.requiredSlots = required
+        env.listener(0)
+        view:prerender()
+        equal(bar.children[1].tooltip, translations[required == 1
+            and "IGUI_SLA_Reason_AllotmentCapacity" or "IGUI_SLA_Reason_AllotmentCapacityTwo"],
+            "capacity tooltip uses effective requirement from model")
+    end
+    end
+    runContrastCases()
+end
+
+do
+    local function controllerCases()
+        local env = makeEnvironment()
+        expect(env.integration.install().ok, "controller accounting integration installs")
+        local first, second = makeBar(env, "Axe"), makeBar(env, "Trapping")
+        local panel = makeView(env, 0, { first, second })
+        panel:prerender()
+        panel:render()
+        panel:prerender()
+        panel:onGainJoypadFocus()
+        panel:onJoypadDirDown()
+        expect(string.find(first.message or "", "100 natural skill XP left", 1, true) ~= nil,
+            "controller selection without mouse shows nearest target debt")
+        expect(string.find(first.message or "", "50 lost skill XP left", 1, true) ~= nil,
+            "controller accounting includes recovery when present")
+        equal(string.find(first.message or "", "300 natural", 1, true), nil,
+            "controller keeps accounting limited to the next target")
+        first:render()
+        panel:render()
+        local tooltip = first.tooltip
+        local creates, updates, reads = env.skillTooltipCreates, env.priorTooltip, total(env.stateReads)
+        first.children[1].mouseOver = true
+        for index = 1, 20 do
+            panel:prerender()
+            first:render()
+            panel:render()
+        end
+        expect(first.tooltip == tooltip and not tooltip.removed,
+            "controller tooltip survives vanilla non-mouse removal over repeated frames")
+        equal(env.skillTooltipCreates, creates, "steady controller render does not recreate tooltip")
+        equal(env.priorTooltip, updates, "steady controller render does not rebuild tooltip text")
+        equal(total(env.stateReads), reads, "controller render does not add state reads")
+        first.children[1].mouseOver = false
+        panel:onJoypadDirDown()
+        expect(first.tooltip == nil and first.message == nil, "movement clears previous row accounting")
+        expect(string.find(second.message or "", "100 natural", 1, true) ~= nil,
+            "movement selects next row accounting")
+        second:render()
+        panel:render()
+        local secondTooltip = second.tooltip
+        tooltip:prerender()
+        expect(second.tooltip == secondTooltip, "stale tooltip cannot clear a newer row's tooltip")
+        panel:onJoypadDirRight()
+        expect(second.children[1].joypadFocused, "Right retains advancement button navigation")
+        expect(second.tooltip == nil and second.message == nil, "Right removes skill tooltip for button focus")
+        panel:onJoypadDown("A")
+        equal(env.requests[1], 1, "controller button still requests one advancement")
+        panel:onJoypadDirLeft()
+        expect(not second.children[1].joypadFocused, "Left returns from advancement button")
+        expect(string.find(second.message or "", "100 natural", 1, true) ~= nil,
+            "Left restores accounting without moving mouse")
+        second:render()
+        panel:render()
+        panel:onLoseJoypadFocus()
+        expect(second.tooltip == nil and second.message == nil, "focus loss removes controller accounting")
+        panel:onGainJoypadFocus()
+        panel:onJoypadDirDown()
+        first:render()
+        panel:render()
+        panel.visible = false
+        first.tooltip:prerender()
+        expect(first.tooltip == nil and first.message == nil,
+            "hidden panel clears accounting from tooltip lifecycle without panel render")
+        panel.visible = true
+        panel:prerender()
+        first:render()
+        panel:render()
+        panel.outer.isCollapsed = true
+        first.tooltip:prerender()
+        expect(first.tooltip == nil, "collapsed ancestor clears controller tooltip")
+        panel.outer.isCollapsed = false
+        env.naturalPosition = 175
+        env.highWaterPosition = 175
+        env.listener(0)
+        panel:prerender()
+        expect(string.find(first.message or "", "25 natural skill XP left", 1, true) ~= nil,
+            "cached model refresh updates selected accounting amount")
+        equal(string.find(first.message or "", "lost skill XP left", 1, true), nil,
+            "repaid recovery disappears on cache refresh")
+        env.activeTargets = { { targetLevel = 10, targetPosition = 1000 } }
+        env.listener(0)
+        panel:prerender()
+        expect(string.find(first.message or "", "825 natural skill XP left", 1, true) ~= nil,
+            "mastery target shows full debt to its release point without dividing by slot weight")
+        local other = makeBar(env, "Axe")
+        local otherPanel = makeView(env, 1, { other })
+        otherPanel:prerender()
+        otherPanel:render()
+        otherPanel:prerender()
+        otherPanel:onGainJoypadFocus()
+        otherPanel:onJoypadDirDown()
+        other:render()
+        otherPanel:render()
+        local otherTooltip = other.tooltip
+        panel:onLoseJoypadFocus()
+        expect(other.tooltip == otherTooltip and other.message ~= nil,
+            "one local player's focus loss leaves the other player's tooltip owned")
+        env.activeTargets = {}
+        env.listener(1)
+        otherPanel:prerender()
+        expect(other.tooltip == nil, "paid-up model clears retained accounting")
+        updates = env.priorTooltip
+        for index = 1, 10 do otherPanel:prerender(); otherPanel:render() end
+        equal(env.priorTooltip, updates, "paid-up controller rows do not rebuild text each frame")
+        env.activeTargets = { { targetLevel = 2, targetPosition = 200 } }
+        env.listener(1)
+        otherPanel:prerender()
+        other:render()
+        otherPanel:render()
+        env.ProgressBar.removeTooltip = function() end
+        expect(not env.integration.status().installed, "tooltip removal hook replacement fails closed")
+        expect(other.tooltip == nil, "hook ownership loss clears controller tooltip")
+    end
+    controllerCases()
+end
 
 return assertions

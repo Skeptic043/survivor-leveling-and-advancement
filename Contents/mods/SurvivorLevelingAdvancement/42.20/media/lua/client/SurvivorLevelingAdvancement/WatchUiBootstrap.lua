@@ -1,11 +1,7 @@
-require "PZAPI/ModOptions"
-require "OptionScreens/MainOptions"
 require "ISUI/ISUIElement"
 
 local SENTINEL_KEY = "__SLA_Build42WatchUi_42_20_v4"
 local SENTINEL_SIGNATURE = "sla.build42-watch-ui/42.20/v4"
-local OPTION_GROUP = "SurvivorLevelingAdvancement"
-local OPTION_ID = "ShowWatchProgress"
 
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }
@@ -35,49 +31,13 @@ if existing ~= nil then
     return existing.integration
 end
 
-if type(PZAPI) ~= "table" or type(PZAPI.ModOptions) ~= "table"
-    or type(PZAPI.ModOptions.getOptions) ~= "function" then
-    return failure("watch_option_failed", "ModOptions.getOptions")
-end
-local optionsCalled, options = pcall(PZAPI.ModOptions.getOptions, PZAPI.ModOptions, OPTION_GROUP)
-if not optionsCalled then return failure("watch_option_failed", "ModOptions.getOptions") end
-if options == nil then
-    if type(PZAPI.ModOptions.create) ~= "function" then
-        return failure("watch_option_failed", "ModOptions.create")
-    end
-    local createCalled
-    createCalled, options = pcall(PZAPI.ModOptions.create, PZAPI.ModOptions, OPTION_GROUP, "IGUI_SLA_ModOptions_Title")
-    if not createCalled then return failure("watch_option_failed", "ModOptions.create") end
-end
-if type(options) ~= "table" or type(options.getOption) ~= "function"
-    or type(options.addTickBox) ~= "function" then
-    return failure("watch_option_failed", "options")
-end
-local getCalled, option = pcall(options.getOption, options, OPTION_ID)
-if not getCalled then return failure("watch_option_failed", "options.getOption") end
-if option == nil then
-    local addCalled
-    addCalled, option = pcall(options.addTickBox, options, OPTION_ID,
-        "IGUI_SLA_WatchOption", false, "IGUI_SLA_WatchOption_Tooltip")
-    if not addCalled then return failure("watch_option_failed", "options.addTickBox") end
-end
+local optionsCalled, options = pcall(function()
+    return require("SurvivorLevelingAdvancement/ClientOptions").ensure()
+end)
+local option = optionsCalled and type(options) == "table" and options.watch or nil
 if type(option) ~= "table" or type(option.getValue) ~= "function" then
     return failure("watch_option_failed", "option")
 end
-
-local function ensureModOptionsPage()
-    local instance = type(MainOptions) == "table" and rawget(MainOptions, "instance") or nil
-    if type(instance) ~= "table" then return end
-    local tabs = rawget(instance, "tabs")
-    local getView = type(tabs) == "table" and tabs.getView or nil
-    local addPanel = instance.addModOptionsPanel
-    if type(getView) ~= "function" or type(addPanel) ~= "function" then return end
-    local title = getText("UI_mainscreen_mods")
-    local viewed, existingPage = pcall(getView, tabs, title)
-    if viewed and existingPage == nil then pcall(addPanel, instance) end
-end
-
-ensureModOptionsPage()
 
 local lifecycle = require "SurvivorLevelingAdvancement/Bootstrap"
 local Build42WatchUi = require "SurvivorLevelingAdvancement/UI/Build42WatchUi"
@@ -172,6 +132,7 @@ local createdCalled, created = pcall(Build42WatchUi.create, {
     isWorldMapVisible = isWorldMapVisible,
     getClock = function() return UIManager.getClock() end,
     minuteStamp = function() return getGameTime():getMinutesStamp() end,
+    clockMillis = function() return getTimestampMs() end,
     getPlayer = function(slot) return getSpecificPlayer(slot) end,
     isDead = function(player) return player:isDead() end,
     createPanel = createPanel,

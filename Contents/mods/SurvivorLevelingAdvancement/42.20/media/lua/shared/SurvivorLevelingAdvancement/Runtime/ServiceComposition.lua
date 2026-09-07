@@ -157,6 +157,11 @@ local function validateDependencies(dependencies)
     if not hasFunctions(dependencies.stateStore, { "load", "save" }) then
         return failure("invalid_dependencies", "stateStore capabilities are required")
     end
+    if dependencies.offlineStore ~= nil and not hasFunctions(dependencies.offlineStore, {
+        "enumerate", "inspect", "replace", "resolvePlayer",
+    }) then
+        return failure("invalid_dependencies", "offlineStore capabilities are required")
+    end
     if not hasFunctions(dependencies.characterStore, {
         "inspect", "tokenNewCharacter", "markInitialized", "markDeathRecorded",
     }) then
@@ -233,8 +238,18 @@ local function callAdminSession(factory, argument)
         return nil, failure("invalid_factory_result", "AdminSession.create returned a malformed result")
     end
     local session = rawget(result, "session")
-    if not exactPlain(session, { inspect = true, request = true })
-        or type(rawget(session, "inspect")) ~= "function" or type(rawget(session, "request")) ~= "function" then
+    if not exactPlain(session, {
+        inspect = true, request = true, enumerateOffline = true,
+        inspectOffline = true, requestOffline = true, resolveProfile = true,
+        deliverPending = true,
+    })
+        or type(rawget(session, "inspect")) ~= "function"
+        or type(rawget(session, "request")) ~= "function"
+        or type(rawget(session, "enumerateOffline")) ~= "function"
+        or type(rawget(session, "inspectOffline")) ~= "function"
+        or type(rawget(session, "requestOffline")) ~= "function"
+        or type(rawget(session, "resolveProfile")) ~= "function"
+        or type(rawget(session, "deliverPending")) ~= "function" then
         return nil, failure("invalid_factory_result", "AdminSession.create returned a malformed service")
     end
     return session, nil
@@ -541,6 +556,7 @@ function ServiceComposition.create(dependencies)
             SurvivorEconomy = dependencies.SurvivorEconomy,
             NaturalLedger = dependencies.NaturalLedger,
             ActualObservation = dependencies.ActualObservation,
+            offlineStore = dependencies.offlineStore,
         }
     )
     if adminSession == nil then

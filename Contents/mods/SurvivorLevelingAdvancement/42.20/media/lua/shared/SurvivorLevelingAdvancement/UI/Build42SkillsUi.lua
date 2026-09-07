@@ -406,7 +406,7 @@ local function validModelView(value)
             currentLevel = true, effectiveMaximum = true, nextTargetLevel = true,
             apCost = true, enabled = true, reasonCode = true, activeCount = true,
             limit = true, activeTargets = true, naturalPosition = true,
-            highWaterPosition = true,
+            highWaterPosition = true, requiredSlots = true,
         }
         if not safeId(perkId, 128) or type(row) ~= "table" or getmetatable(row) ~= nil
             or type(rawget(row, "enabled")) ~= "boolean"
@@ -416,6 +416,10 @@ local function validModelView(value)
         for key in pairs(row) do
             if type(key) ~= "string" or not allowed[key] then return false end
         end
+        local requiredSlots = rawget(row, "requiredSlots")
+        if requiredSlots ~= nil and (mode == "Free"
+            or (requiredSlots ~= 1 and requiredSlots ~= 2)) then return false end
+        if rawget(row, "reasonCode") == "allotment_capacity" and requiredSlots == nil then return false end
         if (rawget(row, "nextTargetLevel") == nil) ~= (rawget(row, "apCost") == nil) then return false end
         if rawget(row, "nextTargetLevel") ~= nil then
             if not positiveInteger(rawget(row, "nextTargetLevel"))
@@ -493,6 +497,11 @@ function Build42SkillsUi.create(dependencies)
         smallFont = true,
         joypadAButton = true,
     }
+    for _, key in ipairs({ "ISToolTip", "fontHeight", "highContrastEnabled" }) do
+        if type(dependencies) == "table" and rawget(dependencies, key) ~= nil then
+            dependencyFields[key] = true
+        end
+    end
     local launcherDependencyFields = {}
     for key in pairs(dependencyFields) do launcherDependencyFields[key] = true end
     launcherDependencyFields.adminLauncher = true
@@ -517,6 +526,9 @@ function Build42SkillsUi.create(dependencies)
     local smallFont = rawget(dependencies, "smallFont")
     local joypadAButton = rawget(dependencies, "joypadAButton")
     local adminLauncher = rawget(dependencies, "adminLauncher")
+    local tooltipClass = rawget(dependencies, "ISToolTip")
+    local fontHeight = rawget(dependencies, "fontHeight")
+    local highContrastEnabled = rawget(dependencies, "highContrastEnabled")
 
     local priorPrerender = method(characterInfo, "prerender")
     local priorRender = method(characterInfo, "render")
@@ -673,7 +685,41 @@ function Build42SkillsUi.create(dependencies)
         if state ~= nil then state.joypadButton = nil end
     end
 
+    local function clearControllerTooltip(state)
+        local bar = state and state.controllerBar or nil
+        if bar == nil then return end
+        state.controllerBar, state.controllerRow, state.controllerTooltip = nil, nil, nil
+        pcall(priorRemoveTooltip, bar)
+    end
+
+    local function controllerSelected(barState)
+        if barState == nil or not barState.tracked or not barState.overlayValid
+            or barState.row == nil then return false end
+        local row = barState.row
+        if row.activeTargets == nil or (#row.activeTargets == 0
+            and (row.naturalPosition == nil or row.naturalPosition >= row.highWaterPosition)) then return false end
+        local state, bar = barState.state, barState.bar
+        if state == nil or state.disabled or state.headerUnavailable
+            or state.joypadButton ~= nil then return false end
+        local view = state.view
+        local collection, index = rawget(view, "progressBars"), rawget(view, "joypadIndex")
+        if not rawget(view, "joyfocus") or type(collection) ~= "table" or index == nil
+            or rawget(collection, index) ~= bar or not isVisible(view) then return false end
+        local called, visible = false, false
+        if callable(view.isReallyVisible) then called, visible = pcall(view.isReallyVisible, view) end
+        if not called or visible ~= true then return false end
+        local node = view
+        while type(node) == "table" do
+            if rawget(node, "isCollapsed") == true then return false end
+            node = rawget(node, "parent")
+        end
+        return true
+    end
+
     local function removeButtonCallback(barState)
+        if barState and barState.state and barState.state.controllerBar == barState.bar then
+            clearControllerTooltip(barState.state)
+        end
         local button = barState and barState.button or nil
         if type(button) == "table" then
             if barState.state and barState.state.joypadButton == button then
@@ -690,8 +736,80 @@ function Build42SkillsUi.create(dependencies)
     local rebaseAdminGeometry
     local releaseAdminGeometry
 
+    local function hideHeaderTooltip(state)
+        local tooltip = state.headerTooltip
+        if tooltip ~= nil then
+            pcall(tooltip.setVisible, tooltip, false)
+            pcall(tooltip.removeFromUIManager, tooltip)
+            state.headerTooltip = nil
+        end
+        state.headerBounds = nil
+    end
+
+    local function headerHovered(state)
+        local bounds = state.headerBounds
+        local view = state.view
+        if state.disabled or state.headerUnavailable or bounds == nil or state.cache == nil
+            or state.cache.allotment.mode ~= "Global" or rawget(view, "parent") ~= bounds.parent
+            or not isVisible(view) then return false end
+        local reallyVisible = view.isReallyVisible
+        local called, visible = false, false
+        if callable(reallyVisible) then called, visible = pcall(reallyVisible, view) end
+        if not called or visible ~= true then return false end
+        local node = view
+        while type(node) == "table" do
+            if rawget(node, "isCollapsed") == true then return false end
+            node = rawget(node, "parent")
+        end
+        local parent = bounds.parent
+        local overCalled, over = false, false
+        if callable(parent.isMouseOver) then overCalled, over = pcall(parent.isMouseOver, parent) end
+        if not overCalled or over ~= true then return false end
+        local x, y = readNumber(parent, "getMouseX"), readNumber(parent, "getMouseY")
+        return x ~= nil and y ~= nil and x >= bounds.x and x < bounds.x + bounds.width
+            and y >= bounds.y and y < bounds.y + bounds.height
+    end
+
+    local function updateHeaderTooltip(state, parent, right, y)
+        if tooltipClass == nil or not callable(fontHeight) then return end
+        local text = state.statusSecondRightText
+        if text == nil then hideHeaderTooltip(state); return end
+        local measured, width = pcall(measureText, text)
+        local heightCalled, height = pcall(fontHeight)
+        if not measured or not finite(width) or width <= 0
+            or not heightCalled or not finite(height) or height <= 0 then
+            hideHeaderTooltip(state)
+            return
+        end
+        if state.headerBounds ~= nil and state.headerBounds.parent ~= parent then hideHeaderTooltip(state) end
+        state.headerBounds = { parent = parent, x = right - width, y = y, width = width, height = height }
+        if not headerHovered(state) then hideHeaderTooltip(state); return end
+        if state.headerTooltip ~= nil then return end
+        local description = localized("IGUI_SLA_SlotsHelp")
+        if description == nil then return end
+        local tooltip = tooltipClass:new()
+        tooltip:setOwner(state.view)
+        tooltip:setAlwaysOnTop(true)
+        tooltip.description = description
+        tooltip.maxLineWidth = 300
+        local priorTooltipPrerender, priorTooltipRender = tooltip.prerender, tooltip.render
+        tooltip.prerender = function(target, ...)
+            if not headerHovered(state) then hideHeaderTooltip(state); return end
+            return priorTooltipPrerender(target, ...)
+        end
+        tooltip.render = function(target, ...)
+            if not headerHovered(state) then hideHeaderTooltip(state); return end
+            return priorTooltipRender(target, ...)
+        end
+        state.headerTooltip = tooltip
+        tooltip:addToUIManager()
+        tooltip:setVisible(true)
+    end
+
     local function disableView(state)
         if state == nil then return end
+        hideHeaderTooltip(state)
+        clearControllerTooltip(state)
         state.disabled = true
         state.cache = nil
         state.statusFirstLeftText = nil
@@ -969,12 +1087,42 @@ function Build42SkillsUi.create(dependencies)
         return nil
     end
 
+    local function controllerAccounting(row)
+        local lines = {}
+        local natural, high = row.naturalPosition, row.highWaterPosition
+        local target = row.activeTargets[1]
+        if target ~= nil then
+            local amount = formatRemaining(math.max(0, target.targetPosition - natural))
+            local first = amount and localized("IGUI_SLA_TargetXpLeft", amount) or nil
+            local second = localized("IGUI_SLA_TargetCatchUp")
+            if first == nil or second == nil then return nil end
+            lines[#lines + 1] = first .. " <LINE> " .. second
+        end
+        if natural ~= nil and natural < high then
+            local amount = formatRemaining(high - natural)
+            local first = amount and localized("IGUI_SLA_RecoveryXpLeft", amount) or nil
+            local second = localized("IGUI_SLA_RecoveryNoSurvivorXp")
+            if first == nil or second == nil then return nil end
+            lines[#lines + 1] = first .. " <LINE> " .. second
+        end
+        return table.concat(lines, " <LINE> ")
+    end
+
     local function buttonTooltipFor(row, terminalKey)
         local lines = {}
         local reason = rawget(row, "reasonCode")
         if reason ~= nil then
             local key = REASON_KEYS[reason]
-            local value = key and localized(key) or nil
+            if reason == "allotment_capacity" then
+                key = rawget(row, "requiredSlots") == 2
+                    and "IGUI_SLA_Reason_AllotmentCapacityTwo" or "IGUI_SLA_Reason_AllotmentCapacity"
+            end
+            local value
+            if reason == "insufficient_ap" and rawget(row, "apCost") ~= nil then
+                value = localized("IGUI_SLA_Reason_RequiredAp", rawget(row, "apCost"))
+            else
+                value = key and localized(key) or nil
+            end
             if value == nil then return nil end
             lines[#lines + 1] = value
         elseif rawget(row, "nextTargetLevel") ~= nil and rawget(row, "apCost") ~= nil then
@@ -1103,6 +1251,7 @@ function Build42SkillsUi.create(dependencies)
         local wrapper
         wrapper = function(target, ...)
             local ok, a, b, c = pcall(prior, target, ...)
+            if not isVisible(view) then hideHeaderTooltip(state) end
             if not ok then
                 setAdminButtonState(state, false)
                 disableView(state)
@@ -1261,6 +1410,7 @@ function Build42SkillsUi.create(dependencies)
 
     local function applyCache(state)
         local cache = state.cache
+        if cache == nil or cache.allotment.mode ~= "Global" then hideHeaderTooltip(state) end
         local firstLeft, firstRight, secondLeft, secondRight = nil, nil, nil, nil
         if cache then firstLeft, firstRight, secondLeft, secondRight = headerTexts(cache) end
         state.statusFirstLeftText = firstLeft
@@ -1295,6 +1445,9 @@ function Build42SkillsUi.create(dependencies)
 
     local function rebuild(state)
         state.dirty = false
+        local optionCalled, optionValue = false, false
+        if callable(highContrastEnabled) then optionCalled, optionValue = pcall(highContrastEnabled) end
+        state.highContrast = optionCalled and optionValue == true
         local stateCalled, stateResult = pcall(clientState, state.slot)
         local statusCalled, statusResult = pcall(advancementStatus, state.slot)
         local settingsCalled, settingsResult = pcall(readSettings)
@@ -1782,6 +1935,8 @@ function Build42SkillsUi.create(dependencies)
         state.dirty = true
     end
 
+    local updateControllerTooltip
+
     local function onPrerender(view)
         local state = viewFor(view)
         if state == nil or state.disabled then return end
@@ -1793,6 +1948,7 @@ function Build42SkillsUi.create(dependencies)
         if not called or not finite(now) or now < 0 then disableView(state); return end
         refresh(state, now)
         if state.dirty and state.barsReady then rebuild(state) end
+        updateControllerTooltip(state)
     end
 
     local function onRender(view)
@@ -1825,8 +1981,14 @@ function Build42SkillsUi.create(dependencies)
                     viewX + state.statusRight, secondY, 1, 1, 1, 1, smallFont))
             if not leftOk or not firstRightOk or not secondLeftOk or not secondRightOk then
                 disableView(state)
+            else
+                local tooltipOk = pcall(updateHeaderTooltip, state, parent, viewX + state.statusRight, secondY)
+                if not tooltipOk then hideHeaderTooltip(state) end
             end
+        else
+            hideHeaderTooltip(state)
         end
+        updateControllerTooltip(state)
     end
 
     local function onOverlay(bar)
@@ -1840,7 +2002,8 @@ function Build42SkillsUi.create(dependencies)
         local hoveredCalled, hovered = pcall(isMouseOver, button)
         if not hoveredCalled or type(hovered) ~= "boolean" then return false end
         local vanillaTooltip = rawget(bar, "message")
-        if hovered and type(vanillaTooltip) == "string" and vanillaTooltip ~= ""
+        if hovered and not controllerSelected(barState)
+            and type(vanillaTooltip) == "string" and vanillaTooltip ~= ""
             and not pcall(priorRemoveTooltip, bar) then return false end
         if not barState.overlayValid or not barState.tracked or barState.row == nil then return true end
         local drawBorder = bar.drawRectBorder
@@ -1848,27 +2011,42 @@ function Build42SkillsUi.create(dependencies)
         if not callable(drawBorder) or not callable(drawRect) then return true end
         local stride = barState.baseWidth / 10
         local cell = barState.height
+        local contrast = state.highContrast == true
         for _, target in ipairs(barState.row.activeTargets) do
             local level = target.targetLevel
             if level <= 10 then
+                if contrast then
+                    pcall(drawBorder, bar, (level - 1) * stride + 1, 1, cell - 2, cell - 2,
+                        1, 0, 0, 0)
+                end
                 pcall(drawBorder, bar, (level - 1) * stride, 0, cell, cell,
-                    0.95, TARGET_R, TARGET_G, TARGET_B)
+                    contrast and 1 or 0.95, contrast and 0.55 or TARGET_R,
+                    contrast and 0.88 or TARGET_G, TARGET_B)
             end
         end
         local natural, high = barState.row.naturalPosition, barState.row.highWaterPosition
         if natural == nil then return true end
         local highX = curvePosition(barState, high)
         if #barState.row.activeTargets > 0 and highX ~= nil then
-            pcall(drawRect, bar, highX - 1, 0, 2, cell, 0.85,
-                POSITION_R, POSITION_G, POSITION_B)
+            if contrast then pcall(drawRect, bar, highX - 2, 0, 4, cell, 1, 0, 0, 0) end
+            pcall(drawRect, bar, highX - 1, 0, 2, cell, contrast and 1 or 0.85,
+                contrast and 0.55 or POSITION_R, contrast and 0.88 or POSITION_G,
+                contrast and 1 or POSITION_B)
         end
         if natural < high then
             local naturalX = curvePosition(barState, natural)
             if naturalX ~= nil and highX ~= nil and highX > naturalX then
+                if contrast then
+                    pcall(drawRect, bar, naturalX, cell - 4, highX - naturalX, 4, 1, 0, 0, 0)
+                    pcall(drawRect, bar, naturalX - 2, 0, 4, cell, 1, 0, 0, 0)
+                end
                 pcall(drawRect, bar, naturalX, cell - 3, highX - naturalX, 2,
-                    0.75, RECOVERY_R, RECOVERY_G, RECOVERY_B)
-                pcall(drawRect, bar, naturalX - 1, 0, 2, cell, 0.90,
-                    RECOVERY_POSITION_R, RECOVERY_POSITION_G, RECOVERY_POSITION_B)
+                    contrast and 1 or 0.75, contrast and 1 or RECOVERY_R,
+                    contrast and 0.55 or RECOVERY_G, contrast and 0.55 or RECOVERY_B)
+                pcall(drawRect, bar, naturalX - 1, 0, 2, cell, contrast and 1 or 0.90,
+                    contrast and 1 or RECOVERY_POSITION_R,
+                    contrast and 0.55 or RECOVERY_POSITION_G,
+                    contrast and 0.55 or RECOVERY_POSITION_B)
             end
         end
         return true
@@ -1878,11 +2056,44 @@ function Build42SkillsUi.create(dependencies)
         local barState = bars[bar]
         if barState == nil or barState.row == nil or not barState.tracked then return end
         local mouseX = readNumber(bar, "getMouseX")
-        local addition = mouseX ~= nil and hoverTooltip(barState, mouseX) or nil
+        local selected = controllerSelected(barState)
+        local addition = selected and controllerAccounting(barState.row)
+            or (mouseX ~= nil and hoverTooltip(barState, mouseX) or nil)
         if addition == nil or addition == "" then return end
         local vanilla = rawget(bar, "message")
         if type(vanilla) == "string" and vanilla ~= "" then
+            if selected then
+                local state = barState.state
+                if state.controllerBar ~= bar then clearControllerTooltip(state) end
+                state.controllerBar, state.controllerRow = bar, barState.row
+            end
             rawset(bar, "message", vanilla .. " <LINE><LINE> " .. addition)
+        end
+    end
+
+    updateControllerTooltip = function(state)
+        local view = state.view
+        local collection, index = rawget(view, "progressBars"), rawget(view, "joypadIndex")
+        local bar = type(collection) == "table" and index ~= nil and rawget(collection, index) or nil
+        local barState = bar and bars[bar] or nil
+        if not controllerSelected(barState) then clearControllerTooltip(state); return end
+        if state.controllerBar ~= nil and state.controllerBar ~= bar then clearControllerTooltip(state) end
+        if state.controllerRow ~= barState.row or rawget(bar, "message") == nil then
+            priorUpdateTooltip(bar, rawget(bar, "level"))
+            onTooltip(bar)
+        end
+        local tooltip = state.controllerBar == bar and rawget(bar, "tooltip") or nil
+        if tooltip == nil or state.controllerTooltip == tooltip then return end
+        local priorTooltipPrerender = tooltip.prerender
+        if not callable(priorTooltipPrerender) then return end
+        state.controllerTooltip = tooltip
+        tooltip.prerender = function(target, ...)
+            if state.controllerTooltip ~= target then return end
+            if state.controllerBar ~= bar or not controllerSelected(barState) then
+                clearControllerTooltip(state)
+                return
+            end
+            return priorTooltipPrerender(target, ...)
         end
     end
 
@@ -1898,6 +2109,7 @@ function Build42SkillsUi.create(dependencies)
         local called = pcall(button.setJoypadFocused, button, true)
         if not called then return false end
         state.joypadButton = button
+        clearControllerTooltip(state)
         return true
     end
 
@@ -2076,6 +2288,16 @@ function Build42SkillsUi.create(dependencies)
         if not ok then error(a, 0) end
         return a, b, c
     end
+    wrappers.removeTooltip = function(bar, ...)
+        local barState = bars[bar]
+        if barState ~= nil and barState.state.controllerBar == bar then
+            -- Vanilla render removes non-mouse tooltips before drawing their message.
+            if controllerSelected(barState) then return end
+            local state = barState.state
+            state.controllerBar, state.controllerRow, state.controllerTooltip = nil, nil, nil
+        end
+        return priorRemoveTooltip(bar, ...)
+    end
     wrappers.activate = function(bar, ...)
         local ok, a, b, c = pcall(priorActivate, bar, ...)
         if not ok then error(a, 0) end
@@ -2100,7 +2322,11 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.onJoypadDirLeft = function(view, ...)
         local state = viewFor(view)
-        if state ~= nil and state.joypadButton ~= nil then clearJoypadButton(state); return end
+        if state ~= nil and state.joypadButton ~= nil then
+            clearJoypadButton(state)
+            if not pcall(updateControllerTooltip, state) then disableView(state) end
+            return
+        end
         local ok, a, b, c = pcall(priorOnJoypadDirLeft, view, ...)
         if not ok then error(a, 0) end
         return a, b, c
@@ -2114,6 +2340,7 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.onGainJoypadFocus = function(view, ...)
         local state = viewFor(view)
+        clearControllerTooltip(state)
         if state ~= nil then clearJoypadButton(state) end
         local ok, a, b, c = pcall(priorOnGainJoypadFocus, view, ...)
         if not ok then error(a, 0) end
@@ -2121,6 +2348,7 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.onLoseJoypadFocus = function(view, ...)
         local state = viewFor(view)
+        clearControllerTooltip(state)
         if state ~= nil then clearJoypadButton(state) end
         local ok, a, b, c = pcall(priorOnLoseJoypadFocus, view, ...)
         if not ok then error(a, 0) end
@@ -2147,14 +2375,24 @@ function Build42SkillsUi.create(dependencies)
             and rawget(characterInfo, "onLoseJoypadFocus") == wrappers.onLoseJoypadFocus
             and rawget(progressBar, "renderPerkRect") == wrappers.renderPerkRect
             and rawget(progressBar, "updateTooltip") == wrappers.updateTooltip
+            and rawget(progressBar, "removeTooltip") == wrappers.removeTooltip
             and rawget(progressBar, "activate") == wrappers.activate
     end
 
     local integration = {}
 
+    local function disableHeaderTooltips()
+        for _, state in pairs(views) do
+            state.headerUnavailable = true
+            hideHeaderTooltip(state)
+            clearControllerTooltip(state)
+        end
+    end
+
     function integration.install()
         if installAttempted then
             if installed and ownsHooks() then return { ok = true } end
+            disableHeaderTooltips()
             return retain("hook_ownership_lost", "Skills UI wrappers")
         end
         installAttempted = true
@@ -2179,6 +2417,7 @@ function Build42SkillsUi.create(dependencies)
         rawset(characterInfo, "onLoseJoypadFocus", wrappers.onLoseJoypadFocus)
         rawset(progressBar, "renderPerkRect", wrappers.renderPerkRect)
         rawset(progressBar, "updateTooltip", wrappers.updateTooltip)
+        rawset(progressBar, "removeTooltip", wrappers.removeTooltip)
         rawset(progressBar, "activate", wrappers.activate)
         if not ownsHooks() then return retain("hook_install_failed", "Skills UI wrappers") end
         installed = true
@@ -2187,6 +2426,7 @@ function Build42SkillsUi.create(dependencies)
 
     function integration.status()
         local result = { ok = true, installed = installed and ownsHooks() }
+        if not result.installed then disableHeaderTooltips() end
         if retainedFailure ~= nil then
             result.failure = { code = retainedFailure.code, detail = retainedFailure.detail }
         elseif installed and not ownsHooks() then

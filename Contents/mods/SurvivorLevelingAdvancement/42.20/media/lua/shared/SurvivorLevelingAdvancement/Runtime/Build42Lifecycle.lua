@@ -201,6 +201,12 @@ local function detachAdminSummary(value)
         spent = true,
         availableAp = true,
     }
+    local offline = type(value) == "table" and rawget(value, "profileIndex") ~= nil
+    if offline then
+        fields.username, fields.profileIndex, fields.incarnationId = true, true, true
+        fields.initialized, fields.dead = true, true
+        if rawget(value, "mailbox") ~= nil then fields.mailbox = true end
+    end
     if not exactTable(value, fields) then return nil end
     local accountingMode = rawget(value, "accountingMode")
     local revision, level = rawget(value, "revision"), rawget(value, "level")
@@ -216,7 +222,7 @@ local function detachAdminSummary(value)
         or not safeInteger(availableAp) or availableAp ~= level - spent then
         return nil
     end
-    return {
+    local result = {
         accountingMode = accountingMode,
         revision = revision,
         level = level,
@@ -225,14 +231,40 @@ local function detachAdminSummary(value)
         spent = spent,
         availableAp = availableAp,
     }
+    if offline then
+        if not safeUsername(rawget(value, "username"))
+            or not safeInteger(rawget(value, "profileIndex"))
+            or rawget(value, "profileIndex") > 3
+            or not safeId(rawget(value, "incarnationId"), 64)
+            or type(rawget(value, "initialized")) ~= "boolean"
+            or type(rawget(value, "dead")) ~= "boolean" then return nil end
+        result.username, result.profileIndex = value.username, value.profileIndex
+        result.incarnationId, result.initialized, result.dead = value.incarnationId,
+            value.initialized, value.dead
+        if type(value.mailbox) == "table" then
+            result.mailbox = {}
+            for key, child in pairs(value.mailbox) do result.mailbox[key] = child end
+        end
+    end
+    return result
 end
 
 local function detachAdminTarget(value)
-    if not exactTable(value, { onlineId = true, username = true })
-        or not safeInteger(rawget(value, "onlineId")) or not safeUsername(rawget(value, "username")) then
-        return nil
+    if exactTable(value, { onlineId = true, username = true })
+        and safeInteger(rawget(value, "onlineId")) and safeUsername(rawget(value, "username")) then
+        return { onlineId = rawget(value, "onlineId"), username = rawget(value, "username") }
     end
-    return { onlineId = rawget(value, "onlineId"), username = rawget(value, "username") }
+    if exactTable(value, { username = true, profileIndex = true, incarnationId = true })
+        and safeUsername(rawget(value, "username"))
+        and safeInteger(rawget(value, "profileIndex")) and rawget(value, "profileIndex") <= 3
+        and safeId(rawget(value, "incarnationId"), 64) then
+        return {
+            username = rawget(value, "username"),
+            profileIndex = rawget(value, "profileIndex"),
+            incarnationId = rawget(value, "incarnationId"),
+        }
+    end
+    return nil
 end
 
 local function detachAdminUsernameTarget(value)
@@ -250,12 +282,16 @@ local function detachAdminTerminal(value)
         return nil
     end
     local operation = rawget(value, "operation")
-    if operation ~= "inspect" and operation ~= "awardSurvivorXp"
-        and operation ~= "awardSurvivorLevels" and operation ~= "clearAdvancementSlots" then
+    if operation ~= "inspect" and operation ~= "enumerateOfflineProfiles"
+        and operation ~= "inspectOfflineProfile" and operation ~= "awardSurvivorXp"
+        and operation ~= "awardSurvivorLevels" and operation ~= "clearAdvancementSlots"
+        and operation ~= "queueClearAdvancementSlots" and operation ~= "cancelMailbox"
+        and operation ~= "acknowledgeMailbox" then
         return nil
     end
     local target
-    if operation == "inspect" and rawget(value, "ok") == false then
+    if operation == "enumerateOfflineProfiles"
+        or (operation == "inspect" and rawget(value, "ok") == false) then
         target = detachAdminUsernameTarget(rawget(value, "target"))
     else
         target = detachAdminTarget(rawget(value, "target"))
@@ -267,8 +303,22 @@ local function detachAdminTerminal(value)
     }
     if result.ok then
         local outcome = rawget(value, "outcome")
+        if operation == "enumerateOfflineProfiles" then
+            if outcome ~= "enumerated" or not exactTable(value, {
+                ok = true, requestId = true, operation = true, target = true,
+                outcome = true, profiles = true,
+            }) or type(rawget(value, "profiles")) ~= "table" or #value.profiles > 4 then
+                return nil
+            end
+            result.outcome, result.profiles = outcome, {}
+            for index = 1, #value.profiles do
+                result.profiles[index] = detachAdminSummary(value.profiles[index])
+                if result.profiles[index] == nil then return nil end
+            end
+            return result
+        end
         local fields = { ok = true, requestId = true, operation = true, target = true, outcome = true, summary = true }
-        if operation == "inspect" then
+        if operation == "inspect" or operation == "inspectOfflineProfile" then
             if outcome ~= "inspected" then return nil end
         elseif outcome == "applied" then
             fields.levelsGained, fields.apGained = true, true
@@ -282,7 +332,8 @@ local function detachAdminTerminal(value)
         if outcome == "applied" then
             if not safeInteger(rawget(value, "levelsGained"))
                 or rawget(value, "apGained") ~= rawget(value, "levelsGained")
-                or (operation == "clearAdvancementSlots"
+                or ((operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
+                    or operation == "cancelMailbox" or operation == "acknowledgeMailbox")
                     and rawget(value, "levelsGained") ~= 0) then return nil end
             result.levelsGained, result.apGained = rawget(value, "levelsGained"), rawget(value, "apGained")
         elseif outcome == "rejected" then
@@ -294,7 +345,8 @@ local function detachAdminTerminal(value)
         if not exactTable(value, { ok = true, requestId = true, operation = true, target = true, code = true, detail = true, committed = true })
             or not safeId(rawget(value, "code"), 64) or not safeText(rawget(value, "detail"), 160, false)
             or type(rawget(value, "committed")) ~= "boolean" then return nil end
-        if operation == "inspect" and rawget(value, "committed") ~= false then return nil end
+        if (operation == "inspect" or operation == "enumerateOfflineProfiles"
+            or operation == "inspectOfflineProfile") and rawget(value, "committed") ~= false then return nil end
         result.code, result.detail, result.committed = rawget(value, "code"), rawget(value, "detail"), rawget(value, "committed")
     end
     return result
@@ -310,13 +362,16 @@ local function detachAdminStatus(value)
         and safeId(rawget(value, "requestId"), 64) then
         local operation = rawget(value, "operation")
         local target
-        if operation == "inspect" then
+        if operation == "inspect" or operation == "enumerateOfflineProfiles" then
             target = detachAdminUsernameTarget(rawget(value, "target"))
         else
             target = detachAdminTarget(rawget(value, "target"))
         end
-        if target ~= nil and (operation == "inspect" or operation == "awardSurvivorXp"
-            or operation == "awardSurvivorLevels" or operation == "clearAdvancementSlots") then
+        if target ~= nil and (operation == "inspect" or operation == "enumerateOfflineProfiles"
+            or operation == "inspectOfflineProfile" or operation == "awardSurvivorXp"
+            or operation == "awardSurvivorLevels" or operation == "clearAdvancementSlots"
+            or operation == "queueClearAdvancementSlots" or operation == "cancelMailbox"
+            or operation == "acknowledgeMailbox") then
             return { ok = true, pending = true, requestId = rawget(value, "requestId"), operation = operation, target = target }
         end
     end
@@ -569,6 +624,7 @@ function Build42Lifecycle.create(dependencies)
     local Capability = rawget(globals, "Capability")
     local getPlayerByOnlineID = rawget(globals, "getPlayerByOnlineID")
     local getOnlinePlayers = rawget(globals, "getOnlinePlayers")
+    local getRoles = rawget(globals, "getRoles")
     local writeLog = rawget(globals, "writeLog")
     local isServer, isClient = rawget(globals, "isServer"), rawget(globals, "isClient")
     local getSpecificPlayer = rawget(globals, "getSpecificPlayer")
@@ -622,6 +678,7 @@ function Build42Lifecycle.create(dependencies)
             ClientOwnerState = clientState,
             completionValidator = completionFactory,
             sendClientCommand = sendCommand,
+            nowMilliseconds = rawget(globals, "getTimestampMs"),
         })
         ownerClient = called and service(created, "client", { "ready", "refresh", "handle", "reset", "resetSlot", "acceptLocal", "get", "status" }) or nil
         if ownerClient == nil then return bounded(created, "owner_client_invalid", "Build42OwnerTransport.createClient") end
@@ -641,14 +698,13 @@ function Build42Lifecycle.create(dependencies)
     local events = eventSet(rawget(globals, "Events"), eventNames,
         mode == "client" and { OnTick = true } or nil)
     if events == nil then return failure("invalid_dependencies", "required lifecycle events are required") end
-
     local installed, installAttempted, startupAttempted, started = false, false, false, false
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
     local ownerPublisher
     local ownerSessionReady, ownerSessionSnapshot, advancementRequest
     local xpSourceVerifyOwnership, xpSourceOwnershipFailure
     local tokenNewCharacter, recordDeath
-    local adminSessionInspect, adminSessionRequest
+    local adminSessionInspect, adminSessionRequest, adminDeliverPending, adminResolveProfile
     local readyPlayers, observedPlayers, observedSlots = {}, {}, {}
     local deferredPlayers, deferredSlots = {}, {}
     local tickRegistered, tickAddAttempted = false, false
@@ -797,12 +853,20 @@ function Build42Lifecycle.create(dependencies)
             local target = detachAdminTarget(targetRef)
             if select("#", ...) ~= 0 or not usernameCalled or not safeUsername(username) or target == nil
                 or (operation ~= "awardSurvivorXp" and operation ~= "awardSurvivorLevels"
-                    and operation ~= "clearAdvancementSlots")
+                    and operation ~= "clearAdvancementSlots"
+                    and operation ~= "queueClearAdvancementSlots"
+                    and operation ~= "cancelMailbox"
+                    and operation ~= "acknowledgeMailbox")
                 or outcome ~= "committed" then
                 return failure("audit_invalid", "record")
             end
             local line = "SLA admin actor=" .. username .. " operation=" .. operation
-                .. " target=" .. target.username .. " onlineId=" .. tostring(target.onlineId)
+                .. " target=" .. target.username
+            if target.onlineId ~= nil then
+                line = line .. " onlineId=" .. tostring(target.onlineId)
+            else
+                line = line .. " profile=" .. tostring(target.profileIndex)
+            end
             local called = pcall(writeLog, "admin", line)
             if not called then return failure("audit_failed", "writeLog") end
             return { ok = true }
@@ -837,7 +901,12 @@ function Build42Lifecycle.create(dependencies)
             or not callable(rawget(inheritanceSession, "recordDeath"))
             or type(advancementSession) ~= "table" or not callable(rawget(advancementSession, "request"))
             or type(adminSession) ~= "table" or not callable(rawget(adminSession, "inspect"))
-            or not callable(rawget(adminSession, "request")) then
+            or not callable(rawget(adminSession, "request"))
+            or not callable(rawget(adminSession, "enumerateOffline"))
+            or not callable(rawget(adminSession, "inspectOffline"))
+            or not callable(rawget(adminSession, "requestOffline"))
+            or not callable(rawget(adminSession, "resolveProfile"))
+            or not callable(rawget(adminSession, "deliverPending")) then
             return startupFailure(nil, "runtime_factory_invalid", "runtime service surface")
         end
         local sourceCalled, sourceResult = pcall(rawget(xpSource, "install"))
@@ -862,6 +931,8 @@ function Build42Lifecycle.create(dependencies)
                 Capability = Capability,
                 getPlayerByOnlineID = getPlayerByOnlineID,
                 getOnlinePlayers = getOnlinePlayers,
+                getRoles = getRoles,
+                resolveProfile = rawget(adminSession, "resolveProfile"),
             })
             local boundaryEndpoint = boundaryCalled and service(boundaryCreated, "boundary", { "authorizeAndResolve" }) or nil
             if boundaryEndpoint == nil then return startupFailure(boundaryCreated, "admin_boundary_invalid", "Build42AdminBoundary.create") end
@@ -887,6 +958,8 @@ function Build42Lifecycle.create(dependencies)
         advancementRequest = rawget(advancementSession, "request")
         adminSessionInspect = rawget(adminSession, "inspect")
         adminSessionRequest = rawget(adminSession, "request")
+        adminDeliverPending = rawget(adminSession, "deliverPending")
+        adminResolveProfile = rawget(adminSession, "resolveProfile")
         local newPlayers = pendingNewPlayers
         local newPlayerCount = #newPlayers
         pendingNewPlayers = {}
@@ -991,7 +1064,7 @@ function Build42Lifecycle.create(dependencies)
         local called, result = pcall(endpoint, module, command, player, args)
         if called and exactTable(result, { ok = true, handled = true })
             and rawget(result, "ok") == true and rawget(result, "handled") == true then
-            return
+            return true
         end
         if called and type(result) == "table" and rawget(result, "ok") == false then
             local resultCode = rawget(result, "code")
@@ -1001,9 +1074,10 @@ function Build42Lifecycle.create(dependencies)
                 and exactTable(result, fields)
                 and safeText(rawget(result, "detail"), 160, false)
                 and (not allowCommittedFalse or rawget(result, "committed") == nil or rawget(result, "committed") == false)
-            if contained then return end
+            if contained then return false end
         end
         retain(result, code, detail)
+        return false
     end
 
     local function clientView(localSlot)
@@ -1180,7 +1254,18 @@ function Build42Lifecycle.create(dependencies)
     callbacks.OnClientCommand = function(module, command, player, args)
         if not installed or not ownEvents() or not started or module ~= MODULE then return end
         if command == "ownerReady" or command == "ownerRefresh" then
-            serverDispatch(ownerServerHandle, "owner_server_handle_invalid", "ownerServer.handle", false, module, command, player, args)
+            local dispatched = serverDispatch(ownerServerHandle, "owner_server_handle_invalid", "ownerServer.handle", false, module, command, player, args)
+            if dispatched and command == "ownerReady" and adminDeliverPending ~= nil then
+                local deliveredCalled, delivered = pcall(adminDeliverPending, player)
+                if not deliveredCalled or type(delivered) ~= "table" or rawget(delivered, "ok") ~= true then
+                    retain(delivered, "admin_mailbox_delivery_invalid", "adminSession.deliverPending")
+                elseif rawget(delivered, "delivered") == true and ownerPublisher ~= nil then
+                    local publishedCalled, published = pcall(rawget(ownerPublisher, "publish"), player)
+                    if not publishedCalled or type(published) ~= "table" or rawget(published, "ok") ~= true then
+                        retain(published, "admin_mailbox_publication_invalid", "ownerPublisher.publish")
+                    end
+                end
+            end
         elseif command == "advancementRequest" then
             serverDispatch(advancementServerHandle, "advancement_server_handle_invalid", "advancementServer.handle", false, module, command, player, args)
         elseif command == "adminRequest" then
@@ -1195,6 +1280,7 @@ function Build42Lifecycle.create(dependencies)
     callbacks.OnNewGame = function(player)
         if not installed or not ownEvents() then return end
         if started then
+            if ownerPublisher ~= nil then pcall(ownerPublisher.clearPlayer, player) end
             trusted(tokenNewCharacter, "new_character_token_invalid", "inheritanceSession.tokenNewCharacter", player)
         elseif not startupAttempted and not pendingReferencesClosed then
             local buffered = bufferNewPlayer(player)
@@ -1203,6 +1289,7 @@ function Build42Lifecycle.create(dependencies)
     end
     callbacks.OnCharacterDeath = function(player)
         if not installed or not ownEvents() or not started then return end
+        if ownerPublisher ~= nil then pcall(ownerPublisher.clearPlayer, player) end
         trusted(recordDeath, "inheritance_death_invalid", "inheritanceSession.recordDeath", player)
     end
     callbacks.OnTick = function()

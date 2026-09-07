@@ -61,6 +61,28 @@ local function usernameTarget(username)
     return { username = username or "ClientTarget" }
 end
 
+local function profileTarget(username, profileIndex, incarnationId)
+    return {
+        username = username or "OfflineTarget",
+        profileIndex = profileIndex or 0,
+        incarnationId = incarnationId or "offline-incarnation",
+    }
+end
+
+local function offlineSummary(overrides)
+    local result = summary({
+        username = "OfflineTarget",
+        profileIndex = 0,
+        incarnationId = "offline-incarnation",
+        initialized = true,
+        dead = false,
+    })
+    if overrides ~= nil then
+        for key, value in pairs(overrides) do result[key] = value end
+    end
+    return result
+end
+
 local function inspectRequest()
     return {
         protocolVersion = 1,
@@ -178,6 +200,30 @@ local function makeHarness(options)
             summary = summary({ revision = 8, level = 7, availableAp = 5 }),
         }
     end
+    function session.enumerateOffline(username)
+        events[#events + 1] = { name = "enumerateOffline", username = username }
+        if options.enumerateOfflineThrow then error("offline enumeration secret") end
+        if options.enumerateOfflineResult ~= nil then return options.enumerateOfflineResult end
+        return { ok = true, profiles = { offlineSummary() } }
+    end
+    function session.inspectOffline(selector)
+        events[#events + 1] = { name = "inspectOffline", selector = selector }
+        if options.inspectOfflineThrow then error("offline inspection secret") end
+        if options.inspectOfflineResult ~= nil then return options.inspectOfflineResult end
+        return { ok = true, summary = offlineSummary() }
+    end
+    function session.requestOffline(selector, request)
+        events[#events + 1] = {
+            name = "requestOffline", selector = selector, request = request,
+        }
+        if options.requestOfflineThrow then error("offline mutation secret") end
+        if options.requestOfflineResult ~= nil then return options.requestOfflineResult end
+        return {
+            ok = true, applied = true, kind = request.kind,
+            levelsGained = 0, apGained = 0,
+            summary = offlineSummary({ revision = request.expectedRevision + 1 }),
+        }
+    end
 
     local audit = {}
     function audit.record(receivedActor, targetRef, operation, outcome)
@@ -285,6 +331,91 @@ do
     local second = harness.server.handle("SurvivorLevelingAdvancement", "other", harness.actor, inspectRequest())
     exact(second, { ok = true, handled = false }, "other command untouched")
     equal(#harness.events, 0, "unrelated traffic calls no dependency")
+end
+
+do
+    local selector = { username = "OfflineTarget" }
+    local sourceProfiles = {
+        offlineSummary({ mailbox = {
+            kind = "clearAdvancementSlots", status = "pending",
+            incarnationId = "offline-incarnation", stateRevision = 7,
+            queuedPersistenceRevision = 6,
+        } }),
+        offlineSummary({ profileIndex = 2, incarnationId = "offline-coop" }),
+    }
+    local harness = makeHarness({
+        boundaryResult = { ok = true, offline = true, targetRef = selector },
+        enumerateOfflineResult = {
+            ok = true,
+            profiles = sourceProfiles,
+        },
+    })
+    local result = harness.server.handle("SurvivorLevelingAdvancement", "adminRequest",
+        harness.actor, {
+            protocolVersion = 1,
+            requestId = "admin:offline-enumerate",
+            operation = "enumerateOfflineProfiles",
+            target = { username = "OfflineTarget" },
+        })
+    check(result.ok and result.handled, "offline enumeration is handled")
+    equal(eventNames(harness.events), "boundary,enumerateOffline,send",
+        "offline enumeration uses boundary session and response only")
+    local envelope = harness.events[3].envelope
+    equal(envelope.outcome, "enumerated", "offline enumeration response outcome")
+    equal(#envelope.profiles, 2, "offline enumeration returns every bounded profile")
+    equal(envelope.profiles[2].profileIndex, 2, "offline enumeration preserves profile index")
+    equal(envelope.profiles[1].mailbox.stateRevision, 7,
+        "offline enumeration transports the guarded state revision")
+    equal(envelope.profiles[1].mailbox.queuedPersistenceRevision, 6,
+        "offline enumeration transports duplicate-queue persistence context")
+    check(envelope.profiles ~= sourceProfiles and envelope.profiles[1] ~= sourceProfiles[1],
+        "offline enumeration response owns detached storage")
+end
+
+
+do
+    local hostile = offlineSummary({ mailbox = {
+        kind = "clearAdvancementSlots", status = "pending",
+        incarnationId = "other-incarnation", stateRevision = 7,
+        queuedPersistenceRevision = 6,
+    } })
+    local harness = makeHarness({
+        boundaryResult = {
+            ok = true, offline = true, targetRef = { username = "OfflineTarget" },
+        },
+        enumerateOfflineResult = { ok = true, profiles = { hostile } },
+    })
+    harness.server.handle("SurvivorLevelingAdvancement", "adminRequest", harness.actor, {
+        protocolVersion = 1,
+        requestId = "admin:offline-mismatch",
+        operation = "enumerateOfflineProfiles",
+        target = { username = "OfflineTarget" },
+    })
+    local envelope = harness.events[#harness.events].envelope
+    equal(envelope.ok, false, "mailbox incarnation mismatch is not transported")
+    equal(envelope.code, "session_failed", "mailbox mismatch has bounded transport failure")
+end
+
+do
+    local selector = profileTarget()
+    local harness = makeHarness({
+        boundaryResult = { ok = true, offline = true, targetRef = selector },
+    })
+    local result = harness.server.handle("SurvivorLevelingAdvancement", "adminRequest",
+        harness.actor, {
+            protocolVersion = 1,
+            requestId = "admin:offline-queue",
+            operation = "queueClearAdvancementSlots",
+            target = profileTarget(),
+            expectedRevision = 7,
+        })
+    check(result.ok and result.handled, "offline queue request is handled")
+    equal(eventNames(harness.events), "boundary,requestOffline,audit,send",
+        "offline queue audits without attempting an owner publication")
+    equal(harness.events[2].request.kind, "queueClearAdvancementSlots",
+        "offline queue delegates the exact mailbox operation")
+    equal(harness.events[4].envelope.summary.revision, 8,
+        "offline queue returns the next persistence revision")
 end
 
 do
