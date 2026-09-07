@@ -246,6 +246,7 @@ function Build42OwnerTransport.createServer(dependencies)
     end
 
     local bindings = setmetatable({}, { __mode = "k" })
+    local readiness = setmetatable({}, { __mode = "k" })
     local server = {}
 
     function server.handle(module, command, player, args)
@@ -253,11 +254,12 @@ function Build42OwnerTransport.createServer(dependencies)
         if command ~= READY_COMMAND and command ~= REFRESH_COMMAND then
             return failure("unknown_command", "owner command")
         end
-        if player == nil then return failure("invalid_player", "player") end
+        if type(player) ~= "table" and type(player) ~= "userdata" then
+            return failure("invalid_player", "player")
+        end
 
         local correlationId, requestFailure = validateRequest(args)
         if correlationId == nil then return requestFailure end
-
         if command == REFRESH_COMMAND then
             if bindings[player] ~= correlationId then
                 local sentFailure = sendServer(send, player, serverFailure(correlationId, failure("not_bound", "player route")))
@@ -269,7 +271,10 @@ function Build42OwnerTransport.createServer(dependencies)
             return { ok = true, handled = true }
         end
 
-        local snapshot, readyCompletion, readyFailure = sessionSnapshot(ownerSession.ready, "ready", player)
+        local readyMethod, readyName = ownerSession.ready, "ready"
+        if readiness[player] then readyMethod, readyName = ownerSession.snapshot, "snapshot" end
+
+        local snapshot, readyCompletion, readyFailure = sessionSnapshot(readyMethod, readyName, player)
         if snapshot == nil then
             local sentFailure = sendServer(send, player, serverFailure(correlationId, readyFailure))
             if not sentFailure.ok then return sentFailure end
@@ -282,6 +287,8 @@ function Build42OwnerTransport.createServer(dependencies)
             if not sentFailure.ok then return sentFailure end
             return validationFailure
         end
+
+        readiness[player] = checkedSnapshot.ready == true
 
         local completion = detachCompletion(validateCompletion, readyCompletion)
         local sent = sendServer(send, player, serverSuccess(correlationId, checkedSnapshot, completion))
@@ -317,6 +324,7 @@ function Build42OwnerTransport.createServer(dependencies)
 
     function server.clearPlayer(player)
         if player == nil then return failure("invalid_player", "player") end
+        readiness[player] = nil
         local called, result = pcall(ownerSession.clearPlayer, player)
         if not called then return failure("session_clearPlayer_threw", "ownerSession.clearPlayer") end
         if type(result) ~= "table" or result.ok ~= true then
@@ -374,6 +382,13 @@ function Build42OwnerTransport.createClient(dependencies)
     local routes = {}
     local counter = 0
     local client = {}
+    local nowMilliseconds = dependencies.nowMilliseconds
+
+    local function readTime()
+        if type(nowMilliseconds) ~= "function" then return nil end
+        local called, now = pcall(nowMilliseconds)
+        return called and nonnegativeInteger(now) and now or nil
+    end
 
     local function validSlot(localSlot)
         return nonnegativeInteger(localSlot) and localSlot <= 3
@@ -430,6 +445,7 @@ function Build42OwnerTransport.createClient(dependencies)
         if not resetResult.ok then return resetResult end
         local entry, entryFailure = entryFor(localSlot, true)
         if entry == nil then return entryFailure end
+        entry.lastReadyAttempt = readTime()
 
         local correlationId, correlationFailure = allocateCorrelation()
         if correlationId == nil then return correlationFailure end
@@ -453,7 +469,21 @@ function Build42OwnerTransport.createClient(dependencies)
         if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
         if player == nil then return failure("invalid_player", "player") end
         local entry = entryFor(localSlot, false)
-        if entry == nil or entry.active == nil then return failure("not_bound", "player route") end
+        if entry == nil then return failure("not_bound", "player route") end
+        local status = inboxCall(entry.inbox, "status")
+        if entry.active == nil or (status ~= nil and status.ready == false) then
+            local now = readTime()
+            if entry.lastReadyAttempt ~= nil then
+                if now == nil then return failure("ready_retry_pending", "localSlot") end
+                if now < entry.lastReadyAttempt then entry.lastReadyAttempt = now end
+                if now - entry.lastReadyAttempt < 30000 then
+                    return failure("ready_retry_pending", "localSlot")
+                end
+            elseif entry.pending ~= nil then return failure("not_bound", "player route") end
+            local retried = client.ready(localSlot, player)
+            if not retried.ok then return retried end
+            return { ok = true }
+        end
         if entry.refreshPending then return failure("refresh_pending", "localSlot") end
 
         entry.refreshPending = true

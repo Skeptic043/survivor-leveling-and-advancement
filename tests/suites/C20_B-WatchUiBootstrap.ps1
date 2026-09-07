@@ -2,6 +2,7 @@
     Label = 'C20-B Watch UI Bootstrap'
     Spec = 'tests/ui/WatchUiBootstrapHarness.lua'
     Sources = @(
+        [pscustomobject]@{ Global = 'ClientOptions'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/client/SurvivorLevelingAdvancement/ClientOptions.lua' }
         [pscustomobject]@{ Global = 'C20BWatchHarnessInit'; Path = 'tests/ui/WatchUiBootstrapHarness.lua' }
         [pscustomobject]@{ Global = 'C20BWatchBootstrapFirst'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/client/SurvivorLevelingAdvancement/WatchUiBootstrap.lua' }
         [pscustomobject]@{ Global = 'C20BWatchHarnessAfterFirst'; Path = 'tests/ui/WatchUiBootstrapHarness.lua' }

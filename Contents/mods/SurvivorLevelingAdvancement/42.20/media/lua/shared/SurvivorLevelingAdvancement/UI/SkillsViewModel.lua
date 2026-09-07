@@ -489,6 +489,9 @@ function SkillsViewModel.create(dependencies)
                 row.nextTargetLevel = nextTargetLevel
                 row.apCost = apCost
             end
+            if requiredSlots > 0 and evaluated.limit > 0 then
+                row.requiredSlots = math.min(requiredSlots, evaluated.limit)
+            end
             if reason ~= nil then row.reasonCode = reason end
             if config.mode == "PerSkill" then
                 row.activeCount = evaluated.activeCount

@@ -2,6 +2,7 @@ require "XpSystem/ISUI/ISCharacterInfo"
 require "XpSystem/ISUI/ISSkillProgressBar"
 require "ISUI/ISButton"
 require "ISUI/ISPanel"
+require "ISUI/ISToolTip"
 require "ISUI/ISTextEntryBox"
 require "ISUI/ISCollapsableWindowJoypad"
 require "ISUI/AdminPanel/ISMiniScoreboardUI"
@@ -66,6 +67,11 @@ local ClientOwnerState = require "SurvivorLevelingAdvancement/Runtime/ClientOwne
 local Allotment = require "SurvivorLevelingAdvancement/Core/Allotment"
 local VanillaProgressionAdapter = require "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter"
 
+local optionsCalled, options = pcall(function()
+    return require("SurvivorLevelingAdvancement/ClientOptions").ensure()
+end)
+local highContrastOption = optionsCalled and type(options) == "table" and options.highContrast or nil
+
 local adminCalled, adminCreated = pcall(Build42AdminUi.create, {
     owner = lifecycle,
     ISMiniScoreboardUI = ISMiniScoreboardUI,
@@ -117,6 +123,7 @@ local createCalled, created = pcall(Build42SkillsUi.create, {
     ISSkillProgressBar = ISSkillProgressBar,
     ISButton = ISButton,
     ISPanel = ISPanel,
+    ISToolTip = ISToolTip,
     owner = lifecycle,
     viewModel = modelResult.model,
     settingsProvider = providerResult.provider,
@@ -124,6 +131,10 @@ local createCalled, created = pcall(Build42SkillsUi.create, {
     clockMillis = function() return getTimestampMs() end,
     getText = function(key, ...) return getText(key, ...) end,
     measureText = function(text) return getTextManager():MeasureStringX(UIFont.Small, text) end,
+    fontHeight = function() return getTextManager():getFontHeight(UIFont.Small) end,
+    highContrastEnabled = function()
+        return highContrastOption ~= nil and highContrastOption:getValue() == true
+    end,
     smallFont = UIFont.Small,
     joypadAButton = Joypad.AButton,
     adminLauncher = adminCreated.integration,

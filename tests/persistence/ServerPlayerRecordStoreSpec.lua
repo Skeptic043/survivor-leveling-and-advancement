@@ -22,8 +22,9 @@ local function makePlayer(username, profileIndex, modData)
     }
 end
 
-local function makeEnvironment(initialRoots)
+local function makeEnvironment(initialRoots, options)
     local roots = initialRoots or {}
+    options = options or {}
     local identityCalls = 0
     local identity = {
         resolve = function(player)
@@ -41,6 +42,7 @@ local function makeEnvironment(initialRoots)
     }
     local legacyState = PlayerStateStore.create(StateCodec).store
     local legacyCharacter = CharacterInheritanceStore.create().store
+    local incarnationCounter = 0
     local function createStore()
         return ServerPlayerRecordStore.create({
             codec = StateCodec,
@@ -51,7 +53,11 @@ local function makeEnvironment(initialRoots)
                 if roots[name] == nil then roots[name] = {} end
                 return roots[name]
             end,
-            add = function(name, value) roots[name] = value end,
+            add = options.add or function(name, value) roots[name] = value end,
+            generateIncarnationId = options.generator or function()
+                incarnationCounter = incarnationCounter + 1
+                return "test:" .. tostring(incarnationCounter)
+            end,
         })
     end
     return {
@@ -272,7 +278,8 @@ for _, candidate in pairs(env.roots) do
     if type(candidate) == "table" and candidate.players ~= nil then root = candidate end
 end
 yes(root ~= nil, "versioned server root persisted")
-eq(root.schemaVersion, 1, "server root schema")
+eq(root.schemaVersion, 3, "server root schema")
+yes(type(root.worldId) == "string" and root.worldId ~= "", "server root has world identity")
 local canonicalRecord = root.players.Account[0]
 local originalRecord = canonicalRecord
 canonicalRecord.state.schemaVersion = 999
@@ -662,8 +669,244 @@ local transmitRejected = ServerPlayerRecordStore.create({
     legacyCharacterStore = env.legacyCharacter,
     getOrCreate = function() return {} end,
     add = function() end,
+    generateIncarnationId = function() return "extra:test" end,
     transmit = extraCapability,
 })
 no(transmitRejected.ok, "Global transmit capability is not accepted")
+
+do
+    local legacyState = StateCodec.encode(state(5, 9)).state
+    local migratedRoots = {
+        SLA_ServerPlayers_v1 = {
+            schemaVersion = 1,
+            players = {
+                Migrated = {
+                    [2] = {
+                        schemaVersion = 1,
+                        state = legacyState,
+                        initialized = true,
+                        deathRecorded = false,
+                    },
+                },
+            },
+        },
+    }
+    local migrated = makeEnvironment(migratedRoots).createStore()
+    local migratedRecord = migrated.offlineStore.enumerate("Migrated").profiles[1]
+    eq(migratedRoots.SLA_ServerPlayers_v1.schemaVersion, 3,
+        "accepted 1.1 root explicitly migrates forward")
+    yes(type(migratedRoots.SLA_ServerPlayers_v1.worldId) == "string",
+        "accepted 1.1 root receives world identity")
+    eq(migratedRoots.SLA_ServerPlayers_v1.players.Migrated[2].schemaVersion, 2,
+        "accepted 1.1 record explicitly migrates forward")
+    eq(migratedRecord.persistenceRevision, 9, "migration seeds safe persistence revision")
+    yes(type(migratedRecord.incarnationId) == "string" and migratedRecord.incarnationId ~= "",
+        "migration injects an opaque incarnation")
+end
+
+do
+    local encoded = StateCodec.encode(state(8, 11)).state
+    local schemaTwoRecord = {
+        schemaVersion = 2, state = encoded, initialized = true, deathRecorded = false,
+        incarnationId = "schema2:incarnation", persistenceRevision = 14,
+    }
+    local roots = { SLA_ServerPlayers_v1 = {
+        schemaVersion = 2, players = { SchemaTwo = { [1] = schemaTwoRecord } },
+    } }
+    local built = makeEnvironment(roots).createStore()
+    local inspected = built.stateStore.load(makePlayer("SchemaTwo", 1))
+    yes(inspected.ok, "schema-2 root migrates during native state access")
+    eq(roots.SLA_ServerPlayers_v1.schemaVersion, 3, "schema-2 root advances to schema 3")
+    yes(type(roots.SLA_ServerPlayers_v1.worldId) == "string",
+        "schema-2 migration creates a world identity")
+    local migrated = roots.SLA_ServerPlayers_v1.players.SchemaTwo[1]
+    eq(migrated.incarnationId, "schema2:incarnation", "schema-2 incarnation preserved")
+    eq(migrated.persistenceRevision, 14, "schema-2 persistence revision preserved")
+    eq(migrated.state.revision, 11, "schema-2 canonical state preserved")
+    local worldId = roots.SLA_ServerPlayers_v1.worldId
+    local restarted = makeEnvironment(roots).createStore().stateStore.load(makePlayer("SchemaTwo", 1))
+    yes(restarted.ok, "schema-3 native state loads after restart")
+    eq(roots.SLA_ServerPlayers_v1.worldId, worldId, "schema-3 world identity is stable across restart")
+end
+
+do
+    local throwing = makeEnvironment({}, { generator = function() error("uuid") end }).createStore()
+    no(throwing.stateStore.load(makePlayer("IdentityCheck", 0)).ok, "throwing world identity generator fails closed")
+    local emptyId = makeEnvironment({}, { generator = function() return "" end }).createStore()
+    no(emptyId.stateStore.load(makePlayer("IdentityCheck", 0)).ok, "empty world identity generator fails closed")
+    local malformedId = makeEnvironment({}, { generator = function() return "bad uuid" end }).createStore()
+    no(malformedId.stateStore.load(makePlayer("IdentityCheck", 0)).ok, "malformed world identity generator fails closed")
+    local repeated = makeEnvironment({}, { generator = function() return "repeat:id" end }).createStore()
+    yes(repeated.stateStore.load(makePlayer("IdentityCheck", 0)).ok, "first bounded identity is accepted")
+    local repeatedSave = repeated.stateStore.save(makePlayer("Repeated", 0), state(1, 1))
+    no(repeatedSave.ok, "repeated generated identity fails closed")
+    eq(repeatedSave.code, "incarnation_generation_failed", "repeated identity code")
+    local collisionState = StateCodec.encode(state(1, 1)).state
+    local collisionRoots = { SLA_ServerPlayers_v1 = { schemaVersion = 2, players = {
+        Collision = { [0] = {
+            schemaVersion = 2, state = collisionState, initialized = true,
+            deathRecorded = false, incarnationId = "collision:id", persistenceRevision = 1,
+        } },
+    } } }
+    local collision = makeEnvironment(collisionRoots, {
+        generator = function() return "collision:id" end,
+    }).createStore()
+    no(collision.stateStore.load(makePlayer("Collision", 0)).ok,
+        "schema-2 world identity cannot repeat an existing incarnation")
+end
+
+do
+    local churn = makeEnvironment()
+    local built = churn.createStore()
+    yes(built.ok, "offline profile store construction")
+    local players = {}
+    for profileIndex = 0, 3 do
+        players[profileIndex] = makePlayer("BoundedAccount", profileIndex)
+        yes(built.stateStore.save(players[profileIndex], state(profileIndex + 1, 0)).ok,
+            "bounded profile initial state " .. tostring(profileIndex))
+        yes(built.characterStore.markInitialized(players[profileIndex]).ok,
+            "bounded profile initialized " .. tostring(profileIndex))
+    end
+    local listed = built.offlineStore.enumerate("BoundedAccount")
+    yes(listed.ok, "offline profiles enumerate")
+    eq(#listed.profiles, 4, "offline enumeration is bounded to four profiles")
+    for index = 1, 4 do
+        eq(listed.profiles[index].profileIndex, index - 1, "offline profiles sort by exact index")
+    end
+    local selected = listed.profiles[1]
+    local selector = {
+        username = selected.username,
+        profileIndex = selected.profileIndex,
+        incarnationId = selected.incarnationId,
+    }
+    local queued = built.offlineStore.replace(selector, selected.persistenceRevision, selected.state, {
+        kind = "clearAdvancementSlots",
+        status = "pending",
+        incarnationId = selected.incarnationId,
+        stateRevision = selected.state.revision,
+        queuedPersistenceRevision = selected.persistenceRevision,
+    })
+    yes(queued.ok and queued.saved, "single mailbox slot queues")
+    local detached = built.offlineStore.inspect(selector)
+    yes(detached.ok, "queued mailbox inspects")
+    detached.record.mailbox.status = "failed"
+    eq(built.offlineStore.inspect(selector).record.mailbox.status, "pending",
+        "offline inspection returns detached mailbox")
+
+    local mismatch = built.offlineStore.replace(
+        selector, queued.record.persistenceRevision, queued.record.state, {
+            kind = "clearAdvancementSlots", status = "cancelled",
+            incarnationId = "wrong:incarnation", code = "bad_dependency",
+        }
+    )
+    no(mismatch.ok, "mailbox dependency incarnation mismatch fails closed")
+    eq(built.offlineStore.inspect(selector).record.persistenceRevision,
+        queued.record.persistenceRevision, "mailbox mismatch performs no write")
+    local boundedRoot = churn.roots.SLA_ServerPlayers_v1
+    eq(boundedRoot.schemaVersion, 3, "bounded churn retains current root schema")
+    local accountCount = 0
+    for _, profiles in pairs(boundedRoot.players) do
+        accountCount = accountCount + 1
+        local profileCount = 0
+        for _, record in pairs(profiles) do
+            profileCount = profileCount + 1
+            yes(record.mailbox == nil or record.mailbox.kind == "clearAdvancementSlots",
+                "each profile retains at most one mailbox slot")
+            eq(record.history, nil, "bounded records contain no history collection")
+        end
+        yes(profileCount > 0 and profileCount <= 4, "account bucket remains nonempty and bounded")
+    end
+    eq(accountCount, 1, "bounded churn creates no account history buckets")
+
+    local beforeDeath = built.offlineStore.inspect(selector).record
+    yes(built.characterStore.markDeathRecorded(players[0]).ok, "pending profile death records")
+    local dead = built.offlineStore.inspect(selector).record
+    eq(dead.mailbox.status, "cancelled", "death terminalizes pending mailbox")
+    local successor = makePlayer("BoundedAccount", 0)
+    yes(built.stateStore.save(successor, state(3, 0), "completed_death_replacement").ok,
+        "completed death replacement saves")
+    local successorProfiles = built.offlineStore.enumerate("BoundedAccount").profiles
+    local successorRecord = successorProfiles[1]
+    no(successorRecord.incarnationId == beforeDeath.incarnationId,
+        "completed death replacement receives a new incarnation")
+    eq(successorRecord.mailbox, nil, "successor inherits no predecessor mailbox")
+    eq(successorRecord.state.survivor.level, 3,
+        "inheritance-compatible successor keeps its supplied fresh state")
+    yes(successorRecord.initialized and not successorRecord.deathRecorded,
+        "completed-death replacement resets successor lifecycle metadata")
+end
+
+do
+    local generated, forced = 0, nil
+    local replacementEnvironment = makeEnvironment({}, { generator = function()
+        if forced ~= nil then return forced end
+        generated = generated + 1
+        return "replacement:" .. tostring(generated)
+    end })
+    local built = replacementEnvironment.createStore()
+    local current = makePlayer("ReplacementChurn", 0)
+    yes(built.stateStore.save(current, state(1, 0)).ok,
+        "replacement churn initial state saves")
+    yes(built.characterStore.markInitialized(current).ok,
+        "replacement churn initial state initializes")
+    local ancient = built.offlineStore.enumerate("ReplacementChurn").profiles[1].incarnationId
+    for index = 1, 2000 do
+        yes(built.characterStore.markDeathRecorded(current).ok,
+            "replacement churn death " .. tostring(index))
+        local successor = makePlayer("ReplacementChurn", 0)
+        yes(built.stateStore.save(
+            successor, state(index % 10, 0), "completed_death_replacement"
+        ).ok, "replacement churn successor " .. tostring(index))
+        current = successor
+    end
+    local rootValue = replacementEnvironment.roots.SLA_ServerPlayers_v1
+    local accountCount, profileCount = 0, 0
+    for _, profiles in pairs(rootValue.players) do
+        accountCount = accountCount + 1
+        for _, record in pairs(profiles) do
+            profileCount = profileCount + 1
+            eq(record.history, nil, "replacement churn stores no incarnation history")
+        end
+    end
+    eq(accountCount, 1, "replacement churn retains one account bucket")
+    eq(profileCount, 1, "replacement churn retains one current profile only")
+    yes(built.characterStore.markDeathRecorded(current).ok,
+        "replacement churn final current incarnation dies")
+    forced = ancient
+    local recycled = makePlayer("ReplacementChurn", 0)
+    yes(built.stateStore.save(
+        recycled, state(2, 0), "completed_death_replacement"
+    ).ok, "superseded historical ID is not retained for process lifetime")
+    eq(built.offlineStore.enumerate("ReplacementChurn").profiles[1].incarnationId,
+        ancient, "only live and immediate generated IDs remain guarded")
+end
+
+
+do
+    local encoded = StateCodec.encode(state(2, 4)).state
+    local hostileRoots = {
+        SLA_ServerPlayers_v1 = {
+            schemaVersion = 2,
+            players = {
+                HostileMailbox = {
+                    [0] = {
+                        schemaVersion = 2, state = encoded,
+                        initialized = true, deathRecorded = false,
+                        incarnationId = "record:incarnation", persistenceRevision = 7,
+                        mailbox = {
+                            kind = "clearAdvancementSlots", status = "pending",
+                            incarnationId = "other:incarnation", stateRevision = 4,
+                            queuedPersistenceRevision = 6,
+                        },
+                    },
+                },
+            },
+        },
+    }
+    local hostile = makeEnvironment(hostileRoots).createStore()
+    local rejected = hostile.offlineStore.enumerate("HostileMailbox")
+    no(rejected.ok, "stored mailbox incarnation mismatch fails closed")
+    eq(rejected.code, "invalid_record", "stored mailbox mismatch has bounded code")
+end
 
 return assertions

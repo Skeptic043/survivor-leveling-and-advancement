@@ -4,11 +4,12 @@ local function ok(r, m) eq(r.ok, true, m .. ": " .. tostring(r.code) .. " " .. t
 
 local function globals()
     local sandboxSingleton = { liveValue = 7 }
+    local uuidCounter = 0
     function sandboxSingleton:getOptionByName(name)
         if name ~= "SurvivorLevelingAdvancement.GlobalAdvancementLimit" then return nil end
         return { getValue = function() return self.liveValue end }
     end
-    return { PerkFactory = { PerkList = {} }, Perks = { None = {} }, SandboxOptions = { instance = sandboxSingleton }, SandboxVars = {}, PZMath = { clampFloat = function(v) return v end }, Events = {}, addXp = function() end, addXpNoMultiplier = function() end, isServer = function() return false end, isClient = function() return false end, instanceof = function() return true end, getPlayerByOnlineID = function() end, ModData = { getOrCreate = function() return {} end, add = function() end } }
+    return { PerkFactory = { PerkList = {} }, Perks = { None = {} }, SandboxOptions = { instance = sandboxSingleton }, SandboxVars = {}, PZMath = { clampFloat = function(v) return v end }, Events = {}, addXp = function() end, addXpNoMultiplier = function() end, isServer = function() return false end, isClient = function() return false end, instanceof = function() return true end, getPlayerByOnlineID = function() end, getRandomUUID = function() uuidCounter = uuidCounter + 1; return "uuid:" .. tostring(uuidCounter) end, getFileInput = function() end, getFileOutput = function() end, getTimestampMs = function() return 0 end, getWorld = function() return { getWorld = function() return "Save" end } end, ModData = { getOrCreate = function() return {} end, add = function() end } }
 end
 
 local function makeModules(log, g)
@@ -45,7 +46,7 @@ local function makeModules(log, g)
         StateCodec = { decode = function() end, encode = function() end, fresh = function() end }, InheritancePolicy = { plan = function() end }, LevelGainCompletion = levelGainCompletion,
         PlayerStateStore = { create = function() log[#log + 1] = "player_state"; return { ok = true, store = legacyStateStore } end },
         CharacterInheritanceStore = { create = function() log[#log + 1] = "character_state"; return { ok = true, store = legacyCharacterStore } end },
-        ServerPlayerRecordStore = { create = function() log[#log + 1] = "server_state"; return { ok = true, stateStore = serverStateStore, characterStore = serverCharacterStore } end },
+        ServerPlayerRecordStore = { create = function() log[#log + 1] = "server_state"; return { ok = true, stateStore = serverStateStore, characterStore = serverCharacterStore, offlineStore = {} } end },
         InheritanceRecordStore = { create = function() end }, InheritanceSession = { create = function() end }, NaturalLedger = { baseline = function() end, inspect = function() end, reconcileExternal = function() end, appendTarget = function() end, master = function() end, applySupported = function() end }, SurvivorEconomy = { availableAp = function() end, nextLevelCost = function() end, computeAward = function() end, applyXp = function() end, normalizationFromCoreCurve = function() end }, Allotment = { evaluate = function() end }, PostMax = { apply = function() end }, MutationScope = { begin = function() end, isActive = function() end, finish = function() end }, ActualObservation = { get = function() end, set = function() end, clearPlayer = function() end }, AccountingMode = accountingMode, OwnerSnapshot = ownerSnapshot, OwnerSession = ownerSession, AdvancementSession = advancementSession, AdminSession = adminSession, ApTransaction = { create = function() end }, SupportedAwardProcessor = { create = function() end }, WorldSettings = { create = function() end }, EventDerivedXpSource = { create = function() end },
     }
     return m, catalog, services
@@ -126,7 +127,8 @@ do
     serverGlobals.isServer = function() return true end
     local serverLog = {}
     local serverModules = makeModules(serverLog, serverGlobals)
-    local serverState, serverCharacter
+    local serverState, serverCharacter, serverOffline
+    local generatedIds = {}
     serverModules.ServerPlayerRecordStore.create = function(argument)
         serverLog[#serverLog + 1] = "server_state"
         eq(argument.codec, serverModules.StateCodec, "server store codec identity")
@@ -135,23 +137,86 @@ do
         eq(type(argument.legacyCharacterStore.inspect), "function", "server store legacy metadata source")
         eq(type(argument.getOrCreate), "function", "server store Global reader")
         eq(type(argument.add), "function", "server store Global writer")
+        eq(type(argument.generateIncarnationId), "function", "server store incarnation generator")
+        generatedIds[#generatedIds + 1] = argument.generateIncarnationId({
+            previousIncarnationId = #generatedIds == 0 and nil or generatedIds[#generatedIds],
+        })
         serverState = { load = function() end, save = function() end }
         serverCharacter = {
             inspect = function() end, tokenNewCharacter = function() end,
             markInitialized = function() end, markDeathRecorded = function() end,
         }
-        return { ok = true, stateStore = serverState, characterStore = serverCharacter }
+        serverOffline = {
+            enumerate = function() end, inspect = function() end,
+            replace = function() end, resolvePlayer = function() end,
+        }
+        return { ok = true, stateStore = serverState, characterStore = serverCharacter,
+            offlineStore = serverOffline }
     end
     serverModules.ServiceComposition.create = function(argument)
         serverLog[#serverLog + 1] = "composition"
         eq(argument.stateStore, serverState, "server state surface reaches composition")
         eq(argument.characterStore, serverCharacter, "server metadata surface reaches composition")
+        eq(argument.offlineStore, serverOffline, "server offline surface reaches composition")
         return { ok = true, services = {} }
     end
     ok(Build42RuntimeFactory.create({ modules = serverModules, globals = serverGlobals }),
         "server store composition")
     eq(serverLog[#serverLog - 1], "server_state", "server store built before composition")
     eq(serverLog[#serverLog], "composition", "server composition follows store")
+    ok(Build42RuntimeFactory.create({ modules = serverModules, globals = serverGlobals }),
+        "simulated server runtime restart")
+    eq(generatedIds[1] ~= generatedIds[2], true,
+        "runtime restart continues to use the server UUID source rather than a reset sequence")
+end
+
+do
+    local uuidGlobals = globals()
+    uuidGlobals.isServer = function() return true end
+    local uuidModules = makeModules({}, uuidGlobals)
+    local generator
+    uuidModules.ServerPlayerRecordStore.create = function(argument)
+        generator = argument.generateIncarnationId
+        return {
+            ok = true, stateStore = {}, characterStore = {}, offlineStore = {},
+        }
+    end
+    uuidModules.ServiceComposition.create = function()
+        return { ok = true, services = {} }
+    end
+    ok(Build42RuntimeFactory.create({ modules = uuidModules, globals = uuidGlobals }),
+        "UUID boundary fixture creates")
+    uuidGlobals.getRandomUUID = function() return "replacement" end
+    local first = generator({ previousIncarnationId = nil })
+    eq(first, "uuid:1", "captured UUID source ignores later replacement")
+
+    for _, hostile in ipairs({
+        function() error("uuid boom") end,
+        function() return "" end,
+        function() return "bad uuid" end,
+        function() return string.rep("u", 65) end,
+        function() return "repeat" end,
+    }) do
+        local hostileGlobals = globals()
+        hostileGlobals.isServer = function() return true end
+        hostileGlobals.getRandomUUID = hostile
+        local hostileModules = makeModules({}, hostileGlobals)
+        local hostileGenerator
+        hostileModules.ServerPlayerRecordStore.create = function(argument)
+            hostileGenerator = argument.generateIncarnationId
+            return { ok = true, stateStore = {}, characterStore = {}, offlineStore = {} }
+        end
+        hostileModules.ServiceComposition.create = function() return { ok = true, services = {} } end
+        ok(Build42RuntimeFactory.create({ modules = hostileModules, globals = hostileGlobals }),
+            "hostile UUID source remains behind bounded generator")
+        eq(hostileGenerator({ previousIncarnationId = "repeat" }), nil,
+            "throwing malformed or repeated UUID fails closed")
+    end
+    local missingGlobals = globals()
+    missingGlobals.getRandomUUID = nil
+    local missing = Build42RuntimeFactory.create({ modules = makeModules({}, missingGlobals), globals = missingGlobals })
+    eq(missing.ok, false, "missing UUID global fails closed")
+    eq(missing.code, "missing_global_getRandomUUID", "missing UUID failure is exact")
 end
 
 do
@@ -195,6 +260,58 @@ do
     eq(rejected.ok, false, "fake GameServer member cannot replace missing Lua global")
     eq(rejected.code, "missing_global_getPlayerByOnlineID", "missing Lua lookup has exact code")
     eq(fakeOnlyCalls, 0, "fake GameServer member remains untouched on rejection")
+end
+do
+    local spGlobals = globals()
+    spGlobals.getFileInput, spGlobals.getFileOutput = nil, nil
+    spGlobals.getTimestampMs, spGlobals.getWorld = nil, nil
+    local spLog = {}
+    local spResult = Build42RuntimeFactory.create({
+        modules = makeModules(spLog, spGlobals), globals = spGlobals,
+    })
+    ok(spResult, "single player requires no custom file globals")
+
+    local clientGlobals = globals()
+    clientGlobals.isClient = function() return true end
+    clientGlobals.getFileInput, clientGlobals.getFileOutput = nil, nil
+    clientGlobals.getTimestampMs, clientGlobals.getWorld = nil, nil
+    local clientResult = Build42RuntimeFactory.create({
+        modules = makeModules({}, clientGlobals), globals = clientGlobals,
+    })
+    eq(clientResult.code, "invalid_mode", "client rejects authority before file capabilities")
+end
+
+for _, name in ipairs({ "getFileInput", "getFileOutput", "getTimestampMs", "getWorld" }) do
+    local serverGlobals = globals()
+    serverGlobals.isServer = function() return true end
+    serverGlobals[name] = nil
+    local modules = makeModules({}, serverGlobals)
+    modules.ServiceComposition.create = function() return { ok = true, services = {} } end
+    local resultMissing = Build42RuntimeFactory.create({
+        modules = modules, globals = serverGlobals,
+    })
+    ok(resultMissing, "server missing " .. name .. " keeps native runtime")
+end
+
+for _, serverMode in ipairs({ false, true }) do
+    local serverGlobals, log = globals(), {}
+    serverGlobals.isServer = function() return serverMode end
+    local fileCalls, saveCalls = 0, 0
+    local function fileCall() fileCalls = fileCalls + 1; error("custom file access") end
+    local function saveCall() saveCalls = saveCalls + 1; error("broad save") end
+    serverGlobals.getFileInput, serverGlobals.getFileOutput = fileCall, fileCall
+    serverGlobals.save, serverGlobals.saveGame = saveCall, saveCall
+    serverGlobals.ModData.save = saveCall
+    local modules = makeModules(log, serverGlobals)
+    modules.ServiceComposition.create = function()
+        log[#log + 1] = "composition"
+        return { ok = true, services = {} }
+    end
+    local native = Build42RuntimeFactory.create({ modules = modules, globals = serverGlobals })
+    ok(native, "native runtime composes without custom saving")
+    eq(fileCalls, 0, "runtime creation opens no custom files")
+    eq(saveCalls, 0, "runtime creation requests no broad save")
+    eq(log[#log], "composition", "native service composition still completes")
 end
 local explicit = { ok = false, code = "catalog_down", detail = "catalog unavailable" }
 local bad

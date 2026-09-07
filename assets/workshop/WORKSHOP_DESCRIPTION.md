@@ -1,69 +1,52 @@
 # Survivor Leveling & Advancement [B42]
 
-Level your skills through normal play while also progressing your Survivor Level and earning Advancement Points to boost selected skills while keeping natural progression important.
+Earn points by leveling your skills, then spend them on the skills you choose. SLA adds a Survivor Level and Advancement Points to the normal Skills panel while keeping natural skill progression in place. Want some of that progress to survive your next bad decision? Optional level inheritance lets your next character keep a percentage of your Survivor Level, with fresh points to spend.
 
-## Features
+Single-player, multiplayer, split-screen, and controller support. No required dependencies.
 
-- Integrated directly into the vanilla skills panel
-- A separately configurable Survivor XP multiplier that does not change skill XP
-- Configurable Fitness and Strength contribution to Survivor XP
-- Individually enable or disable Survivor XP generation for each vanilla skill, plus one universal toggle for compatible custom skills
-- Automatic curve normalization for compatible custom skills
-- Server-authoritative multiplayer progression
-- Online-player administration for inspecting progression, awarding XP or levels, and clearing advancements
-- Full controller support for spending AP
-- Split-screen compatible
-- Optional Survivor Level inheritance after death
-- Optional Player 1 Survivor XP percentage inside the digital watch, enabled through Mod Options in the settings menu
+## How advancement works
 
-## How it works
+XP earned in supported skills also builds your Survivor Level, with each Survivor Level giving you one Advancement Point, or AP. Spend AP using the **+** buttons beside your skills. By default, you can have three advancement slots occupied at once. Practicing an advanced skill frees its slots as you earn the XP you skipped, with that XP also counting toward your next skill level.
 
-SLA gives each character a Survivor Level separate from their normal skills. By default, XP earned in supported trainable skills also earns Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent directly in the vanilla skills panel to raise the level of a selected skill.
+You can adjust the slot limit, give each skill its own allowance, or use Free mode to remove these restrictions.
 
-Advancing a skill with AP occupies the required number of Advancement Slots. To earn a slot back, you must naturally earn the XP that the AP allowed you to bypass. That XP still applies toward the skill's next level, allowing AP to boost your progress without replacing natural skill progression.
+## Keep some progress after death
 
-The final advancement to a skill's effective maximum, normally level 9 to level 10, is considered mastering the skill. Mastery costs 2 AP and requires 2 free Advancement Slots, then clears any active Advancement Slots on that skill. If the Global or Per Skill slot limit is set to 1, mastery only requires 1 free slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while still retaining the 2 AP cost.
+Enable Survivor Level inheritance and choose how much carries over to your next character in the same world. For example, dying at Survivor Level 20 with inheritance set to 50% gives your next character Survivor Level 10 and 10 AP to spend.
 
-## Advancement modes
+Your old skill levels are not copied, allowing you to choose where the inherited points go. Inheritance is optional and disabled by default.
+
+## Adding or removing SLA
+
+SLA can be added to or removed from existing saves. Existing skills are preserved, and past progression does not grant retroactive Survivor Levels. Disabling SLA hides its interface but leaves AP-granted skill levels in place. Re-enabling it restores SLA state and reconciles supported progression earned while it was absent. As with any mod-list change, I strongly recommend backing up any ongoing world you care about.
+
+## Settings
 
 - **Global:** Shares one configurable pool of Advancement Slots across every skill, with a default limit of 3 active slots in total.
 - **Per Skill:** Gives each skill its own configurable slot limit, using a default for compatible custom skills and optional overrides for vanilla skills.
 - **Free:** Removes Advancement Slot limits and catch-up or recovery restrictions.
+- Adjust Survivor XP speed without changing skill XP. Choose whether Fitness, Strength, individual vanilla skills, and compatible custom skills contribute.
+- In Mod Options, enable higher-contrast advancement markers or Player 1 Survivor XP percentage on the digital watch.
 
-In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts that skill into a recovery state that grants no Survivor XP until the lost progress is recovered.
+## Advancement details
 
-**Note:** Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved catch-up or recovery, and switching back to Global or Per Skill restores only what remains.
+The final advancement to a skill's effective maximum, normally level 9 to level 10, is considered mastering the skill. Mastery costs 2 AP and requires 2 free Advancement Slots, then clears any active Advancement Slots on that skill. If the Global or Per Skill slot limit is set to 1, mastery only requires 1 free slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while still retaining the 2 AP cost.
 
-## Optional level inheritance
-
-Survivor Level inheritance is configured through sandbox settings and allows the host to set a percentage of a deceased character's Survivor Level that passes to that player's next eligible survivor. This allows you to continue playing in a world you've invested significant progress in, while still retaining some of the downside of becoming Zomboid chow.
-
-## Adding or removing SLA
-
-SLA can be added to or removed from existing saves. Existing skills are preserved, and past progression does not grant retroactive Survivor Levels.
-
-Disabling SLA hides its interface but leaves AP-granted skill levels in place. Re-enabling it restores SLA state and reconciles supported progression earned while it was absent.
-
-As with any mod-list change, I strongly recommend backing up any ongoing world you care about.
+In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts that skill into a recovery state that grants no Survivor XP until the lost progress is recovered. **Note:** Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved catch-up or recovery, and switching back to Global or Per Skill restores only what remains.
 
 ## Dedicated servers and hosting
 
-Authorized administrators can open "Admin Panel > Mini Scoreboard" or "Admin Panel > Users List", right-click an online player, and choose "Survivor progression". Administrators can inspect progression, award positive Survivor XP or whole Survivor Levels, clear active Advancement Slots (without refunding AP or changing skill XP), and refresh the target state. An administrator can manage their own SLA progression from the "Admin" button in the Skills panel. Administration is limited to online players.
+Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP.
 
-Dedicated servers should set the native `SaveWorldEveryMinutes` option to a nonzero value. Closing the server by any method other than the `quit` command can potentially lose SLA progression written after the last successful server save. A shorter save interval means less progression possibly lost in the event of a server failure.
+SLA uses Project Zomboid's normal saves. On hosted and dedicated servers, enable SaveWorldEveryMinutes and shut down the server normally.
 
 ## Compatibility
 
 - **Incompatible: [RPG Skills Systems B42 / RPGMenu](https://steamcommunity.com/sharedfiles/filedetails/?id=3666281346)**
-
 - **Currently unsupported: [Beyond Ten - Level 15 Skills](https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705) and [Seesaw Game](https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643)**. These mods directly replace progression rules that SLA relies on.
-
 - **Load-order dependent: [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242)**. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
-
 - **Tested together: [Detailed Skill Tooltips](https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242), [Toughness Skill](https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939), and [Show Skill XP Gain B42.20](https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883)**. This combination worked without issue in testing, but compatibility with every interface or custom-skill mod cannot be guaranteed.
-
 - **Potential hook conflicts:** Mods that replace skill-XP award functions or `Events.AddXP`, the vanilla Skills panel, online-player context menus, or digital-watch rendering may conflict with the related SLA feature. If SLA detects a required hook was replaced, it disables that capability rather than risking incorrect behavior.
-
 - **Custom progression boundary:** Compatible trainable skills with a usable XP curve and supported XP events are expected to work. Mods that directly set skill XP or levels, replace caps or curves incompatibly, or bypass supported XP events may not grant Survivor XP.
 
 ## Current limits
@@ -78,11 +61,10 @@ AI was used to write all of the code in this project. The original concept, desi
 
 ## Support
 
-Optional support: [Ko-fi](https://ko-fi.com/skeptic043). All donations are strictly optional and no mod features are locked behind a paywall.
+- [Ko-fi](https://ko-fi.com/skeptic043) donations are optional, and no mod features are locked behind a paywall.
 
 ## Mod information
 
-- Target version: Project Zomboid Build 42.20
 - Developed and tested on: Project Zomboid 42.20.4
 - Required dependencies: None
 - License: MIT

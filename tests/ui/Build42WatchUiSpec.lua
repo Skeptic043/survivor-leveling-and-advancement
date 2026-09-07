@@ -19,7 +19,7 @@ end
 
 local function harness()
     local h = {
-        enabled = false, stamp = 0, players = {}, refreshes = {}, states = {},
+        enabled = false, stamp = 0, millis = 0, players = {}, refreshes = {}, states = {}, stateReads = 0,
         geometry = {}, draws = {}, panels = 0, playerReads = {}, mapVisible = false,
     }
     h.clock = { x = 100, y = 10, width = 91, height = 37, visible = true }
@@ -35,6 +35,7 @@ local function harness()
             return { ok = true }
         end,
         clientState = function(slot)
+            h.stateReads = h.stateReads + 1
             if h.stateThrow then error("state") end
             return h.states[slot]
         end,
@@ -49,6 +50,7 @@ local function harness()
         end,
         getClock = function() if h.clockThrow then error("clock") end; return h.clock end,
         minuteStamp = function() if h.timeThrow then error("time") end; return h.stamp end,
+        clockMillis = function() if h.millisThrow then error("millis") end; return h.millis end,
         getPlayer = function(slot)
             h.playerReads[#h.playerReads + 1] = slot
             if h.playerThrow then error("player") end
@@ -87,6 +89,9 @@ equal(Watch.create(missing.dependencies).code, "invalid_dependencies", "missing 
 missing = harness()
 missing.dependencies.isWorldMapVisible = nil
 equal(Watch.create(missing.dependencies).code, "invalid_dependencies", "missing map capability fails")
+missing = harness()
+missing.dependencies.clockMillis = nil
+equal(Watch.create(missing.dependencies).code, "invalid_dependencies", "missing real clock capability fails")
 
 local h = harness()
 h.callbacks.prerender()
@@ -166,22 +171,27 @@ equal(h.created.integration.status().displaying, false, "absent player one hides
 h.players[0] = { dead = false }
 h.states[0] = snapshot(150, 100)
 h.stamp = 40
+h.millis = 1000
 h.callbacks.prerender()
 h.draws = {}
 h.callbacks.render()
 equal(h.draws[1][1], 100, "percentage clamps above one")
 h.states[0] = snapshot(-5, 100)
+h.millis = 2000
 h.callbacks.prerender()
 h.draws = {}
 h.callbacks.render()
 equal(h.draws[1][1], 0, "percentage clamps below zero")
 h.states[0] = snapshot(5, 0)
+h.millis = 3000
 h.callbacks.prerender()
 equal(h.created.integration.status().displaying, false, "invalid cost hides percentage")
 h.states[0] = snapshot(5, 100, false)
+h.millis = 4000
 h.callbacks.prerender()
 equal(h.created.integration.status().displaying, false, "unready snapshot hides percentage")
 h.states[0] = { ok = true, present = false }
+h.millis = 5000
 h.callbacks.prerender()
 equal(h.created.integration.status().displaying, false, "absent snapshot hides percentage")
 
@@ -192,7 +202,7 @@ equal(h.created.integration.status().displaying, false, "hidden digital clock hi
 h.clock.visible = true
 
 local function failureCase(field, stamp)
-    h[field] = true; h.stamp = stamp; h.callbacks.prerender()
+    h[field] = true; h.stamp = stamp; h.millis = h.millis + 1000; h.callbacks.prerender()
     equal(h.created.integration.status().displaying, false, field .. " fails closed")
     h[field] = false
 end
@@ -204,6 +214,7 @@ failureCase("deadThrow", 70)
 h.stateThrow = true; h.callbacks.prerender()
 equal(h.created.integration.status().displaying, false, "state throw fails closed")
 h.stateThrow = false
+h.millis = h.millis + 1000
 
 h.enabled = false; h.callbacks.prerender(); h.enabled = true
 h.geometryThrow = true; h.stamp = 80; h.callbacks.prerender()
@@ -222,5 +233,116 @@ badPanel.dependencies.createPanel = function() return {} end
 local badCreated = Watch.create(badPanel.dependencies)
 expect(badCreated.ok, "bad panel defers to install")
 equal(badCreated.integration.install().code, "watch_panel_failed", "malformed panel rejected")
+
+local cost = harness()
+cost.enabled = true
+cost.players[0] = { dead = false }
+cost.states[0] = snapshot(25, 100)
+cost.callbacks.prerender()
+cost.states[0] = snapshot(75, 100)
+for frame = 1, 240 do
+    cost.millis = frame * 4
+    cost.callbacks.prerender()
+    cost.callbacks.render()
+end
+equal(cost.stateReads, 1, "240 visible frames below one second reuse one snapshot read")
+equal(cost.draws[#cost.draws][1], 25, "percentage stays cached before the interval")
+equal(#cost.refreshes, 1, "display frames do not add owner refreshes")
+cost.millis = 1000
+cost.callbacks.prerender()
+cost.callbacks.render()
+equal(cost.stateReads, 2, "next real second reads one new snapshot")
+equal(cost.draws[#cost.draws][1], 75, "next interval displays new percentage")
+
+cost.mapVisible = true
+for frame = 1, 120 do cost.millis = 1000 + frame * 16; cost.callbacks.prerender() end
+equal(cost.stateReads, 2, "map-hidden frames read no snapshots")
+cost.mapVisible = false
+cost.callbacks.prerender()
+equal(cost.stateReads, 3, "closing map reads once when the interval has elapsed")
+cost.enabled = false
+for frame = 1, 120 do cost.millis = 3000 + frame * 16; cost.callbacks.prerender() end
+equal(cost.stateReads, 3, "disabled frames read no snapshots")
+cost.enabled = true
+cost.callbacks.prerender()
+equal(cost.stateReads, 4, "reenabling reads once after the interval")
+cost.clock.visible = false
+for frame = 1, 120 do cost.millis = 5000 + frame * 16; cost.callbacks.prerender() end
+equal(cost.stateReads, 4, "hidden digital clock reads no snapshots")
+cost.clock.visible = true
+cost.callbacks.prerender()
+equal(cost.stateReads, 5, "visible clock resumes the snapshot interval")
+
+cost.players[0] = { dead = false }
+cost.states[0] = snapshot(10, 100)
+cost.millis = cost.millis + 1
+cost.callbacks.prerender()
+equal(cost.created.integration.status().displaying, false, "new character cannot display old percentage")
+equal(cost.stateReads, 5, "owner change cannot bypass snapshot read throttle")
+cost.millis = cost.millis + 1000
+cost.callbacks.prerender()
+cost.callbacks.render()
+equal(cost.draws[#cost.draws][1], 10, "replacement receives its own percentage next interval")
+cost.players[0].dead = true
+cost.callbacks.prerender()
+equal(cost.created.integration.status().displaying, false, "death hides immediately before owner refresh cadence")
+cost.players[0] = nil
+cost.callbacks.prerender()
+equal(cost.created.integration.status().localSlot, nil, "disconnect immediately drops cached owner")
+cost.players[0] = { dead = false }
+cost.states[0] = snapshot(60, 100)
+cost.callbacks.prerender()
+equal(cost.created.integration.status().displaying, false, "reconnect cannot inherit dead character percentage")
+cost.millis = cost.millis + 1000
+cost.callbacks.prerender()
+cost.callbacks.render()
+equal(cost.draws[#cost.draws][1], 60, "reconnected character receives current percentage")
+
+local readsBeforeFailure = cost.stateReads
+cost.stateThrow = true
+cost.millis = cost.millis + 1000
+cost.callbacks.prerender()
+equal(cost.created.integration.status().displaying, false, "snapshot read failure discards cached percentage")
+for frame = 1, 240 do cost.millis = cost.millis + 4; cost.callbacks.prerender() end
+equal(cost.stateReads, readsBeforeFailure + 1, "throwing snapshot reads retry at most once per second")
+cost.stateThrow = false
+cost.millis = cost.millis + 40
+cost.callbacks.prerender()
+equal(cost.stateReads, readsBeforeFailure + 2, "snapshot failure recovers at the next interval")
+local recoveredReads = cost.stateReads
+for frame = 1, 60 do
+    cost.enabled = false; cost.callbacks.prerender()
+    cost.enabled = true; cost.callbacks.prerender()
+end
+equal(cost.stateReads, recoveredReads, "option transitions do not reset the read throttle")
+
+cost.millis = cost.millis - 5000
+cost.callbacks.prerender()
+equal(cost.created.integration.status().displaying, false, "clock rollback clears cached percentage")
+for frame = 1, 100 do cost.callbacks.prerender() end
+equal(cost.stateReads, recoveredReads, "clock rollback does not retry expensive reads each frame")
+cost.millis = cost.millis + 1000
+cost.callbacks.prerender()
+equal(cost.stateReads, recoveredReads + 1, "rebased clock resumes after one second")
+local readsBeforeClockFailure = cost.stateReads
+for _, invalidClock in ipairs({ 0 / 0, math.huge, -math.huge, false }) do
+    cost.millis = invalidClock
+    for frame = 1, 30 do cost.callbacks.prerender() end
+    equal(cost.created.integration.status().displaying, false, "invalid real clock hides percentage")
+end
+cost.millisThrow = true
+for frame = 1, 100 do cost.callbacks.prerender() end
+equal(cost.stateReads, readsBeforeClockFailure, "invalid or throwing real clock never reads snapshots")
+cost.millisThrow = false
+cost.millis = 100000
+cost.callbacks.prerender()
+equal(cost.stateReads, readsBeforeClockFailure + 1, "valid real clock resumes safely")
+cost.states[0] = { ok = true, present = false }
+cost.millis = cost.millis + 1000
+cost.callbacks.prerender()
+equal(cost.created.integration.status().displaying, false, "reset owner snapshot clears displayed percentage next interval")
+local absentReads = cost.stateReads
+for frame = 1, 120 do cost.callbacks.prerender() end
+equal(cost.stateReads, absentReads, "absent snapshot does not cause per-frame reads")
 
 return checks

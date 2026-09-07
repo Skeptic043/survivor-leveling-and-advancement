@@ -63,7 +63,10 @@ local function validateGlobals(g)
     local perkRead, perkList = pcall(function() return g.PerkFactory.PerkList end)
     local noneRead, nonePerk = pcall(function() return g.Perks.None end)
     if not perkRead or perkList == nil or not noneRead or nonePerk == nil then return fail("missing_perk_capabilities", "PerkList and None are required") end
-    for _, name in ipairs({ "addXp", "addXpNoMultiplier", "isServer", "isClient", "instanceof", "getPlayerByOnlineID" }) do if type(rawget(g, name)) ~= "function" then return fail("missing_global_" .. name, name .. " is required") end end
+    for _, name in ipairs({
+        "addXp", "addXpNoMultiplier", "isServer", "isClient", "instanceof",
+        "getPlayerByOnlineID", "getRandomUUID",
+    }) do if type(rawget(g, name)) ~= "function" then return fail("missing_global_" .. name, name .. " is required") end end
     local getRead, getOrCreate = pcall(function() return g.ModData.getOrCreate end)
     local addRead, add = pcall(function() return g.ModData.add end)
     if not getRead or type(getOrCreate) ~= "function" or not addRead or type(add) ~= "function" then
@@ -94,6 +97,7 @@ function Factory.create(dependencies)
     local m, g = dependencies.modules, dependencies.globals
     local isServer, isClient, instanceOf = rawget(g, "isServer"), rawget(g, "isClient"), rawget(g, "instanceof")
     local getPlayerByOnlineID = rawget(g, "getPlayerByOnlineID")
+    local getRandomUUID = rawget(g, "getRandomUUID")
     local modData = rawget(g, "ModData")
     local modGetCalled, modGetOrCreate = pcall(function() return modData.getOrCreate end)
     local modAddCalled, modAdd = pcall(function() return modData.add end)
@@ -167,8 +171,17 @@ function Factory.create(dependencies)
     local legacyStateStore; legacyStateStore, err = resultField(legacyStateResult, "store", "player_state_store_create_failed"); if err then return err end
     local legacyCharacterResult; legacyCharacterResult, err = call("CharacterInheritanceStore.create", m.CharacterInheritanceStore.create); if err then return err end
     local legacyCharacterStore; legacyCharacterStore, err = resultField(legacyCharacterResult, "store", "character_store_create_failed"); if err then return err end
-    local stateStore, characterStore = legacyStateStore, legacyCharacterStore
+    local stateStore, characterStore, offlineStore = legacyStateStore, legacyCharacterStore, nil
     if serverMode then
+        local function generateIncarnationId(context)
+            if type(context) ~= "table" then return nil end
+            local previous = rawget(context, "previousIncarnationId")
+            local called, candidate = pcall(getRandomUUID)
+            if not called or type(candidate) ~= "string" or candidate == ""
+                or #candidate > 64 or candidate == previous
+                or string.match(candidate, "^[%w%._:%-]+$") == nil then return nil end
+            return candidate
+        end
         local serverStoreResult
         serverStoreResult, err = call("ServerPlayerRecordStore.create", m.ServerPlayerRecordStore.create, {
             codec = m.StateCodec,
@@ -177,18 +190,22 @@ function Factory.create(dependencies)
             legacyCharacterStore = legacyCharacterStore,
             getOrCreate = function(name) return modGetOrCreate(name) end,
             add = function(name, value) return modAdd(name, value) end,
+            generateIncarnationId = generateIncarnationId,
         })
         if err then return err end
         stateStore, err = resultField(serverStoreResult, "stateStore", "server_player_store_create_failed"); if err then return err end
         characterStore, err = resultField(serverStoreResult, "characterStore", "server_character_store_create_failed"); if err then return err end
+        offlineStore, err = resultField(serverStoreResult, "offlineStore", "server_offline_store_create_failed"); if err then return err end
     end
     local composition, compositionErr = call("ServiceComposition.create", m.ServiceComposition.create, {
         StateCodec = m.StateCodec, stateStore = stateStore, characterStore = characterStore, InheritanceRecordStore = m.InheritanceRecordStore, InheritanceSession = m.InheritanceSession, InheritancePolicy = m.InheritancePolicy, NaturalLedger = m.NaturalLedger, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, PostMax = m.PostMax, LevelGainCompletion = m.LevelGainCompletion,
         MutationScope = m.MutationScope, ActualObservation = m.ActualObservation, AccountingMode = rawget(m, "AccountingMode"), OwnerSnapshot = m.OwnerSnapshot, ApTransaction = m.ApTransaction, SupportedAwardProcessor = m.SupportedAwardProcessor, WorldSettings = m.WorldSettings, EventDerivedXpSource = m.EventDerivedXpSource, OwnerSession = m.OwnerSession, AdvancementSession = rawget(m, "AdvancementSession"), AdminSession = rawget(m, "AdminSession"),
-        catalog = catalog, worldSettingsProvider = provider, normalizationByPerk = normalization, sandboxMultiplier = resolver, positionArithmetic = arithmetic, environment = { globals = g }, authority = authority, playerIdentity = playerIdentity, inheritanceWorldStore = inheritanceWorldStore, inheritanceIdentity = inheritanceIdentity, levelGainSink = levelGainSink,
+        catalog = catalog, worldSettingsProvider = provider, normalizationByPerk = normalization, sandboxMultiplier = resolver, positionArithmetic = arithmetic, environment = { globals = g }, authority = authority, playerIdentity = playerIdentity, inheritanceWorldStore = inheritanceWorldStore, inheritanceIdentity = inheritanceIdentity, levelGainSink = levelGainSink, offlineStore = offlineStore,
     }); if compositionErr then return compositionErr end
     local services; services, compositionErr = resultField(composition, "services", "service_composition_failed"); if compositionErr then return compositionErr end
-    return { ok = true, runtime = { catalog = catalog, services = services } }
+    return { ok = true, runtime = {
+        catalog = catalog, services = services,
+    } }
 end
 
 return Factory

@@ -916,4 +916,118 @@ for index = 1, #malformedCollections do
     assertFalse(malformedResult.ok, "malformed collection rejected " .. tostring(index))
 end
 
+do
+    local online = {}
+    local roles = { makeRole({}, 1), makeRole({}, 10) }
+    local boundary = Build42AdminBoundary.create({
+        Capability = Capability,
+        getPlayerByOnlineID = function() return nil end,
+        getOnlinePlayers = function()
+            return {
+                size = function() return #online end,
+                get = function(_, index) return online[index + 1] end,
+            }
+        end,
+        getRoles = function()
+            return {
+                size = function() return #roles end,
+                get = function(_, index) return roles[index + 1] end,
+            }
+        end,
+        resolveProfile = function(player)
+            return { ok = true, profile = {
+                username = player.profileUsername, profileIndex = player.profileIndex,
+            } }
+        end,
+    }).boundary
+    local actor = makeActor(makeRole({ [SEE] = true, [MODIFY] = true }, 10))
+    local enumerated = boundary.authorizeAndResolve(
+        actor, "enumerateOfflineProfiles", { username = "Offline" }
+    )
+    assertTrue(enumerated.ok and enumerated.offline, "offline enumeration authorized by visibility")
+    assertExactKeys(enumerated.targetRef, { username = true }, "offline account target")
+    local profile = { username = "Offline", profileIndex = 2, incarnationId = "inc:2" }
+    local mutated = boundary.authorizeAndResolve(actor, "queueClearAdvancementSlots", profile)
+    assertTrue(mutated.ok and mutated.offline, "maximum role authorizes offline mutation")
+    assertExactKeys(mutated.targetRef, {
+        username = true, profileIndex = true, incarnationId = true,
+    }, "offline profile target")
+
+    local lesser = makeActor(makeRole({ [SEE] = true, [MODIFY] = true }, 9))
+    assertFailure(boundary.authorizeAndResolve(
+        lesser, "queueClearAdvancementSlots", profile
+    ), "unauthorized", "nonmaximum role denied offline mutation")
+
+    online[1] = { profileUsername = "Offline", profileIndex = 2 }
+    local mixedEnumeration = boundary.authorizeAndResolve(
+        actor, "enumerateOfflineProfiles", { username = "Offline" }
+    )
+    assertTrue(mixedEnumeration.ok and mixedEnumeration.offline,
+        "online sibling does not block account profile enumeration")
+    assertFailure(boundary.authorizeAndResolve(
+        actor, "inspectOfflineProfile", profile
+    ), "target_online", "reconnect race rejects offline route")
+    local disconnectedSibling = {
+        username = "Offline", profileIndex = 1, incarnationId = "inc:1",
+    }
+    local inspectedSibling = boundary.authorizeAndResolve(
+        actor, "inspectOfflineProfile", disconnectedSibling
+    )
+    assertTrue(inspectedSibling.ok and inspectedSibling.offline,
+        "online profile does not block an exact disconnected sibling")
+end
+
+do
+    local profile = { username = "Offline", profileIndex = 1, incarnationId = "inc:1" }
+    local unsafeCases = {
+        { actor = -1, roles = { 0, 10 }, label = "negative actor position" },
+        { actor = 10.5, roles = { 0, 10.5 }, label = "fractional actor position" },
+        { actor = 10, roles = { -1, 10 }, label = "negative role position" },
+        { actor = 10, roles = { 0, 10.5 }, label = "fractional role position" },
+        { actor = 10, roles = { 0, 9007199254740992 }, label = "unsafe role position" },
+    }
+    for index = 1, #unsafeCases do
+        local item = unsafeCases[index]
+        local roles = {}
+        for roleIndex = 1, #item.roles do
+            roles[roleIndex] = makeRole({}, item.roles[roleIndex])
+        end
+        local created = Build42AdminBoundary.create({
+            Capability = Capability,
+            getPlayerByOnlineID = function() return nil end,
+            getOnlinePlayers = function()
+                return { size = function() return 0 end, get = function() end }
+            end,
+            getRoles = function()
+                return {
+                    size = function() return #roles end,
+                    get = function(_, roleIndex) return roles[roleIndex + 1] end,
+                }
+            end,
+            resolveProfile = function() return { ok = false } end,
+        })
+        assertTrue(created.ok, item.label .. " boundary creates")
+        assertFailure(created.boundary.authorizeAndResolve(
+            makeActor(makeRole({ [MODIFY] = true }, item.actor)),
+            "queueClearAdvancementSlots", profile
+        ), "unauthorized", item.label)
+    end
+
+    local oversized = Build42AdminBoundary.create({
+        Capability = Capability,
+        getPlayerByOnlineID = function() return nil end,
+        getOnlinePlayers = function()
+            return { size = function() return 0 end, get = function() end }
+        end,
+        getRoles = function()
+            return { size = function() return 257 end, get = function() return makeRole({}, 1) end }
+        end,
+        resolveProfile = function() return { ok = false } end,
+    }).boundary.authorizeAndResolve(
+        makeActor(makeRole({ [MODIFY] = true }, 10)),
+        "queueClearAdvancementSlots", profile
+    )
+    assertFailure(oversized, "unauthorized", "oversized role collection")
+end
+
 return assertionCount

@@ -42,6 +42,19 @@ local translations = {
     IGUI_SLA_Admin_InvalidXp = "Enter a positive XP amount.",
     IGUI_SLA_Admin_InvalidLevels = "Enter a positive whole level count.",
     IGUI_SLA_Admin_PendingOther = "Another admin request is pending.",
+    IGUI_SLA_Admin_ProfilePrimary = "Primary profile",
+    IGUI_SLA_Admin_ProfileCoop = "Co-op profile %1",
+    IGUI_SLA_Admin_ProfileSelected = "Profile: %1",
+    IGUI_SLA_Admin_SelectProfile = "Offline character profiles",
+    IGUI_SLA_Admin_ProfileDead = "Read-only: this character is dead.",
+    IGUI_SLA_Admin_ProfileUninitialized = "Read-only: Survivor progression is not initialized.",
+    IGUI_SLA_Admin_QueueClear = "Queue Clear Advancements",
+    IGUI_SLA_Admin_CancelPending = "Cancel Pending",
+    IGUI_SLA_Admin_Acknowledge = "Acknowledge",
+    IGUI_SLA_Admin_MailboxPending = "Pending clear",
+    IGUI_SLA_Admin_MailboxApplied = "Applied clear",
+    IGUI_SLA_Admin_MailboxFailed = "Failed clear",
+    IGUI_SLA_Admin_MailboxCancelled = "Cancelled clear",
 }
 
 local function getText(key, ...)
@@ -64,6 +77,16 @@ local function summary(revision, level, spent, xp, accountingMode, xpForNextLeve
         spent = spent,
         availableAp = level - spent,
     }
+end
+
+local function offlineSummary(username, profileIndex, incarnationId, revision)
+    local result = summary(revision, 5, 2)
+    result.username = username
+    result.profileIndex = profileIndex
+    result.incarnationId = incarnationId
+    result.initialized = true
+    result.dead = false
+    return result
 end
 
 local function makeEnvironment(processMode)
@@ -221,6 +244,7 @@ local function makeEnvironment(processMode)
         function entry:getText() return self.text end
         function entry:setText(value) self.text = value end
         function entry:setEditable(value) self.editable = value end
+        function entry:setVisible(value) self.visible = value end
         return entry
     end
 
@@ -239,6 +263,7 @@ local function makeEnvironment(processMode)
         function button:initialise() self.initialised = true end
         function button:setEnable(value) self.enabled = value end
         function button:setVisible(value) self.visible = value end
+        function button:setTitle(value) self.title = value end
         function button:click()
             if self.enabled and self.onclick ~= nil then self.onclick(self.target, self) end
         end
@@ -349,7 +374,7 @@ local function makeEnvironment(processMode)
     function evidence:openFromScoreboard(username, slot)
         local scoreboard, player = self:scoreboard(username, slot)
         local a, b, c = self.Scoreboard.doPlayerListContextMenu(scoreboard, player, 11, 22)
-        local option = self.menu.options[#self.menu.options]
+        local option = self.menu.options[1]
         option:click()
         return option, a, b, c
     end
@@ -378,7 +403,7 @@ local function makeEnvironment(processMode)
     function evidence:openFromUsersList(username, slot)
         local usersList, item = self:usersList(username, slot, true)
         local a, b, c = self.UsersList.doContextMenu(usersList, item, 33, 44)
-        local option = self.menu.options[#self.menu.options]
+        local option = self.menu.options[1]
         option:click()
         return option, a, b, c
     end
@@ -491,29 +516,133 @@ usersMenu.canSee = true
 local offlineUsers, offlineItem = usersMenu:usersList("OfflineUser", 3, false)
 usersMenu.UsersList.doContextMenu(offlineUsers, offlineItem, 1, 2)
 equal(usersMenu.priorUsersMenus, 2, "offline Users List still chains vanilla once")
-equal(#usersMenu.menu.options, 0, "offline Users List omits online-only SLA action")
-equal(usersMenu.existingMenuGets, 0, "offline Users List retrieves no context")
+equal(#usersMenu.menu.options, 1, "offline Users List exposes SLA profile administration")
+equal(usersMenu.existingMenuGets, 1, "offline Users List retrieves the existing context once")
+local offlineAdmin = makeEnvironment("multiplayer")
+expect(offlineAdmin.integration.install().ok, "offline profile-selection environment installs")
+local offlineAdminList, offlineAdminItem = offlineAdmin:usersList("OfflineUser", 3, false)
+offlineAdmin.UsersList.doContextMenu(offlineAdminList, offlineAdminItem, 1, 2)
+local offlineOption = offlineAdmin.menu.options[1]
+offlineOption:click()
+equal(#offlineAdmin.requests, 1, "offline Users List action enumerates profiles once")
+expect(exact(offlineAdmin.requests[1].request, { operation = true, target = true })
+    and offlineAdmin.requests[1].request.operation == "enumerateOfflineProfiles"
+    and offlineAdmin.requests[1].request.target.username == "OfflineUser",
+    "offline launcher sends bounded username enumeration")
+local offlineWindow = offlineAdmin.windows[1]
+local offlineState = rawget(offlineWindow, "__slaAdminState")
+offlineAdmin.status = {
+    ok = true,
+    pending = false,
+    result = {
+        requestId = "request-1",
+        operation = "enumerateOfflineProfiles",
+        target = { username = "OfflineUser" },
+        ok = true,
+        outcome = "enumerated",
+        profiles = {
+            offlineSummary("OfflineUser", 0, "offline-primary", 4),
+            offlineSummary("OfflineUser", 2, "offline-coop", 7),
+        },
+    },
+}
+offlineWindow:prerender()
+equal(#offlineState.profileChoices, 2, "multiple offline profiles require an explicit choice")
+equal(offlineState.awardXpButton.title, "Primary profile", "primary profile choice is visible")
+equal(offlineState.awardLevelsButton.title, "Co-op profile 3", "co-op profile choice is visible")
+expect(not offlineState.xpEntry.visible and not offlineState.levelsEntry.visible,
+    "mutation entries hide until an offline profile is selected")
+offlineState.awardLevelsButton:click()
+equal(offlineState.target.profileIndex, 2, "explicit co-op selection retains the exact profile index")
+equal(offlineState.target.incarnationId, "offline-coop",
+    "explicit co-op selection retains the exact incarnation")
+equal(offlineState.summary.revision, 7, "explicit selection displays its persistence revision")
+expect(offlineState.xpEntry.visible and offlineState.levelsEntry.visible,
+    "mutation entries return after explicit profile selection")
+equal(offlineState.clearSlotsButton.title, "Queue Clear Advancements",
+    "selected offline profile exposes the durable queue action")
+offlineState.summary.dead = true
+offlineState.summary.accountingMode = "Free"
+offlineState.summary.mailbox = {
+    kind = "clearAdvancementSlots", status = "pending",
+    incarnationId = "offline-coop", stateRevision = 7,
+    queuedPersistenceRevision = 6,
+}
+offlineWindow:prerender()
+expect(not offlineState.awardXpButton.enabled and not offlineState.awardLevelsButton.enabled
+    and not offlineState.clearSlotsButton.visible and not offlineState.clearSlotsButton.enabled,
+    "Free read-only profile cannot access pending cancellation or progression mutations")
+offlineState.clearSlotsButton:click()
+equal(#offlineAdmin.requests, 1, "hidden Free pending action dispatches nothing")
+expect(containsDraw(offlineWindow, "Read-only: this character is dead."),
+    "dead offline profile visibly explains its read-only state")
+offlineState.summary.mailbox = {
+    kind = "clearAdvancementSlots", status = "cancelled",
+    incarnationId = "offline-coop", code = "profile_died",
+}
+offlineWindow:prerender()
+expect(offlineState.clearSlotsButton.visible and offlineState.clearSlotsButton.enabled
+    and offlineState.clearSlotsButton.title == "Acknowledge",
+    "Free dead profile exposes only terminal acknowledgement")
+offlineState.summary.dead = false
+offlineState.summary.initialized = false
+offlineWindow:prerender()
+expect(containsDraw(offlineWindow, "Read-only: Survivor progression is not initialized."),
+    "uninitialized offline profile visibly explains its read-only state")
+expect(offlineState.clearSlotsButton.visible and offlineState.clearSlotsButton.enabled
+    and not offlineState.awardXpButton.enabled and not offlineState.awardLevelsButton.enabled,
+    "Free uninitialized profile keeps terminal acknowledgement but no mutation access")
+offlineState.clearSlotsButton:click()
+equal(#offlineAdmin.requests, 2, "Free terminal acknowledgement dispatches exactly once")
+local freeAcknowledgement = offlineAdmin.requests[2].request
+expect(exact(freeAcknowledgement, {
+    operation = true, target = true, expectedRevision = true,
+}), "Free terminal acknowledgement request shape exact")
+equal(freeAcknowledgement.operation, "acknowledgeMailbox",
+    "Free terminal mailbox dispatches acknowledgement")
+equal(freeAcknowledgement.expectedRevision, 7,
+    "Free terminal acknowledgement uses displayed persistence revision")
+equal(freeAcknowledgement.target.profileIndex, 2,
+    "Free terminal acknowledgement preserves selected profile")
+equal(freeAcknowledgement.target.incarnationId, "offline-coop",
+    "Free terminal acknowledgement preserves exact incarnation")
 local malformedUsers, _ = usersMenu:usersList("Malformed", 3, true)
 local malformedItem = setmetatable({}, { __index = {
     isOnline = function() return true end,
 } })
 usersMenu.UsersList.doContextMenu(malformedUsers, malformedItem, 1, 2)
 equal(usersMenu.priorUsersMenus, 3, "malformed Users List target still chains vanilla once")
-equal(#usersMenu.menu.options, 0, "malformed Users List target omits SLA action")
+equal(#usersMenu.menu.options, 0, "malformed Users List target adds no SLA action")
 local usersOption, usersA, usersB, usersC = usersMenu:openFromUsersList("OnlineUser", 3)
 equal(usersA, "users", "Users List wrapper preserves first return")
 equal(usersB, 33, "Users List wrapper preserves second return")
 equal(usersC, 44, "Users List wrapper preserves third return")
 equal(usersMenu.priorUsersMenus, 4, "Users List chains captured vanilla exactly once")
 equal(usersMenu.vanillaUsersContextGets, 4, "Users List owns one context construction per invocation")
-equal(usersMenu.existingMenuGets, 1, "Users List retrieves the existing context exactly once")
+equal(usersMenu.existingMenuGets, 2, "Users List retrieves the existing context exactly once per valid row")
 equal(usersMenu.lastMenuSlot, 3, "Users List existing context uses exact local slot")
 equal(usersOption.title, "Survivor progression", "Users List action uses existing localization")
+equal(#usersMenu.menu.options, 2, "online Users List row exposes online and offline-profile actions")
+equal(usersMenu.menu.options[2].title, "Offline character profiles",
+    "online account row labels the separate offline-profile launcher")
 equal(#usersMenu.requests, 1, "Users List action sends one inspection")
 equal(usersMenu.requests[1].slot, 3, "Users List inspection preserves exact local slot")
 expect(exact(usersMenu.requests[1].request.target, { username = true })
     and usersMenu.requests[1].request.target.username == "OnlineUser",
     "Users List inspection sends only bounded online username")
+
+local mixedLauncher = makeEnvironment("multiplayer")
+expect(mixedLauncher.integration.install().ok, "mixed-account launcher environment installs")
+local mixedList, mixedItem = mixedLauncher:usersList("MixedAccount", 1, true)
+mixedLauncher.UsersList.doContextMenu(mixedList, mixedItem, 1, 2)
+equal(#mixedLauncher.menu.options, 2,
+    "online account row retains online action and adds offline profiles")
+mixedLauncher.menu.options[2]:click()
+equal(#mixedLauncher.requests, 1, "offline sibling launcher sends one request")
+equal(mixedLauncher.requests[1].request.operation, "enumerateOfflineProfiles",
+    "offline sibling launcher enumerates profiles even from an online account row")
+equal(mixedLauncher.requests[1].request.target.username, "MixedAccount",
+    "offline sibling launcher preserves exact account username")
 
 local throwingUsers = makeEnvironment("multiplayer")
 expect(throwingUsers.integration.install().ok, "throwing Users List environment installs")

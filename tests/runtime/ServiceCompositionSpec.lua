@@ -67,7 +67,15 @@ local function makeDependencies(overrides)
         clearPlayer = function() return { ok = true } end,
     }
     local advancementSession = { request = function() return { ok = true } end }
-    local adminSession = { inspect = function() return { ok = true } end, request = function() return { ok = true } end }
+    local adminSession = {
+        inspect = function() return { ok = true } end,
+        request = function() return { ok = true } end,
+        enumerateOffline = function() return { ok = true } end,
+        inspectOffline = function() return { ok = true } end,
+        requestOffline = function() return { ok = true } end,
+        resolveProfile = function() return { ok = true } end,
+        deliverPending = function() return { ok = true } end,
+    }
     local processorCalls = {}
     local processor = {
         process = function(player, award, settings)

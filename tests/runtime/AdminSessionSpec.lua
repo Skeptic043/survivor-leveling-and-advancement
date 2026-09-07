@@ -769,4 +769,210 @@ assertSaveFailure("save explicit failure", function() return { ok = false, code 
 assertSaveFailure("save malformed", function() return "bad" end, "store_save_invalid")
 assertSaveFailure("save extra field", function() return { ok = true, extra = true } end, "store_save_invalid")
 
+do
+    local session, values = fixture(function(dependencies, configured)
+        local onlineSaves = 0
+        local record = {
+            username = "OfflineAccount",
+            profileIndex = 0,
+            incarnationId = "offline:1",
+            persistenceRevision = 12,
+            initialized = true,
+            deathRecorded = false,
+            state = deepCopy(configured.state),
+            mailbox = nil,
+        }
+        dependencies.offlineStore = {
+            enumerate = function(username)
+                expectEqual(username, "OfflineAccount", "offline enumeration username")
+                return { ok = true, profiles = { deepCopy(record) } }
+            end,
+            inspect = function(selector)
+                expectEqual(selector.username, "OfflineAccount", "offline inspect username")
+                expectEqual(selector.profileIndex, 0, "offline inspect profile")
+                expectEqual(selector.incarnationId, "offline:1", "offline inspect incarnation")
+                return { ok = true, record = deepCopy(record) }
+            end,
+            replace = function(_, expectedRevision, state, mailbox)
+                if expectedRevision ~= record.persistenceRevision then
+                    return { ok = true, saved = false, code = "stale_revision", record = deepCopy(record) }
+                end
+                record.state = deepCopy(state)
+                record.mailbox = deepCopy(mailbox)
+                record.persistenceRevision = record.persistenceRevision + 1
+                return { ok = true, saved = true, record = deepCopy(record) }
+            end,
+            resolvePlayer = function()
+                return { ok = true, profile = { username = "OfflineAccount", profileIndex = 0 } }
+            end,
+        }
+        dependencies.store.load = function()
+            return { ok = true, state = deepCopy(record.state) }
+        end
+        dependencies.store.save = function(_, candidate)
+            onlineSaves = onlineSaves + 1
+            record.state = deepCopy(candidate)
+            record.persistenceRevision = record.persistenceRevision + 1
+            return { ok = true }
+        end
+        configured.offlineRecord = record
+        configured.offlineAccounts = { OfflineAccount = { [0] = record } }
+        configured.onlineSaves = function() return onlineSaves end
+    end)
+    local profiles = session.enumerateOffline("OfflineAccount")
+    expectEqual(profiles.ok, true, "offline enumeration succeeds")
+    expectEqual(#profiles.profiles, 1, "offline enumeration returns exact existing profile")
+    expectEqual(profiles.profiles[1].revision, 12, "offline summary uses persistence revision")
+    local selector = {
+        username = "OfflineAccount", profileIndex = 0, incarnationId = "offline:1",
+    }
+    local queued = session.requestOffline(selector, {
+        kind = "queueClearAdvancementSlots", expectedRevision = 12,
+    })
+    expectEqual(queued.ok, true, "offline clear queues")
+    expectEqual(queued.summary.mailbox.status, "pending", "queued mailbox is visible")
+    local replay = session.requestOffline(selector, {
+        kind = "queueClearAdvancementSlots", expectedRevision = 12,
+    })
+    expectEqual(replay.ok, true, "exact queue replay is idempotent")
+    expectEqual(replay.summary.revision, 13, "idempotent replay performs no second write")
+    local cancelled = session.requestOffline(selector, {
+        kind = "cancelMailbox", expectedRevision = 13,
+    })
+    expectEqual(cancelled.summary.mailbox.status, "cancelled", "pending mailbox cancels visibly")
+    local acknowledged = session.requestOffline(selector, {
+        kind = "acknowledgeMailbox", expectedRevision = 14,
+    })
+    expectEqual(acknowledged.summary.mailbox, nil, "terminal mailbox acknowledges away")
+    local awarded = session.requestOffline(selector, {
+        kind = "awardSurvivorLevels", expectedRevision = 15, count = 2,
+    })
+    expectEqual(awarded.ok, true, "offline level award succeeds")
+    expectEqual(awarded.summary.level, values.state.survivor.level + 2,
+        "offline level award uses Survivor economy state")
+    expectEqual(awarded.summary.revision, 16, "offline award advances persistence revision")
+
+    for cycle = 1, 2000 do
+        local revision = values.offlineRecord.persistenceRevision
+        local awardRequest = cycle % 2 == 0
+            and { kind = "awardSurvivorXp", expectedRevision = revision, amount = 1 }
+            or { kind = "awardSurvivorLevels", expectedRevision = revision, count = 1 }
+        local award = session.requestOffline(selector, awardRequest)
+        expect(award.ok and award.applied, "public offline award cycle " .. tostring(cycle))
+        local queuedCycle = session.requestOffline(selector, {
+            kind = "queueClearAdvancementSlots", expectedRevision = revision + 1,
+        })
+        expect(queuedCycle.ok and queuedCycle.applied,
+            "public mailbox queue cycle " .. tostring(cycle))
+        local cancelledCycle = session.requestOffline(selector, {
+            kind = "cancelMailbox", expectedRevision = revision + 2,
+        })
+        expect(cancelledCycle.ok and cancelledCycle.applied,
+            "public mailbox cancel cycle " .. tostring(cycle))
+        local acknowledgedCycle = session.requestOffline(selector, {
+            kind = "acknowledgeMailbox", expectedRevision = revision + 3,
+        })
+        expect(acknowledgedCycle.ok and acknowledgedCycle.applied,
+            "public mailbox acknowledgement cycle " .. tostring(cycle))
+    end
+
+    local deliveryRevision = values.offlineRecord.persistenceRevision
+    local deliveryQueue = session.requestOffline(selector, {
+        kind = "queueClearAdvancementSlots", expectedRevision = deliveryRevision,
+    })
+    expect(deliveryQueue.ok and deliveryQueue.applied, "delivery queue uses public boundary")
+    local delivered = session.deliverPending(values.target)
+    expect(delivered.ok and delivered.delivered and delivered.terminal == "applied",
+        "matching live state delivers and terminalizes through public boundary")
+    expectEqual(values.offlineRecord.mailbox.status, "applied",
+        "successful public delivery retains one applied mailbox")
+
+    local acknowledgedDelivery = session.requestOffline(selector, {
+        kind = "acknowledgeMailbox",
+        expectedRevision = values.offlineRecord.persistenceRevision,
+    })
+    expect(acknowledgedDelivery.ok and acknowledgedDelivery.applied,
+        "successful delivery terminal acknowledges")
+    local staleQueue = session.requestOffline(selector, {
+        kind = "queueClearAdvancementSlots",
+        expectedRevision = values.offlineRecord.persistenceRevision,
+    })
+    expect(staleQueue.ok and staleQueue.applied, "stale-delivery queue succeeds")
+    local awardedAfterQueue = session.requestOffline(selector, {
+        kind = "awardSurvivorLevels",
+        expectedRevision = values.offlineRecord.persistenceRevision,
+        count = 1,
+    })
+    expect(awardedAfterQueue.ok and awardedAfterQueue.applied,
+        "offline award after queue uses ordinary CAS")
+    local savesBeforeStaleDelivery = values.onlineSaves()
+    local staleDelivery = session.deliverPending(values.target)
+    expect(staleDelivery.ok and not staleDelivery.delivered
+        and staleDelivery.terminal == "cancelled",
+        "queue then offline award cancels stale delivery")
+    expectEqual(values.onlineSaves(), savesBeforeStaleDelivery,
+        "stale delivery never invokes live Clear Advancements save")
+    expectEqual(values.offlineRecord.mailbox.code, "stale_state",
+        "stale delivery retains sanitized terminal code")
+
+    values.offlineRecord.deathRecorded = true
+    local deadAcknowledgement = session.requestOffline(selector, {
+        kind = "acknowledgeMailbox",
+        expectedRevision = values.offlineRecord.persistenceRevision,
+    })
+    expect(deadAcknowledgement.ok and deadAcknowledgement.applied,
+        "dead profile may acknowledge an exact terminal mailbox")
+    expectEqual(values.offlineRecord.mailbox, nil,
+        "dead terminal acknowledgement removes only the mailbox")
+    local accountCount, profileCount = 0, 0
+    for _, profilesAtRest in pairs(values.offlineAccounts) do
+        accountCount = accountCount + 1
+        for _, recordAtRest in pairs(profilesAtRest) do
+            profileCount = profileCount + 1
+            expectEqual(recordAtRest.history, nil,
+                "public-boundary churn retains no history collection")
+            expect(recordAtRest.mailbox == nil
+                or recordAtRest.mailbox.kind == "clearAdvancementSlots",
+                "public-boundary churn retains at most one mailbox")
+        end
+        expect(profileCount > 0 and profileCount <= 4,
+            "public-boundary churn retains a nonempty bounded account")
+    end
+    expectEqual(accountCount, 1, "public-boundary churn creates no empty account buckets")
+end
+
+do
+    local clearCalls = 0
+    local session = fixture(function(dependencies, values)
+        local record = {
+            username = "Mismatch", profileIndex = 0,
+            incarnationId = "record:incarnation", persistenceRevision = 3,
+            initialized = true, deathRecorded = false,
+            state = deepCopy(values.state),
+            mailbox = {
+                kind = "clearAdvancementSlots", status = "pending",
+                incarnationId = "other:incarnation", stateRevision = values.state.revision,
+                queuedPersistenceRevision = 2,
+            },
+        }
+        dependencies.offlineStore = {
+            enumerate = function() return { ok = true, profiles = { deepCopy(record) } } end,
+            inspect = function() return { ok = true, record = deepCopy(record) } end,
+            replace = function() error("mismatched mailbox must not write") end,
+            resolvePlayer = function()
+                return { ok = true, profile = { username = "Mismatch", profileIndex = 0 } }
+            end,
+        }
+        dependencies.store.save = function()
+            clearCalls = clearCalls + 1
+            return { ok = true }
+        end
+    end)
+    local result = session.deliverPending({})
+    expectEqual(result.ok, false, "mailbox incarnation mismatch fails delivery")
+    expectEqual(result.code, "mailbox_incarnation_mismatch",
+        "mailbox mismatch failure is bounded")
+    expectEqual(clearCalls, 0, "mailbox mismatch never invokes live clear")
+end
+
 return assertions
