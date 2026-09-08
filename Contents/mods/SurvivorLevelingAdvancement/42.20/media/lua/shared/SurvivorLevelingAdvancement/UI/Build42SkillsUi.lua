@@ -6,14 +6,11 @@ local STATUS_LEFT_MARGIN = 4
 local ADMIN_OUTBOARD_GAP = 4
 local TARGET_R, TARGET_G, TARGET_B = 0.35, 0.72, 1.00
 local POSITION_R, POSITION_G, POSITION_B = 0.12, 0.32, 0.65
-local RECOVERY_R, RECOVERY_G, RECOVERY_B = 0.95, 0.25, 0.25
-local RECOVERY_POSITION_R, RECOVERY_POSITION_G, RECOVERY_POSITION_B = 0.45, 0.08, 0.08
 
 local REASON_KEYS = {
     pending = "IGUI_SLA_Reason_Pending",
     maximum_mismatch = "IGUI_SLA_Reason_MaximumMismatch",
     at_maximum = "IGUI_SLA_Reason_AtMaximum",
-    red_recovery = "IGUI_SLA_Reason_RedRecovery",
     insufficient_ap = "IGUI_SLA_Reason_InsufficientAp",
     allotment_disabled = "IGUI_SLA_Reason_AllotmentDisabled",
     allotment_capacity = "IGUI_SLA_Reason_AllotmentCapacity",
@@ -22,7 +19,6 @@ local REASON_KEYS = {
 local ADVANCEMENT_RESULT_KEYS = {
     no_ap = "IGUI_SLA_Reason_InsufficientAp",
     at_maximum = "IGUI_SLA_Reason_AtMaximum",
-    red_recovery = "IGUI_SLA_Reason_RedRecovery",
     stale_revision = "IGUI_SLA_Advancement_Stale",
 }
 
@@ -91,9 +87,8 @@ local function validSlot(value)
     return nonnegativeInteger(value) and value <= 3
 end
 
-local function weakKeys()
-    return setmetatable({}, { __mode = "k" })
-end
+local VIEW_STATE_KEY = "__slaSkillsViewState"
+local BAR_STATE_KEY = "__slaSkillsBarState"
 
 local function copyArray(source, maximum)
     if type(source) ~= "table" or getmetatable(source) ~= nil then return nil end
@@ -112,18 +107,9 @@ local function copyArray(source, maximum)
 end
 
 local function validOwner(owner)
-    if not exactPlainTable(owner, {
-        install = true,
-        status = true,
-        clientState = true,
-        refreshOwner = true,
-        setClientStateListener = true,
-        requestAdvancement = true,
-        advancementStatus = true,
-        requestAdmin = true,
-        adminStatus = true,
-    }) then return false end
-    for key in pairs(owner) do
+    if type(owner) ~= "table" or getmetatable(owner) ~= nil then return false end
+    for _, key in ipairs({ "clientState", "refreshOwner", "setClientStateListener",
+        "requestAdvancement", "advancementStatus" }) do
         if not callable(rawget(owner, key)) then return false end
     end
     return true
@@ -585,8 +571,15 @@ function Build42SkillsUi.create(dependencies)
         return failure("invalid_dependencies", "callables")
     end
 
-    local views = weakKeys()
-    local bars = weakKeys()
+    local viewOwner = {}
+    local views = {}
+    local activeSlots = {}
+    local releaseView
+    local function barStateFor(bar)
+        local state = type(bar) == "table" and rawget(bar, BAR_STATE_KEY) or nil
+        if state ~= nil and state.state ~= nil and views[state.state.view] == state.state then return state end
+        return nil
+    end
     local installed = false
     local installAttempted = false
     local retainedFailure = nil
@@ -626,12 +619,25 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local function viewFor(target)
-        local state = views[target]
-        if state ~= nil then return state end
+        if not isVisible(target) then
+            if releaseView ~= nil then releaseView(target) end
+            return nil
+        end
+        local state = type(target) == "table" and rawget(target, VIEW_STATE_KEY) or nil
+        if state ~= nil then
+            if type(state) ~= "table" or state.owner ~= viewOwner then return nil end
+            if isVisible(target) then
+                local previous = activeSlots[state.slot]
+                if previous ~= nil and previous ~= target then releaseView(previous) end
+                activeSlots[state.slot], views[target] = target, state
+            end
+            return state
+        end
         local slot = type(target) == "table" and rawget(target, "playerNum") or nil
         if not validSlot(slot) then return nil end
         state = {
             view = target,
+            owner = viewOwner,
             slot = slot,
             dirty = true,
             observed = false,
@@ -641,7 +647,7 @@ function Build42SkillsUi.create(dependencies)
             terminalPresentation = nil,
             nextRefresh = nil,
             lastClock = nil,
-            bars = weakKeys(),
+            bars = {},
             order = {},
             baseWidth = nil,
             appliedWidth = nil,
@@ -673,7 +679,12 @@ function Build42SkillsUi.create(dependencies)
             vanillaScrollHeight = nil,
             appliedScrollHeight = nil,
         }
-        views[target] = state
+        rawset(target, VIEW_STATE_KEY, state)
+        if isVisible(target) then
+            local previous = activeSlots[slot]
+            if previous ~= nil and previous ~= target then releaseView(previous) end
+            activeSlots[slot], views[target] = target, state
+        end
         return state
     end
 
@@ -696,8 +707,7 @@ function Build42SkillsUi.create(dependencies)
         if barState == nil or not barState.tracked or not barState.overlayValid
             or barState.row == nil then return false end
         local row = barState.row
-        if row.activeTargets == nil or (#row.activeTargets == 0
-            and (row.naturalPosition == nil or row.naturalPosition >= row.highWaterPosition)) then return false end
+        if row.activeTargets == nil or #row.activeTargets == 0 then return false end
         local state, bar = barState.state, barState.bar
         if state == nil or state.disabled or state.headerUnavailable
             or state.joypadButton ~= nil then return false end
@@ -770,11 +780,22 @@ function Build42SkillsUi.create(dependencies)
             and y >= bounds.y and y < bounds.y + bounds.height
     end
 
+    local function measuredWidth(state, key, text)
+        local widths = state.textWidths
+        if widths == nil then widths = {}; state.textWidths = widths end
+        local cached = widths[key]
+        if cached ~= nil and cached.text == text then return true, cached.width end
+        local called, width = pcall(measureText, text)
+        if not called or not finite(width) or width < 0 then return false, nil end
+        widths[key] = { text = text, width = width }
+        return true, width
+    end
+
     local function updateHeaderTooltip(state, parent, right, y)
         if tooltipClass == nil or not callable(fontHeight) then return end
         local text = state.statusSecondRightText
         if text == nil then hideHeaderTooltip(state); return end
-        local measured, width = pcall(measureText, text)
+        local measured, width = measuredWidth(state, "secondRight", text)
         local heightCalled, height = pcall(fontHeight)
         if not measured or not finite(width) or width <= 0
             or not heightCalled or not finite(height) or height <= 0 then
@@ -782,7 +803,9 @@ function Build42SkillsUi.create(dependencies)
             return
         end
         if state.headerBounds ~= nil and state.headerBounds.parent ~= parent then hideHeaderTooltip(state) end
-        state.headerBounds = { parent = parent, x = right - width, y = y, width = width, height = height }
+        local bounds = state.headerBounds
+        if bounds == nil then bounds = {}; state.headerBounds = bounds end
+        bounds.parent, bounds.x, bounds.y, bounds.width, bounds.height = parent, right - width, y, width, height
         if not headerHovered(state) then hideHeaderTooltip(state); return end
         if state.headerTooltip ~= nil then return end
         local description = localized("IGUI_SLA_SlotsHelp")
@@ -847,7 +870,7 @@ function Build42SkillsUi.create(dependencies)
             end
         end
         for bar in pairs(state.bars) do
-            local barState = bars[bar]
+            local barState = barStateFor(bar)
             if barState and barState.button and callable(barState.button.setEnable) then
                 pcall(barState.button.setEnable, barState.button, false)
             end
@@ -903,7 +926,7 @@ function Build42SkillsUi.create(dependencies)
             overlayValid = false,
         }
         local buttonCalled, button = pcall(buttonNew, buttonClass, baseWidth, 0, height, height, "+", bar, function(target)
-            local targetState = type(target) == "table" and bars[target] or nil
+            local targetState = type(target) == "table" and barStateFor(target) or nil
             if targetState ~= nil and callable(request) then request(targetState) end
         end)
         if not buttonCalled or type(button) ~= "table"
@@ -928,7 +951,15 @@ function Build42SkillsUi.create(dependencies)
     local function reconcile(view, state)
         local collection = type(view) == "table" and rawget(view, "progressBars") or nil
         if type(collection) ~= "table" then return false end
-        local current = weakKeys()
+        local unchanged, count = true, 0
+        for _, bar in ipairs(collection) do
+            if type(bar) == "table" then
+                count = count + 1
+                if state.order[count] ~= bar then unchanged = false end
+            end
+        end
+        if unchanged and count == #state.order then return true end
+        local current = {}
         local order = {}
         local changed = false
         for index, bar in ipairs(collection) do
@@ -938,15 +969,15 @@ function Build42SkillsUi.create(dependencies)
                 if state.bars[bar] == nil then
                     local barState = resolveBar(bar, state)
                     state.bars[bar] = true
-                    bars[bar] = barState
+                    rawset(bar, BAR_STATE_KEY, barState)
                     changed = true
                 end
             end
         end
         for bar in pairs(state.bars) do
             if current[bar] == nil then
-                removeButtonCallback(bars[bar])
-                bars[bar] = nil
+                removeButtonCallback(barStateFor(bar))
+                rawset(bar, BAR_STATE_KEY, nil)
                 state.bars[bar] = nil
                 changed = true
             end
@@ -961,7 +992,7 @@ function Build42SkillsUi.create(dependencies)
     local function currentRows(state)
         local rows = {}
         for index = 1, #state.order do
-            local barState = bars[state.order[index]]
+            local barState = barStateFor(state.order[index])
             if barState and barState.supported then
                 rows[#rows + 1] = {
                     perkId = barState.perkId,
@@ -1035,12 +1066,16 @@ function Build42SkillsUi.create(dependencies)
 
     local function formatSurvivorXp(value)
         if not finite(value) or value < 0 then return nil end
-        local rounded = value
-        if value <= MAX_SAFE_INTEGER / 10 then
-            rounded = math.floor(value * 10 + 0.5) / 10
+        if value > MAX_SAFE_INTEGER / 10 then
+            local whole = math.floor(value)
+            local called, formatted = pcall(string.format, "%.0f", whole)
+            if not called or type(formatted) ~= "string" then return nil end
+            local tenth = math.floor((value - whole) * 10)
+            return tenth == 0 and formatted or formatted .. "." .. tostring(tenth)
         end
+        local truncated = math.floor(value * 10) / 10
         local called, formatted = pcall(string.format,
-            rounded == math.floor(rounded) and "%.0f" or "%.1f", rounded)
+            truncated == math.floor(truncated) and "%.0f" or "%.1f", truncated)
         return called and type(formatted) == "string" and formatted or nil
     end
 
@@ -1053,19 +1088,6 @@ function Build42SkillsUi.create(dependencies)
         if not barState.tracked or not barState.overlayValid or not finite(mouseX) then return nil end
         local row = barState.row
         local natural = rawget(row, "naturalPosition")
-        local high = rawget(row, "highWaterPosition")
-        if natural ~= nil and natural < high then
-            local left = curvePosition(barState, natural)
-            local right = curvePosition(barState, high)
-            if left ~= nil and right ~= nil and containsHorizontal(mouseX, left, right, true) then
-                local amount = formatRemaining(math.max(0, high - natural))
-                local first = amount and localized("IGUI_SLA_RecoveryXpLeft", amount) or nil
-                local second = localized("IGUI_SLA_RecoveryNoSurvivorXp")
-                if first == nil or second == nil then return nil end
-                return first .. " <LINE> " .. second
-            end
-        end
-
         local targets = rawget(row, "activeTargets")
         local visibleCount = 0
         for index = 1, #targets do
@@ -1089,7 +1111,7 @@ function Build42SkillsUi.create(dependencies)
 
     local function controllerAccounting(row)
         local lines = {}
-        local natural, high = row.naturalPosition, row.highWaterPosition
+        local natural = row.naturalPosition
         local target = row.activeTargets[1]
         if target ~= nil then
             local amount = formatRemaining(math.max(0, target.targetPosition - natural))
@@ -1098,17 +1120,10 @@ function Build42SkillsUi.create(dependencies)
             if first == nil or second == nil then return nil end
             lines[#lines + 1] = first .. " <LINE> " .. second
         end
-        if natural ~= nil and natural < high then
-            local amount = formatRemaining(high - natural)
-            local first = amount and localized("IGUI_SLA_RecoveryXpLeft", amount) or nil
-            local second = localized("IGUI_SLA_RecoveryNoSurvivorXp")
-            if first == nil or second == nil then return nil end
-            lines[#lines + 1] = first .. " <LINE> " .. second
-        end
         return table.concat(lines, " <LINE> ")
     end
 
-    local function buttonTooltipFor(row, terminalKey)
+    local function buttonTooltipFor(row, terminalKey, tracked, enabled)
         local lines = {}
         local reason = rawget(row, "reasonCode")
         if reason ~= nil then
@@ -1136,6 +1151,11 @@ function Build42SkillsUi.create(dependencies)
             end
             if value == nil then return nil end
             lines[#lines + 1] = value
+            if key == "IGUI_SLA_Master" and enabled and tracked and #row.activeTargets > 0 then
+                local clearance = localized("IGUI_SLA_MasterClearsSlots")
+                if clearance == nil then return nil end
+                lines[#lines + 1] = clearance
+            end
         end
         if rawget(row, "activeCount") ~= nil and rawget(row, "limit") ~= nil then
             local value = localized("IGUI_SLA_PerSkillActive", rawget(row, "activeCount"), rawget(row, "limit"))
@@ -1229,7 +1249,6 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local function installAdminVisibility(view, state)
-        if adminLauncher == nil then return true end
         if state.adminVisibilityFailed then
             setAdminButtonState(state, false)
             return false
@@ -1251,12 +1270,12 @@ function Build42SkillsUi.create(dependencies)
         local wrapper
         wrapper = function(target, ...)
             local ok, a, b, c = pcall(prior, target, ...)
-            if not isVisible(view) then hideHeaderTooltip(state) end
             if not ok then
                 setAdminButtonState(state, false)
                 disableView(state)
                 error(a, 0)
             end
+            if not isVisible(view) then releaseView(view) else viewFor(view) end
             local updated, applied = pcall(updateAdminAvailability, view, state, true)
             if not updated or not applied then disableView(state) end
             return a, b, c
@@ -1351,6 +1370,19 @@ function Build42SkillsUi.create(dependencies)
         return hidden and released
     end
 
+    releaseView = function(view)
+        local state = views[view]
+        if state == nil then return end
+        hideHeaderTooltip(state)
+        clearControllerTooltip(state)
+        clearJoypadButton(state)
+        if not setAdminButtonState(state, false) then disableView(state) end
+        state.dirty = true
+        state.nextRefresh = nil
+        views[view] = nil
+        if activeSlots[state.slot] == view then activeSlots[state.slot] = nil end
+    end
+
     local function ensureAdminButton(view, state)
         if adminLauncher == nil then return true end
         local parent = rawget(view, "parent")
@@ -1422,7 +1454,7 @@ function Build42SkillsUi.create(dependencies)
             return false
         end
         for index = 1, #state.order do
-            local barState = bars[state.order[index]]
+            local barState = barStateFor(state.order[index])
             if barState and barState.supported then
                 local row = cache and cache.rows[barState.perkId] or nil
                 local tracked = cache ~= nil and cache.allotment.mode ~= "Free"
@@ -1433,10 +1465,10 @@ function Build42SkillsUi.create(dependencies)
                 local terminal = state.terminalPresentation
                 local terminalKey = terminal ~= nil and terminal.perkId == barState.perkId
                     and terminal.key or nil
-                local tooltip = row and buttonTooltipFor(row, terminalKey) or nil
-                if row and tooltip == nil then disableView(state); return false end
                 local enabled = row ~= nil and row.enabled == true and overlay
                     and cache.pending ~= true
+                local tooltip = row and buttonTooltipFor(row, terminalKey, tracked, enabled) or nil
+                if row and tooltip == nil then disableView(state); return false end
                 if not setButton(barState, enabled, tooltip) then disableView(state); return false end
             end
         end
@@ -1445,14 +1477,15 @@ function Build42SkillsUi.create(dependencies)
 
     local function rebuild(state)
         state.dirty = false
+        state.textWidths = nil
         local optionCalled, optionValue = false, false
         if callable(highContrastEnabled) then optionCalled, optionValue = pcall(highContrastEnabled) end
         state.highContrast = optionCalled and optionValue == true
         local stateCalled, stateResult = pcall(clientState, state.slot)
         local statusCalled, statusResult = pcall(advancementStatus, state.slot)
         local settingsCalled, settingsResult = pcall(readSettings)
-        local stateValid, snapshot = stateCalled and validClientState(stateResult) or false, nil
-        if stateValid then local _, detached = validClientState(stateResult); snapshot = detached end
+        local stateValid, snapshot = false, nil
+        if stateCalled then stateValid, snapshot = validClientState(stateResult) end
         local statusValid, pending, terminalPresentation = false, nil, nil
         if statusCalled then
             statusValid, pending, terminalPresentation = validAdvancementStatus(statusResult)
@@ -1484,8 +1517,10 @@ function Build42SkillsUi.create(dependencies)
 
     local function markSlotDirty(slot)
         if not validSlot(slot) then return end
-        for view, state in pairs(views) do
-            if view ~= nil and state.slot == slot then state.dirty = true end
+        local view = activeSlots[slot]
+        local state = view ~= nil and views[view] or nil
+        if state ~= nil then
+            if not isVisible(view) then releaseView(view) else state.dirty = true end
         end
     end
 
@@ -1504,7 +1539,8 @@ function Build42SkillsUi.create(dependencies)
     request = function(barState)
         local state = barState.state
         local row = state and state.cache and state.cache.rows[barState.perkId] or nil
-        if state == nil or row == nil or not row.enabled or state.cache.pending
+        if state == nil or state.disabled or views[state.view] ~= state or not isVisible(state.view)
+            or row == nil or not row.enabled or state.cache.pending
             or not barState.overlayValid then return false end
         local called, result = pcall(requestAdvancement, state.slot, barState.perkId)
         if not called or not validAcceptedRequest(result, barState.perkId) then return false end
@@ -1703,7 +1739,7 @@ function Build42SkillsUi.create(dependencies)
         end
         if state.baseWidth ~= nil and not propagate(view, state.baseWidth, "width") then return false end
         for index = 1, #state.order do
-            local barState = bars[state.order[index]]
+            local barState = barStateFor(state.order[index])
             if barState and barState.supported then
                 if not writeNumber(state.order[index], "setWidth", barState.baseWidth) then return false end
             end
@@ -1798,7 +1834,7 @@ function Build42SkillsUi.create(dependencies)
         end
         if state.baseWidth ~= nil and not propagate(view, state.baseWidth, "width") then restored = false end
         for index = 1, #state.order do
-            local barState = bars[state.order[index]]
+            local barState = barStateFor(state.order[index])
             if barState and barState.supported
                 and not writeNumber(state.order[index], "setWidth", barState.baseWidth) then restored = false end
         end
@@ -1815,7 +1851,7 @@ function Build42SkillsUi.create(dependencies)
         local baseRight, controlRight = 0, 0
         for index = 1, #state.order do
             local bar = state.order[index]
-            local barState = bars[bar]
+            local barState = barStateFor(bar)
             if barState and barState.supported then
                 local x = readNumber(bar, "getX")
                 local buttonWidth = readNumber(barState.button, "getWidth")
@@ -1837,9 +1873,16 @@ function Build42SkillsUi.create(dependencies)
         if state.statusFirstLeftText ~= nil and state.statusFirstRightText ~= nil
             and state.statusSecondLeftText ~= nil then
             local contentLeft, y, rowHeight = firstButtonGeometry(view)
-            local gapCalled, gapWidth = pcall(measureText, "  ")
-            local firstLeftCalled, firstLeftWidth = pcall(measureText, state.statusFirstLeftText)
-            local firstRightCalled, firstRightWidth = pcall(measureText, state.statusFirstRightText)
+            local heightCalled, textHeight = true, rowHeight
+            if callable(fontHeight) then heightCalled, textHeight = pcall(fontHeight) end
+            if not heightCalled or not finite(textHeight) or textHeight <= 0 then return false end
+            if state.textHeight ~= textHeight or state.textRowHeight ~= rowHeight then
+                state.textWidths = nil
+                state.textHeight, state.textRowHeight = textHeight, rowHeight
+            end
+            local gapCalled, gapWidth = measuredWidth(state, "gap", "  ")
+            local firstLeftCalled, firstLeftWidth = measuredWidth(state, "firstLeft", state.statusFirstLeftText)
+            local firstRightCalled, firstRightWidth = measuredWidth(state, "firstRight", state.statusFirstRightText)
             if contentLeft == nil or y == nil or rowHeight == nil
                 or not firstLeftCalled or not finite(firstLeftWidth) or firstLeftWidth < 0
                 or not firstRightCalled or not finite(firstRightWidth) or firstRightWidth < 0
@@ -1848,14 +1891,14 @@ function Build42SkillsUi.create(dependencies)
             if viewX == nil then return false end
             local firstRowWidth = STATUS_LEFT_MARGIN + firstLeftWidth + gapWidth
                 + firstRightWidth + STATUS_LEFT_MARGIN
-            local secondLeftCalled, secondLeftWidth = pcall(
-                measureText, state.statusSecondLeftText)
+            local secondLeftCalled, secondLeftWidth = measuredWidth(
+                state, "secondLeft", state.statusSecondLeftText)
             if not secondLeftCalled or not finite(secondLeftWidth)
                 or secondLeftWidth < 0 then return false end
             local secondRowWidth = STATUS_LEFT_MARGIN + secondLeftWidth + STATUS_LEFT_MARGIN
             if state.statusSecondRightText ~= nil then
-                local secondRightCalled, secondRightWidth = pcall(
-                    measureText, state.statusSecondRightText)
+                local secondRightCalled, secondRightWidth = measuredWidth(
+                    state, "secondRight", state.statusSecondRightText)
                 if not secondRightCalled or not finite(secondRightWidth)
                     or secondRightWidth < 0 then return false end
                 secondRowWidth = STATUS_LEFT_MARGIN + secondLeftWidth + gapWidth
@@ -1992,7 +2035,7 @@ function Build42SkillsUi.create(dependencies)
     end
 
     local function onOverlay(bar)
-        local barState = bars[bar]
+        local barState = barStateFor(bar)
         if barState == nil or not barState.supported then return true end
         local state = barState.state
         if state == nil or state.disabled then return true end
@@ -2024,36 +2067,20 @@ function Build42SkillsUi.create(dependencies)
                     contrast and 0.88 or TARGET_G, TARGET_B)
             end
         end
-        local natural, high = barState.row.naturalPosition, barState.row.highWaterPosition
+        local natural = barState.row.naturalPosition
         if natural == nil then return true end
-        local highX = curvePosition(barState, high)
+        local highX = curvePosition(barState, natural)
         if #barState.row.activeTargets > 0 and highX ~= nil then
             if contrast then pcall(drawRect, bar, highX - 2, 0, 4, cell, 1, 0, 0, 0) end
             pcall(drawRect, bar, highX - 1, 0, 2, cell, contrast and 1 or 0.85,
                 contrast and 0.55 or POSITION_R, contrast and 0.88 or POSITION_G,
                 contrast and 1 or POSITION_B)
         end
-        if natural < high then
-            local naturalX = curvePosition(barState, natural)
-            if naturalX ~= nil and highX ~= nil and highX > naturalX then
-                if contrast then
-                    pcall(drawRect, bar, naturalX, cell - 4, highX - naturalX, 4, 1, 0, 0, 0)
-                    pcall(drawRect, bar, naturalX - 2, 0, 4, cell, 1, 0, 0, 0)
-                end
-                pcall(drawRect, bar, naturalX, cell - 3, highX - naturalX, 2,
-                    contrast and 1 or 0.75, contrast and 1 or RECOVERY_R,
-                    contrast and 0.55 or RECOVERY_G, contrast and 0.55 or RECOVERY_B)
-                pcall(drawRect, bar, naturalX - 1, 0, 2, cell, contrast and 1 or 0.90,
-                    contrast and 1 or RECOVERY_POSITION_R,
-                    contrast and 0.55 or RECOVERY_POSITION_G,
-                    contrast and 0.55 or RECOVERY_POSITION_B)
-            end
-        end
         return true
     end
 
     local function onTooltip(bar)
-        local barState = bars[bar]
+        local barState = barStateFor(bar)
         if barState == nil or barState.row == nil or not barState.tracked then return end
         local mouseX = readNumber(bar, "getMouseX")
         local selected = controllerSelected(barState)
@@ -2075,7 +2102,7 @@ function Build42SkillsUi.create(dependencies)
         local view = state.view
         local collection, index = rawget(view, "progressBars"), rawget(view, "joypadIndex")
         local bar = type(collection) == "table" and index ~= nil and rawget(collection, index) or nil
-        local barState = bar and bars[bar] or nil
+        local barState = bar and barStateFor(bar) or nil
         if not controllerSelected(barState) then clearControllerTooltip(state); return end
         if state.controllerBar ~= nil and state.controllerBar ~= bar then clearControllerTooltip(state) end
         if state.controllerRow ~= barState.row or rawget(bar, "message") == nil then
@@ -2103,7 +2130,7 @@ function Build42SkillsUi.create(dependencies)
         local progressBars = type(view) == "table" and rawget(view, "progressBars") or nil
         local bar = type(index) == "number" and type(progressBars) == "table"
             and rawget(progressBars, index) or nil
-        local barState = type(bar) == "table" and bars[bar] or nil
+        local barState = type(bar) == "table" and barStateFor(bar) or nil
         local button = barState and barState.button or nil
         if type(button) ~= "table" or not callable(button.setJoypadFocused) then return false end
         local called = pcall(button.setJoypadFocused, button, true)
@@ -2257,7 +2284,7 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.renderPerkRect = function(bar, ...)
         local ok, a, b, c = pcall(priorRenderPerkRect, bar, ...)
-        local barState = bars[bar]
+        local barState = barStateFor(bar)
         if ok and barState ~= nil and barState.supported then
             local currentLevel = rawget(bar, "level")
             if nonnegativeInteger(currentLevel) and currentLevel <= barState.effectiveMaximum
@@ -2270,9 +2297,9 @@ function Build42SkillsUi.create(dependencies)
             end
         end
         local addonCalled, addonResult = pcall(onOverlay, bar)
-        if (not addonCalled or addonResult ~= true) and bars[bar] ~= nil then
-            bars[bar].overlayValid = false
-            local state = bars[bar].state
+        if (not addonCalled or addonResult ~= true) and barStateFor(bar) ~= nil then
+            barStateFor(bar).overlayValid = false
+            local state = barStateFor(bar).state
             if state ~= nil then disableView(state) end
         end
         if not ok then error(a, 0) end
@@ -2281,15 +2308,15 @@ function Build42SkillsUi.create(dependencies)
     wrappers.updateTooltip = function(bar, ...)
         local ok, a, b, c = pcall(priorUpdateTooltip, bar, ...)
         local addonOk = pcall(onTooltip, bar)
-        if not addonOk and bars[bar] ~= nil then
-            bars[bar].row = nil
-            setButton(bars[bar], false, nil)
+        if not addonOk and barStateFor(bar) ~= nil then
+            barStateFor(bar).row = nil
+            setButton(barStateFor(bar), false, nil)
         end
         if not ok then error(a, 0) end
         return a, b, c
     end
     wrappers.removeTooltip = function(bar, ...)
-        local barState = bars[bar]
+        local barState = barStateFor(bar)
         if barState ~= nil and barState.state.controllerBar == bar then
             -- Vanilla render removes non-mouse tooltips before drawing their message.
             if controllerSelected(barState) then return end

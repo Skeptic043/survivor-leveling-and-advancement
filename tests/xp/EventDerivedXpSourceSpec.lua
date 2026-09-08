@@ -647,7 +647,6 @@ do
     h.setPosition(player, axe, 0)
     source.initializePlayer(player, { axe })
     h.globals.addXp(player, axe, 4)
-    source.flushAll()
     equal(#h.awards, 2, "nested route boundary preserves both events")
     equal(h.awards[1].award.survivorCreditBase, 2, "nested no-multiplier frame is innermost")
     equal(h.awards[2].award.survivorCreditBase, 2, "outer standard frame resumes after nesting")
@@ -1024,7 +1023,7 @@ do
     end
     equal(h.arithmeticCalls, 500, "bounded stream validates once per event")
     equal(#h.awards, 500, "bounded stream delivers every event immediately")
-    equal(source.flushAll().detail.flushed, 0, "bounded stream leaves zero pending work")
+    equal(source.status().cursorCount, 1, "bounded stream retains one cursor")
 end
 
 do
@@ -1056,7 +1055,6 @@ do
     equal(malformed.detail.code, "unavailable", "malformed handler code is generic")
     equal(malformed.detail.detail, "unavailable", "malformed handler detail is generic")
     h.handlerAnswer = nil
-    equal(source.flushAll().detail.flushed, 0, "failed event is not retried")
     h.handlerThrow = true
     h.emit(player, axe, 2)
     equal(source.status().lastCode, "handler_threw", "handler throw is reported synchronously")
@@ -1065,7 +1063,6 @@ do
     equal(thrown.detail.code, "unavailable", "thrown handler code is generic")
     equal(thrown.detail.detail, "unavailable", "thrown handler detail is generic")
     h.handlerThrow = false
-    equal(source.flushAll().detail.flushed, 0, "thrown event is not retried")
     equal(#h.awards, 3, "each failed handler is attempted only for its own event")
     h.emit(player, axe, 2)
     equal(#h.awards, 4, "successful event follows failed handlers")
@@ -1088,16 +1085,11 @@ do
     source.initializePlayer(player, { axe })
     h.emit(player, axe, 2)
     equal(#h.awards, 1, "positive event is delivered before lifecycle boundary")
-    local byPerk = source.flushPlayerPerk(player, "Axe")
-    local unconditionalByPerk = source.flushPlayerPerk(nil, nil)
-    local byPlayer = source.flushPlayer(player)
-    local all = source.flushAll()
-    expect(byPerk.ok and unconditionalByPerk.ok and byPlayer.ok and all.ok,
-        "all flush compatibility surfaces succeed")
-    equal(byPerk.detail.flushed, 0, "perk flush has zero work")
-    equal(unconditionalByPerk.detail.flushed, 0, "perk flush is unconditionally inert")
-    equal(byPlayer.detail.flushed, 0, "player flush has zero work")
-    equal(all.detail.flushed, 0, "global flush has zero work")
+    equal(source.flushPlayerPerk, nil, "unused perk flush surface is removed")
+    equal(source.flushPlayer, nil, "unused player flush surface is removed")
+    equal(source.flushAll, nil, "unused global flush surface is removed")
+    expect(source.clearPlayer(player).ok, "player cleanup succeeds")
+    equal(source.status().cursorCount, 0, "player cleanup releases cursor state")
     equal(#h.awards, 1, "save or disconnect boundary cannot redispatch work")
     local status = source.status()
     equal(status.batchCount, nil, "status exposes no batch facts")

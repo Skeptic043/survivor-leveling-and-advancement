@@ -410,9 +410,13 @@ local function localAdminRequest(value)
             return { kind = operation, expectedRevision = expectedRevision, count = count }
         end
     end
-    if operation == "clearAdvancementSlots"
-        and exactTable(value, { operation = true, expectedRevision = true }) then
-        return { kind = operation, expectedRevision = expectedRevision }
+    if operation == "clearAdvancementSlots" then
+        local fields = { operation = true, expectedRevision = true }
+        if rawget(value, "perkId") ~= nil then fields.perkId = true end
+        if exactTable(value, fields) and (rawget(value, "perkId") == nil
+            or safeId(rawget(value, "perkId"), 128)) then
+            return { kind = operation, expectedRevision = expectedRevision, perkId = rawget(value, "perkId") }
+        end
     end
     return nil
 end
@@ -671,6 +675,9 @@ function Build42Lifecycle.create(dependencies)
     if mode == "client" and not callable(getSpecificPlayer) then
         return failure("invalid_dependencies", "getSpecificPlayer is required")
     end
+    if mode == "server" and not callable(getPlayerByOnlineID) then
+        return failure("invalid_dependencies", "getPlayerByOnlineID is required")
+    end
 
     local ownerClient, advancementClient, adminClient
     if mode ~= "server" then
@@ -683,16 +690,23 @@ function Build42Lifecycle.create(dependencies)
         ownerClient = called and service(created, "client", { "ready", "refresh", "handle", "reset", "resetSlot", "acceptLocal", "get", "status" }) or nil
         if ownerClient == nil then return bounded(created, "owner_client_invalid", "Build42OwnerTransport.createClient") end
         if mode == "client" then
-            called, created = pcall(createAdvClient, { ownerClient = ownerClient.value, sendClientCommand = sendCommand })
-            advancementClient = called and service(created, "client", { "request", "handle", "status", "resetSlot", "reset" }) or nil
+            called, created = pcall(createAdvClient, {
+                ownerClient = ownerClient.value,
+                sendClientCommand = sendCommand,
+                nowMilliseconds = rawget(globals, "getTimestampMs"),
+            })
+            advancementClient = called and service(created, "client", { "request", "handle", "status", "expire", "resetSlot", "reset" }) or nil
             if advancementClient == nil then return bounded(created, "advancement_client_invalid", "Build42AdvancementTransport.createClient") end
-            called, created = pcall(createAdminClient, { sendClientCommand = sendCommand })
-            adminClient = called and service(created, "client", { "request", "handle", "status", "resetSlot", "reset" }) or nil
+            called, created = pcall(createAdminClient, {
+                sendClientCommand = sendCommand,
+                nowMilliseconds = rawget(globals, "getTimestampMs"),
+            })
+            adminClient = called and service(created, "client", { "request", "handle", "status", "expire", "resetSlot", "reset" }) or nil
             if adminClient == nil then return bounded(created, "admin_client_invalid", "Build42AdminTransport.createClient") end
         end
     end
 
-    local eventNames = mode == "server" and { "OnServerStarted", "OnClientCommand", "OnNewGame", "OnCharacterDeath" }
+    local eventNames = mode == "server" and { "OnServerStarted", "OnClientCommand", "OnNewGame", "OnCharacterDeath", "EveryOneMinute" }
         or mode == "client" and { "OnMiniScoreboardUpdate", "OnTick", "OnServerCommand", "OnDisconnect" }
         or { "OnGameStart", "OnCreatePlayer", "OnNewGame", "OnCharacterDeath" }
     local events = eventSet(rawget(globals, "Events"), eventNames,
@@ -701,14 +715,16 @@ function Build42Lifecycle.create(dependencies)
     local installed, installAttempted, startupAttempted, started = false, false, false, false
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
     local ownerPublisher
-    local ownerSessionReady, ownerSessionSnapshot, advancementRequest
+    local ownerSessionReady, ownerSessionSnapshot, ownerSessionClear, advancementRequest
     local xpSourceVerifyOwnership, xpSourceOwnershipFailure
     local tokenNewCharacter, recordDeath
     local adminSessionInspect, adminSessionRequest, adminDeliverPending, adminResolveProfile
     local readyPlayers, observedPlayers, observedSlots = {}, {}, {}
+    local serverRoster, serverRosterById, serverRosterByPlayer, serverRosterCursor = {}, {}, {}, 1
     local deferredPlayers, deferredSlots = {}, {}
     local tickRegistered, tickAddAttempted = false, false
     local singlePlayerResults, singlePlayerAdminResults = {}, {}
+    local reconciliations, settledTimeouts = {}, {}
     local owner, readySingle = {}, nil
     local clientStateListener = nil
     local callbacks = {}
@@ -745,7 +761,13 @@ function Build42Lifecycle.create(dependencies)
         return rawget(result, "completion")
     end
 
-    local function notifyClientState(localSlot, kind, completion, exactPlayer)
+    local adminResultListener
+    local function notifyAdminResult(localSlot, kind, terminal)
+        if adminResultListener ~= nil then pcall(adminResultListener, localSlot, kind, terminal) end
+    end
+
+    local function notifyClientState(localSlot, kind, completion, exactPlayer, adminTerminal)
+        if kind == "admin_terminal" then notifyAdminResult(localSlot, kind, adminTerminal) end
         if clientStateListener ~= nil then pcall(clientStateListener, localSlot, kind) end
         local checked = detachCompletion(completion)
         if checked == nil or levelFeedback == nil then return end
@@ -953,6 +975,7 @@ function Build42Lifecycle.create(dependencies)
         end
         ownerSessionReady = rawget(ownerSession, "ready")
         ownerSessionSnapshot = rawget(ownerSession, "snapshot")
+        ownerSessionClear = rawget(ownerSession, "clearPlayer")
         tokenNewCharacter = rawget(inheritanceSession, "tokenNewCharacter")
         recordDeath = rawget(inheritanceSession, "recordDeath")
         advancementRequest = rawget(advancementSession, "request")
@@ -983,7 +1006,12 @@ function Build42Lifecycle.create(dependencies)
     end
 
     readySingle = function(localSlot, player)
+        local previous = readyPlayers[localSlot]
         readyPlayers[localSlot], singlePlayerResults[localSlot], singlePlayerAdminResults[localSlot] = nil, nil, nil
+        if previous ~= nil and previous ~= player
+            and trusted(ownerSessionClear, "session_clear_invalid", "ownerSession.clearPlayer", previous) == nil then
+            return retainedFailure
+        end
         if trusted(ownerClient.resetSlot, "owner_slot_reset_invalid", "ownerClient.resetSlot", localSlot) == nil then return retainedFailure end
         local ready = trusted(ownerSessionReady, "session_ready_invalid", "ownerSession.ready", player)
         if ready == nil or type(rawget(ready, "snapshot")) ~= "table" then
@@ -999,6 +1027,9 @@ function Build42Lifecycle.create(dependencies)
     end
 
     local function readyMultiplayer(localSlot, player)
+        notifyAdminResult(localSlot, "reset")
+        reconciliations[localSlot] = nil
+        settledTimeouts[localSlot] = nil
         readyPlayers[localSlot] = nil
         local firstFailure = nil
         if trusted(advancementClient.resetSlot, "advancement_slot_reset_invalid", "advancementClient.resetSlot", localSlot) == nil then
@@ -1017,6 +1048,9 @@ function Build42Lifecycle.create(dependencies)
     end
 
     local function clearMultiplayerSlot(localSlot)
+        notifyAdminResult(localSlot, "reset")
+        reconciliations[localSlot] = nil
+        settledTimeouts[localSlot] = nil
         readyPlayers[localSlot] = nil
         local firstFailure = nil
         if trusted(ownerClient.resetSlot, "owner_slot_reset_invalid", "ownerClient.resetSlot", localSlot) == nil then
@@ -1043,6 +1077,71 @@ function Build42Lifecycle.create(dependencies)
             return
         end
         tickRegistered = true
+    end
+
+    local function timeoutTerminal(value)
+        return type(value) == "table" and rawget(value, "ok") == false
+            and rawget(value, "code") == "response_timeout"
+            and rawget(value, "committed") == true
+    end
+
+    local function reconcileTimeout(localSlot, kind, terminal)
+        local settled = settledTimeouts[localSlot]
+        if settled ~= nil and settled[kind] == terminal.requestId then return true end
+        local entry = reconciliations[localSlot]
+        if entry ~= nil and entry[kind] ~= nil and entry[kind].requestId ~= terminal.requestId then return true end
+        local player = readyPlayers[localSlot]
+        if player == nil then return false end
+        if entry == nil then entry = {}; reconciliations[localSlot] = entry end
+        entry[kind] = terminal
+        local called, refreshed = pcall(ownerClient.refresh, localSlot, player)
+        if called and exactTable(refreshed, { ok = true }) and rawget(refreshed, "ok") == true then return true end
+        if called and exactTable(refreshed, { ok = true, code = true, detail = true })
+            and rawget(refreshed, "ok") == false
+            and (rawget(refreshed, "code") == "refresh_pending"
+                or rawget(refreshed, "code") == "ready_retry_pending") then
+            return true
+        end
+        retain(refreshed, "owner_refresh_invalid", "ownerClient.refresh")
+        return true
+    end
+
+    local function expireRequests()
+        if mode ~= "client" then return end
+        local advanced = trusted(advancementClient.expire, "advancement_expire_invalid", "advancementClient.expire")
+        local administered = trusted(adminClient.expire, "admin_expire_invalid", "adminClient.expire")
+        if advanced == nil or administered == nil then return end
+        for localSlot = 0, 3 do
+            local advancementStatus = trusted(advancementClient.status, "advancement_status_invalid", "advancementClient.status", localSlot)
+            local detachedAdvancement = advancementStatus ~= nil and detachStatus(advancementStatus) or nil
+            if detachedAdvancement ~= nil and timeoutTerminal(detachedAdvancement.result) then
+                reconcileTimeout(localSlot, "advancement", detachedAdvancement.result)
+            end
+            local adminStatus = trusted(adminClient.status, "admin_status_invalid", "adminClient.status", localSlot)
+            local detachedAdmin = adminStatus ~= nil and detachAdminStatus(adminStatus) or nil
+            if detachedAdmin ~= nil and timeoutTerminal(detachedAdmin.result) then
+                reconcileTimeout(localSlot, "admin", detachedAdmin.result)
+            elseif detachedAdmin ~= nil and detachedAdmin.result ~= nil
+                and rawget(detachedAdmin.result, "code") == "response_timeout" then
+                local settled = settledTimeouts[localSlot]
+                if settled == nil then settled = {}; settledTimeouts[localSlot] = settled end
+                if settled.admin ~= detachedAdmin.result.requestId then
+                    settled.admin = detachedAdmin.result.requestId
+                    notifyAdminResult(localSlot, "admin_terminal", detachedAdmin.result)
+                end
+            end
+        end
+    end
+
+    local function finishReconciliation(localSlot)
+        local entry = reconciliations[localSlot]
+        if entry == nil then return end
+        reconciliations[localSlot] = nil
+        local settled = settledTimeouts[localSlot]
+        if settled == nil then settled = {}; settledTimeouts[localSlot] = settled end
+        if entry.advancement ~= nil then settled.advancement = entry.advancement.requestId end
+        if entry.admin ~= nil then settled.admin = entry.admin.requestId end
+        if entry.admin ~= nil then notifyAdminResult(localSlot, "admin_terminal", entry.admin) end
     end
 
     local function inspectLocalPlayers()
@@ -1249,11 +1348,63 @@ function Build42Lifecycle.create(dependencies)
         return storeLocalAdminTerminal(localSlot, terminal)
     end
 
+    local function serverOnlineId(player)
+        local called, value = pcall(function()
+            local method = player and player.getOnlineID
+            return callable(method) and method(player) or nil
+        end)
+        return called and safeInteger(value) and value or nil
+    end
+
+    local function removeServerRoster(index)
+        local entry, lastIndex = serverRoster[index], #serverRoster
+        if entry == nil then return end
+        local replacement = serverRoster[lastIndex]
+        serverRosterById[entry.onlineId], serverRosterByPlayer[entry.player] = nil, nil
+        serverRoster[lastIndex] = nil
+        if index ~= lastIndex then
+            serverRoster[index] = replacement
+            serverRosterById[replacement.onlineId], serverRosterByPlayer[replacement.player] = index, index
+        end
+        if serverRosterCursor > #serverRoster then serverRosterCursor = 1 end
+    end
+
+    local function clearServerRoster(index)
+        local entry = serverRoster[index]
+        if entry == nil or ownerPublisher == nil then return false end
+        local called, cleared = pcall(ownerPublisher.clearPlayer, entry.player)
+        if called and type(cleared) == "table" and rawget(cleared, "ok") == true then
+            removeServerRoster(index)
+            return true
+        end
+        return false
+    end
+
+    local function trackServerPlayer(player)
+        local onlineId = serverOnlineId(player)
+        if onlineId == nil then return end
+        local existingById = serverRosterById[onlineId]
+        if existingById ~= nil and serverRoster[existingById].player ~= player then
+            if not clearServerRoster(existingById) then return end
+        end
+        local existingByPlayer = serverRosterByPlayer[player]
+        if existingByPlayer ~= nil then return end
+        local index = #serverRoster + 1
+        serverRoster[index] = { player = player, onlineId = onlineId }
+        serverRosterById[onlineId], serverRosterByPlayer[player] = index, index
+    end
+
+    local function untrackServerPlayer(player)
+        local index = serverRosterByPlayer[player]
+        if index ~= nil then removeServerRoster(index) end
+    end
+
     callbacks.OnServerStarted = function() if installed and ownEvents() then startup() end end
     callbacks.OnGameStart = function() if installed and ownEvents() then startup() end end
     callbacks.OnClientCommand = function(module, command, player, args)
         if not installed or not ownEvents() or not started or module ~= MODULE then return end
         if command == "ownerReady" or command == "ownerRefresh" then
+            trackServerPlayer(player)
             local dispatched = serverDispatch(ownerServerHandle, "owner_server_handle_invalid", "ownerServer.handle", false, module, command, player, args)
             if dispatched and command == "ownerReady" and adminDeliverPending ~= nil then
                 local deliveredCalled, delivered = pcall(adminDeliverPending, player)
@@ -1281,6 +1432,7 @@ function Build42Lifecycle.create(dependencies)
         if not installed or not ownEvents() then return end
         if started then
             if ownerPublisher ~= nil then pcall(ownerPublisher.clearPlayer, player) end
+            untrackServerPlayer(player)
             trusted(tokenNewCharacter, "new_character_token_invalid", "inheritanceSession.tokenNewCharacter", player)
         elseif not startupAttempted and not pendingReferencesClosed then
             local buffered = bufferNewPlayer(player)
@@ -1291,6 +1443,22 @@ function Build42Lifecycle.create(dependencies)
         if not installed or not ownEvents() or not started then return end
         if ownerPublisher ~= nil then pcall(ownerPublisher.clearPlayer, player) end
         trusted(recordDeath, "inheritance_death_invalid", "inheritanceSession.recordDeath", player)
+        trackServerPlayer(player)
+    end
+    callbacks.EveryOneMinute = function()
+        if not installed or not ownEvents() or not started then return end
+        local checked, limit = 0, math.min(#serverRoster, 32)
+        while #serverRoster > 0 and checked < limit do
+            if serverRosterCursor > #serverRoster then serverRosterCursor = 1 end
+            local entry = serverRoster[serverRosterCursor]
+            local called, current = pcall(getPlayerByOnlineID, entry.onlineId)
+            checked = checked + 1
+            if called and current ~= entry.player then
+                if not clearServerRoster(serverRosterCursor) then serverRosterCursor = serverRosterCursor + 1 end
+            else
+                serverRosterCursor = serverRosterCursor + 1
+            end
+        end
     end
     callbacks.OnTick = function()
         if not tickRegistered then return end
@@ -1321,6 +1489,7 @@ function Build42Lifecycle.create(dependencies)
     callbacks.OnMiniScoreboardUpdate = function()
         if not installed or not ownEvents() then return end
         inspectLocalPlayers()
+        expireRequests()
     end
     callbacks.OnServerCommand = function(module, command, args)
         if not installed or not ownEvents() or module ~= MODULE then return end
@@ -1331,6 +1500,7 @@ function Build42Lifecycle.create(dependencies)
             if not handled then
                 retain(result, "owner_client_handle_invalid", "ownerClient.handle")
             elseif accepted then
+                finishReconciliation(localSlot)
                 notifyClientState(localSlot, "owner_snapshot", completion)
             end
         elseif command == "advancementResult" then
@@ -1349,11 +1519,12 @@ function Build42Lifecycle.create(dependencies)
             if not handled then
                 retain(result, "admin_client_handle_invalid", "adminClient.handle")
             else
-                notifyClientState(localSlot, "admin_terminal")
+                notifyClientState(localSlot, "admin_terminal", nil, nil, detachAdminTerminal(result.result))
             end
         end
     end
     callbacks.OnDisconnect = function()
+        for slot = 0, 3 do notifyAdminResult(slot, "reset") end
         if not installed then return end
         local ownsEvents = ownEvents()
         local firstFailure = not ownsEvents and retainedFailure or nil
@@ -1366,6 +1537,8 @@ function Build42Lifecycle.create(dependencies)
         for slot = 0, 3 do deferredSlots[slot], deferredPlayers[slot] = nil, nil end
         for slot = 0, 3 do
             readyPlayers[slot], observedPlayers[slot], observedSlots[slot] = nil, nil, nil
+            reconciliations[slot] = nil
+            settledTimeouts[slot] = nil
         end
         local called, result = pcall(ownerClient.reset)
         if not called or type(result) ~= "table" or rawget(result, "ok") ~= true then
@@ -1411,6 +1584,12 @@ function Build42Lifecycle.create(dependencies)
 
     function owner.clientState(localSlot) return clientView(localSlot) end
 
+    function owner.setAdminResultListener(listener)
+        if listener ~= nil and not callable(listener) then return failure("invalid_listener", "listener") end
+        adminResultListener = listener
+        return { ok = true }
+    end
+
     function owner.setClientStateListener(listener)
         if listener ~= nil and not callable(listener) then return failure("invalid_listener", "listener") end
         clientStateListener = listener
@@ -1449,6 +1628,7 @@ function Build42Lifecycle.create(dependencies)
         if mode == "server" then return failure("advancement_unavailable", "server mode") end
         if mode == "single_player" then return requestSingle(localSlot, perkId) end
         if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        if reconciliations[localSlot] ~= nil then return failure("reconciliation_pending", "owner refresh") end
         local player = readyPlayers[localSlot]
         if player == nil then return failure("player_not_ready", "localSlot") end
         local called, result = pcall(advancementClient.request, localSlot, player, perkId)
@@ -1478,6 +1658,12 @@ function Build42Lifecycle.create(dependencies)
         local called, result = pcall(advancementClient.status, localSlot)
         local detached = called and detachStatus(result) or nil
         if detached == nil then return retain(result, "advancement_status_invalid", "advancementClient.status") end
+        if timeoutTerminal(detached.result) then reconcileTimeout(localSlot, "advancement", detached.result) end
+        local reconciliation = reconciliations[localSlot]
+        if reconciliation ~= nil and reconciliation.advancement ~= nil then
+            local terminal = reconciliation.advancement
+            return { ok = true, pending = true, requestId = terminal.requestId, perkId = terminal.perkId }
+        end
         return detached
     end
 
@@ -1485,6 +1671,7 @@ function Build42Lifecycle.create(dependencies)
         if mode == "server" then return failure("admin_unavailable", "server mode") end
         if mode == "single_player" then return requestSingleAdmin(localSlot, request) end
         if not validSlot(localSlot) then return failure("invalid_slot", "localSlot") end
+        if reconciliations[localSlot] ~= nil then return failure("reconciliation_pending", "owner refresh") end
         local player = readyPlayers[localSlot]
         if player == nil then return failure("player_not_ready", "localSlot") end
         local called, result = pcall(adminClient.request, localSlot, player, request)
@@ -1524,6 +1711,18 @@ function Build42Lifecycle.create(dependencies)
         local called, result = pcall(adminClient.status, localSlot)
         local detached = called and detachAdminStatus(result) or nil
         if detached == nil then return retain(result, "admin_status_invalid", "adminClient.status") end
+        if timeoutTerminal(detached.result) then reconcileTimeout(localSlot, "admin", detached.result) end
+        local reconciliation = reconciliations[localSlot]
+        if reconciliation ~= nil and reconciliation.admin ~= nil then
+            local terminal = reconciliation.admin
+            return {
+                ok = true,
+                pending = true,
+                requestId = terminal.requestId,
+                operation = terminal.operation,
+                target = terminal.target,
+            }
+        end
         return detached
     end
 

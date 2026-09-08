@@ -147,7 +147,7 @@ function InheritanceSession.create(dependencies)
     local resolveSettings = rawget(inheritanceSettings, "resolve")
     local freshState, planInheritance = rawget(StateCodec, "fresh"), rawget(InheritancePolicy, "plan")
     local session = {}
-    local recordedDeaths = setmetatable({}, { __mode = "k" })
+    local recordedDeaths = {}
 
     local function requireAuthority()
         local result, err = invoke("authority", authorityDescribe)
@@ -213,18 +213,16 @@ function InheritanceSession.create(dependencies)
         return { ok = true, outcome = outcome, survivorLevel = level, consumed = consumed == true }
     end
 
-    local function terminalizeAndSave(player, level, outcome, consumed, replacing)
+    local function saveIntendedAndMark(player, state, level, replacing)
         local intent = replacing and COMPLETED_DEATH_REPLACEMENT or nil
-        local markerFailure = markInitialized(player, true, intent)
-        if markerFailure ~= nil then return markerFailure end
-        local state, stateFailure = fresh(level)
-        if state == nil then stateFailure.committed = true; return stateFailure end
-        local saved, saveFailure = invoke("state_save", saveState, player, state)
-        if saved == nil then saveFailure.committed = true; return saveFailure end
+        local saved, saveFailure = invoke("state_save", saveState, player, state, intent)
+        if saved == nil then return saveFailure end
         if not exact(saved, { ok = true }) then
             return failure("state_save_invalid", "stateStore.save", true)
         end
-        return { ok = true, outcome = outcome, survivorLevel = level, consumed = consumed == true }
+        local markerFailure = markInitialized(player, true)
+        if markerFailure ~= nil then return markerFailure end
+        return { ok = true, survivorLevel = level }
     end
 
     function session.tokenNewCharacter(player)
@@ -241,7 +239,8 @@ function InheritanceSession.create(dependencies)
         if authorityFailure ~= nil then return authorityFailure end
         local metadata, metadataFailure = inspect(player)
         if metadata == nil then return metadataFailure end
-        if not metadata.tokenValid and (metadata.codecPresent or metadata.initialized) then
+        if (not metadata.tokenValid or not metadata.deathRecorded)
+            and (metadata.codecPresent or metadata.initialized) then
             if not metadata.initialized then
                 local markerFailure = markInitialized(player)
                 if markerFailure ~= nil then return markerFailure end
@@ -285,18 +284,30 @@ function InheritanceSession.create(dependencies)
             or not safeInteger(planned.survivorLevel) then
             return failure("policy_invalid", "InheritancePolicy.plan")
         end
+        local inheritedState, inheritedStateFailure = fresh(planned.survivorLevel)
+        if inheritedState == nil then return inheritedStateFailure end
+        local saved = saveIntendedAndMark(player, inheritedState, planned.survivorLevel, true)
+        if not saved.ok then return saved end
         local consumedResult, consumeFailure = invoke(
             "pending_consume", consumePending, owner, peeked.record
         )
-        if consumedResult == nil then return consumeFailure end
+        if consumedResult == nil then
+            consumeFailure.committed = true
+            return consumeFailure
+        end
         if exact(consumedResult, { ok = true, consumed = true }) and consumedResult.consumed == false then
-            return terminalizeAndSave(player, 0, "fresh", false, true)
+            return failure("pending_consume_mismatch", "recordStore.consume", true)
         end
         if not exact(consumedResult, { ok = true, consumed = true, record = true })
             or consumedResult.consumed ~= true then
-            return failure("pending_consume_invalid", "recordStore.consume")
+            return failure("pending_consume_invalid", "recordStore.consume", true)
         end
-        return terminalizeAndSave(player, planned.survivorLevel, "inherit", true, true)
+        return {
+            ok = true,
+            outcome = "inherit",
+            survivorLevel = planned.survivorLevel,
+            consumed = true,
+        }
     end
 
     function session.recordDeath(player)
@@ -345,13 +356,26 @@ function InheritanceSession.create(dependencies)
         if not exact(put, { ok = true, stored = true }) or put.stored ~= true then
             return failure("pending_put_invalid", "recordStore.put")
         end
-        recordedDeaths[player] = true
         local marked, markerFailure = invoke(
             "metadata_death", writeDeathRecorded, player
         )
         if marked == nil then markerFailure.committed = true; return markerFailure end
         if not exact(marked, { ok = true }) then return failure("metadata_death_invalid", "characterStore.markDeathRecorded", true) end
+        recordedDeaths[player] = true
         return { ok = true, recorded = true, survivorLevel = level }
+    end
+
+    function session.clearPlayer(player)
+        if player == nil then return failure("invalid_player", "player required") end
+        recordedDeaths[player] = nil
+        local clearPlayer = rawget(characterStore, "clearPlayer")
+        if type(clearPlayer) ~= "function" then return { ok = true } end
+        local cleared, clearFailure = invoke("metadata_clear", clearPlayer, player)
+        if cleared == nil then return clearFailure end
+        if not exact(cleared, { ok = true }) then
+            return failure("metadata_clear_invalid", "characterStore.clearPlayer")
+        end
+        return { ok = true }
     end
 
     return { ok = true, session = session }

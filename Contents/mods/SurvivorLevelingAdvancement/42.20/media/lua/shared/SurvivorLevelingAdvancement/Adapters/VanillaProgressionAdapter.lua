@@ -1,6 +1,6 @@
 local Adapter = {}
 local DEFAULT_DISCOVERY_LIMIT = 512
-local privateByHandle = setmetatable({}, { __mode = "k" })
+local PRIVATE_KEY = {}
 
 local function failure(code, detail, fields)
     local result = fields or {}
@@ -99,7 +99,7 @@ local function privateFor(handle)
     if type(handle) ~= "table" then
         return nil, failure("invalid-handle", "a VanillaProgressionAdapter handle is required")
     end
-    local private = privateByHandle[handle]
+    local private = rawget(handle, PRIVATE_KEY)
     if private == nil then
         return nil, failure("invalid-handle", "the handle was not created by this adapter instance")
     end
@@ -113,7 +113,7 @@ local function makeHandle(private)
         curveFingerprint = private.curveFingerprint,
         effectiveMaximum = private.effectiveMaximum,
     }
-    local handle = {}
+    local handle = { [PRIVATE_KEY] = private }
     setmetatable(handle, {
         __index = identity,
         __newindex = function()
@@ -121,7 +121,6 @@ local function makeHandle(private)
         end,
         __metatable = "VanillaProgressionAdapter.handle",
     })
-    privateByHandle[handle] = private
     return handle
 end
 

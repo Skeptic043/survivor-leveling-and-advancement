@@ -154,7 +154,7 @@ local function validateDependencies(dependencies)
     if not hasFunctions(dependencies.ActualObservation, { "get", "set", "clearPlayer" }) then
         return failure("invalid_dependencies", "ActualObservation capabilities are required")
     end
-    if not hasFunctions(dependencies.stateStore, { "load", "save" }) then
+    if not hasFunctions(dependencies.stateStore, { "load", "save", "clearPlayer" }) then
         return failure("invalid_dependencies", "stateStore capabilities are required")
     end
     if dependencies.offlineStore ~= nil and not hasFunctions(dependencies.offlineStore, {
@@ -163,7 +163,7 @@ local function validateDependencies(dependencies)
         return failure("invalid_dependencies", "offlineStore capabilities are required")
     end
     if not hasFunctions(dependencies.characterStore, {
-        "inspect", "tokenNewCharacter", "markInitialized", "markDeathRecorded",
+        "inspect", "tokenNewCharacter", "markInitialized", "markDeathRecorded", "clearPlayer",
     }) then
         return failure("invalid_dependencies", "characterStore capabilities are required")
     end
@@ -557,6 +557,7 @@ function ServiceComposition.create(dependencies)
             NaturalLedger = dependencies.NaturalLedger,
             ActualObservation = dependencies.ActualObservation,
             offlineStore = dependencies.offlineStore,
+            xpSource = xpSource,
         }
     )
     if adminSession == nil then

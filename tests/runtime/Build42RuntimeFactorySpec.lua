@@ -372,4 +372,40 @@ end
 
 assertSingletonRejected({}, "missing singleton")
 assertSingletonRejected(setmetatable({}, { __index = function() error("instance lookup") end }), "throwing singleton")
+do
+    local live = { AutomaticCurveNormalization = false, SkillSurvivorXp_Cooking = false }
+    local composedGlobals = globals()
+    composedGlobals.SandboxVars = { SurvivorLevelingAdvancement = {
+        SurvivorXpMultiplier = 1, FitnessStrengthContributionPercent = 25,
+        AutomaticCurveNormalization = true, SkillSurvivorXp_Cooking = true,
+        AllotmentMode = 1,
+    } }
+    function composedGlobals.SandboxOptions.instance:getOptionByName(name)
+        local value = live[string.sub(name, #"SurvivorLevelingAdvancement." + 1)]
+        if value == nil then return nil end
+        return { getValue = function() return value end }
+    end
+    local composedModules = makeModules({}, composedGlobals)
+    composedModules.Build42WorldSettingsProvider = ActualWorldSettingsProvider
+    local captured
+    composedModules.ServiceComposition.create = function(args)
+        captured = args.worldSettingsProvider
+        return { ok = true, services = {} }
+    end
+    ok(Build42RuntimeFactory.create({ modules = composedModules, globals = composedGlobals }), "composed provider")
+    local configured = ActualWorldSettings.create({ provider = captured, normalizationByPerk = { Cooking = 3 } })
+    ok(configured, "composed settings")
+    eq(configured.awardSettings.resolve(nil, "Cooking").settings.normalization, 0, "live false disables contribution")
+    live.SkillSurvivorXp_Cooking = true
+    eq(configured.awardSettings.resolve(nil, "Cooking").settings.normalization, 1, "live false disables normalization")
+    live.AutomaticCurveNormalization = true
+    eq(configured.awardSettings.resolve(nil, "Cooking").settings.normalization, 3, "live normalization changes immediately")
+    live.SurvivorXpMultiplier = 0
+    eq(configured.awardSettings.resolve(nil, "Cooking").settings.survivorMultiplier, 0, "live zero survives factory")
+    live.AllotmentMode = 3
+    eq(configured.awardSettings.resolve(nil, "Cooking").settings.accountingMode, "Free", "live Free mode")
+    live.AllotmentMode = 1
+    eq(configured.awardSettings.resolve(nil, "Cooking").settings.accountingMode, "Tracked", "live tracked mode")
+end
+
 return assertions

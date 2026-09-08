@@ -975,4 +975,69 @@ do
     expectEqual(clearCalls, 0, "mailbox mismatch never invokes live clear")
 end
 
+do
+    local function prepared(configure)
+        return fixture(function(deps, values)
+            local nativePerk = {}
+            values.cursorCalls, values.observationCalls = 0, 0
+            deps.catalog.perkFor = function(id)
+                expectEqual(id, "Axe", "selected native perk resolution")
+                return { ok = true, perk = nativePerk }
+            end
+            deps.xpSource = { rebasePlayerPerk = function(player, perk)
+                expectEqual(player, values.target, "cursor exact player")
+                expectEqual(perk, nativePerk, "cursor exact native perk")
+                values.cursorCalls = values.cursorCalls + 1
+                return { ok = true, detail = { perkId = "Axe", position = values.positions.Axe } }
+            end }
+            deps.ActualObservation.set = function(player, id, position)
+                expectEqual(player, values.target, "observation exact player")
+                expectEqual(id, "Axe", "observation selected perk")
+                values.observationCalls = values.observationCalls + 1
+                return { ok = true, position = position }
+            end
+            values.state.perks.Other = deepCopy(values.state.perks.Axe)
+            if configure then configure(deps, values) end
+        end)
+    end
+    for _, mode in ipairs({ "Tracked", "Free" }) do
+        local session, values = prepared(function(_, values) values.state.accountingMode = mode end)
+        local original = deepCopy(values.state)
+        local result = session.request(values.target, { kind = "clearAdvancementSlots", perkId = "Axe", expectedRevision = 7 })
+        expectEqual(result.ok, true, "selected clear succeeds in " .. mode)
+        local saved = values.savedStates[1]
+        expectEqual(saved.perks.Axe.naturalPosition, 88.5, "selected natural position matches actual")
+        expectEqual(saved.perks.Axe.highWaterPosition, 88.5, "selected compatibility position matches actual")
+        expectEqual(saved.perks.Axe.observedPosition, 88.5, "durable observation matches actual")
+        expectEqual(#saved.perks.Axe.activeTargets, 0, "selected slots are freed")
+        expectEqual(saved.perks.Axe.postMaxFullRateUsed, 3.75, "post-max allowance remains spent")
+        expect(deepEqual(saved.perks.Other, original.perks.Other), "other skill remains identical")
+        expect(deepEqual(saved.orphanedPerks, original.orphanedPerks), "orphans remain identical")
+        expect(deepEqual(saved.survivor, original.survivor), "totals and spent AP remain identical")
+        expectEqual(values.cursorCalls, 1, "one selected cursor rebase")
+        expectEqual(values.observationCalls, 1, "one selected observation rebase")
+        local nextAward = NaturalLedger.applySupported(saved.perks.Axe, 1, 89.5)
+        expectEqual(nextAward.ok, true, "next gameplay XP accepts cleared baseline")
+        expectEqual(nextAward.effect.eligibleApplied, 1, "next gameplay earns ordinary credit")
+    end
+    local missing, missingValues = prepared(function(_, values) values.state.perks.Axe = nil end)
+    local noop = missing.request(missingValues.target, { kind = "clearAdvancementSlots", perkId = "Axe", expectedRevision = 7 })
+    expectEqual(noop.ok, true, "known untracked skill safely no-ops")
+    expectEqual(missingValues.savedStates[1].perks.Axe, nil, "no tracking is fabricated")
+    expectEqual(missingValues.cursorCalls, 0, "untracked skill requires no cursor mutation")
+
+    for _, failureKind in ipairs({ "stale", "cursor", "observation", "missing-capability", "unknown" }) do
+        local session, values = prepared(function(deps, values)
+            if failureKind == "cursor" then deps.xpSource.rebasePlayerPerk = function() error("cursor fail") end
+            elseif failureKind == "observation" then deps.ActualObservation.set = function() error("observation fail") end
+            elseif failureKind == "missing-capability" then deps.xpSource = nil
+            elseif failureKind == "unknown" then values.options.loadedPerks.Axe = nil end
+        end)
+        local result = session.request(values.target, { kind = "clearAdvancementSlots", perkId = "Axe",
+            expectedRevision = failureKind == "stale" and 6 or 7 })
+        expect(result.ok == false or result.applied == false, "failed selected reset is explicit: " .. failureKind)
+        expectEqual(#values.savedStates, 0, "failed reset does not commit: " .. failureKind)
+        expectEqual(#values.state.perks.Axe.activeTargets, 1, "failed reset preserves original target: " .. failureKind)
+    end
+end
 return assertions

@@ -10,16 +10,16 @@ SLA gives each character a Survivor Level separate from their normal skills. By 
 
 - **Global:** Shares one configurable pool of Advancement Slots across every skill, with a default limit of 3 active slots in total.
 - **Per Skill:** Gives each skill its own configurable slot limit, using a default for compatible custom skills and optional overrides for vanilla skills.
-- **Free:** Removes Advancement Slot limits and catch-up or recovery restrictions.
+- **Free:** Removes Advancement Slot limits and catch-up restrictions.
 
-In Global and Per Skill modes, losing levels or XP in Fitness or Strength puts that skill into a recovery state that grants no Survivor XP until the lost progress is recovered. **Note:** Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved catch-up or recovery, and switching back to Global or Per Skill restores only what remains.
+**Note:** Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved blue catch-up. Switching back to Global or Per Skill restores only what remains.
 
 ## Features and configuration
 
 - Earn independent Survivor XP and Survivor Levels from supported trainable skill XP.
 - Gain one AP per Survivor Level and spend AP to advance skills directly.
 - Choose Global, Per Skill, or Free advancement modes.
-- Keep AP advancement separate from natural progress through visible catch-up and recovery.
+- Keep AP advancement separate from natural progress through visible blue catch-up.
 - Configure the Survivor XP multiplier, Fitness and Strength contribution, each vanilla skill toggle, and the compatible-custom-skill toggle.
 - Normalize progression curves for compatible custom skills.
 - Use server-authoritative multiplayer progression and administer existing online or offline profiles.
@@ -29,7 +29,7 @@ In Global and Per Skill modes, losing levels or XP in Fitness or Strength puts t
 
 ## Multiplayer administration and saving
 
-Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP.
+Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP. Changing a skill level through Player Stats automatically clears advancement accounting for that skill.
 
 SLA uses Project Zomboid's normal saves. For hosted and dedicated servers, set `SaveWorldEveryMinutes` above `0` to enable periodic world saves and shut down the server normally. A crash, forced shutdown, or power failure can lose SLA changes made since the last successful world save.
 

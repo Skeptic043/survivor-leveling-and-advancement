@@ -47,6 +47,13 @@ eq(copied.metadata.tokenValid, false, "copied token has no exact-object proof")
 local restarted = Store.create().store
 eq(restarted.inspect(firstPlayer).metadata.tokenValid, false, "new store instance invalidates persisted token")
 
+local releasedPlayer = player({})
+yes(first.tokenNewCharacter(releasedPlayer).ok, "released token writes")
+yes(first.inspect(releasedPlayer).metadata.tokenValid, "released token begins valid")
+yes(first.clearPlayer(releasedPlayer).ok, "player cleanup releases token proof")
+eq(first.inspect(releasedPlayer).metadata.tokenValid, false,
+    "released player cannot reuse lifecycle proof")
+
 modData.SurvivorLevelingAdvancement = { schemaVersion = 2 }
 yes(first.inspect(firstPlayer).metadata.codecPresent, "codec presence detected before decode")
 yes(first.markInitialized(firstPlayer).ok, "token transitions to initialized")

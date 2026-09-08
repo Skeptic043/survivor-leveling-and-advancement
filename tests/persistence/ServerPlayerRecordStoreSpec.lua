@@ -317,6 +317,29 @@ local reloadedStore = env.createStore()
 yes(reloadedStore.characterStore.inspect(replacementObject).metadata.tokenValid,
     "persisted completed-incarnation authority survives runtime recreation")
 
+do
+    local cleanupEnvironment = makeEnvironment()
+    local cleanupStore = cleanupEnvironment.createStore()
+    local departed = makePlayer("Departed", 0)
+    yes(cleanupStore.stateStore.save(departed, state(4, 0)).ok,
+        "departed cleanup state saves")
+    yes(cleanupStore.characterStore.markInitialized(departed).ok,
+        "departed cleanup state initializes")
+    yes(cleanupStore.characterStore.markDeathRecorded(departed).ok,
+        "departed cleanup death is guarded")
+    no(cleanupStore.characterStore.inspect(departed).metadata.tokenValid,
+        "departed dead object is blocked before release")
+    local resolveCallsBeforeCleanup = cleanupEnvironment.identityCalls()
+    departed.ownerUsername = nil
+    yes(cleanupStore.stateStore.clearPlayer(departed).ok,
+        "departed cleanup does not require live identity resolution")
+    eq(cleanupEnvironment.identityCalls(), resolveCallsBeforeCleanup,
+        "departed cleanup uses retained exact owner without resolving")
+    departed.ownerUsername = "Departed"
+    yes(cleanupStore.characterStore.inspect(departed).metadata.tokenValid,
+        "departed cleanup releases the exact completed-object guard")
+end
+
 local preassignmentPlayer = { modData = {}, getModData = function(self) return self.modData end }
 yes(serverCharacter.tokenNewCharacter(preassignmentPlayer).ok,
     "authoritative creation seam can issue proof before durable identity assignment")
@@ -554,17 +577,17 @@ yes(mismatchSession.tokenNewCharacter(mismatchTransient).ok,
     "compare-mismatch transient OnNewGame is accepted")
 local mismatchReplacement = makePlayer("Mismatch", 0)
 local mismatchResult = mismatchSession.initialize(mismatchReplacement)
-yes(mismatchResult.ok and not mismatchResult.consumed, "compare mismatch terminalizes fresh")
-eq(mismatchResult.outcome, "fresh", "compare mismatch outcome")
-eq(inheritanceState.load(mismatchReplacement).state.survivor.level, 0,
-    "compare mismatch replaces prior incarnation with fresh state")
+eq(mismatchResult.code, "pending_consume_mismatch", "compare mismatch is bounded")
+yes(mismatchResult.committed, "compare mismatch follows committed inheritance")
+eq(inheritanceState.load(mismatchReplacement).state.survivor.level, 4,
+    "compare mismatch preserves intended inherited state")
 local newerPending = recordStore.peek({
     kind = "mp", primaryLoginUsername = "Mismatch", profileIndex = 0,
 })
 yes(newerPending.ok and newerPending.found, "compare mismatch preserves newer pending record")
 eq(newerPending.record.deadSurvivorLevel, 12, "compare mismatch preserves newer pending level")
 
-local function verifyTerminalizedRetry(username, failureKind, expectedCode)
+local function verifyPreConsumeFailure(username, failureKind, expectedCode)
     local source = makePlayer(username, 0)
     yes(inheritanceState.save(source, state(8, 0)).ok,
         failureKind .. " terminalization source state")
@@ -614,26 +637,44 @@ local function verifyTerminalizedRetry(username, failureKind, expectedCode)
     local replacementPlayer = makePlayer(username, 0)
     local failed = terminalSession.initialize(replacementPlayer)
     eq(failed.code, expectedCode,
-        failureKind .. " after compare mismatch reports bounded failure")
-    yes(failed.committed,
-        failureKind .. " after compare mismatch reports committed terminalization")
+        failureKind .. " before consume reports bounded failure")
+    eq(failed.committed, nil,
+        failureKind .. " before consume reports no committed replacement")
     local terminalMetadata = inheritanceCharacter.inspect(replacementPlayer).metadata
-    yes(terminalMetadata.initialized and not terminalMetadata.deathRecorded
-        and not terminalMetadata.tokenValid,
-        failureKind .. " failure leaves replacement durably terminalized")
-    eq(terminalSession.initialize(replacementPlayer).outcome, "existing",
-        failureKind .. " immediate retry cannot consume newer pending death")
+    yes(terminalMetadata.initialized and terminalMetadata.deathRecorded,
+        failureKind .. " failure leaves completed source metadata intact")
     local owner = {
         kind = "mp", primaryLoginUsername = username, profileIndex = 0,
     }
-    eq(recordStore.peek(owner).record.deadSurvivorLevel, 12,
-        failureKind .. " immediate retry preserves newer pending level")
-    local restartedStore = env.createStore()
-    local restartedSession = InheritanceSession.create({
+    eq(recordStore.peek(owner).record.deadSurvivorLevel, 8,
+        failureKind .. " preserves the unconsumed pending level")
+end
+
+verifyPreConsumeFailure("TerminalFreshFailure", "fresh", "fresh_state_invalid")
+verifyPreConsumeFailure("TerminalSaveFailure", "save", "state_save_failed")
+
+do
+    local username = "ConsumedFallback"
+    local source = makePlayer(username, 0)
+    yes(inheritanceState.save(source, state(8, 0)).ok, "fallback source state")
+    yes(inheritanceCharacter.markInitialized(source).ok, "fallback source initialized")
+    yes(inheritanceSession.recordDeath(source).recorded, "fallback source death recorded")
+    local saveAttempts = 0
+    local fallbackStore = {
+        load = inheritanceState.load,
+        save = function(playerToSave, candidate, intent)
+            saveAttempts = saveAttempts + 1
+            if saveAttempts == 1 then
+                return { ok = false, code = "injected_write_failure", detail = "once" }
+            end
+            return inheritanceState.save(playerToSave, candidate, intent)
+        end,
+    }
+    local fallbackSession = InheritanceSession.create({
         authority = { describe = function() return { ok = true, authoritative = true } end },
         playerIdentity = { isPlayer = function() return true end },
-        characterStore = restartedStore.characterStore,
-        stateStore = restartedStore.stateStore,
+        characterStore = inheritanceCharacter,
+        stateStore = fallbackStore,
         recordStore = recordStore,
         identity = env.identity,
         inheritanceSettings = { resolve = function()
@@ -642,14 +683,22 @@ local function verifyTerminalizedRetry(username, failureKind, expectedCode)
         StateCodec = StateCodec,
         InheritancePolicy = InheritancePolicy,
     }).session
-    eq(restartedSession.initialize(makePlayer(username, 0)).outcome, "existing",
-        failureKind .. " restart retry remains terminalized")
-    eq(recordStore.peek(owner).record.deadSurvivorLevel, 12,
-        failureKind .. " restart retry preserves newer pending level")
+    local replacementPlayer = makePlayer(username, 0)
+    local failed = fallbackSession.initialize(replacementPlayer)
+    eq(failed.code, "state_save_failed", "inheritance reports first write failure")
+    eq(failed.committed, nil, "write failure precedes pending consumption")
+    eq(saveAttempts, 1, "write failure does not attempt a zero fallback")
+    eq(recordStore.peek({
+        kind = "mp", primaryLoginUsername = username, profileIndex = 0,
+    }).record.deadSurvivorLevel, 8, "write failure preserves pending inheritance")
+    local retried = fallbackSession.initialize(replacementPlayer)
+    yes(retried.ok and retried.outcome == "inherit", "write failure retry inherits")
+    eq(inheritanceState.load(replacementPlayer).state.survivor.level, 4,
+        "retry stores intended inherited level")
+    no(recordStore.peek({
+        kind = "mp", primaryLoginUsername = username, profileIndex = 0,
+    }).found, "successful retry consumes pending once")
 end
-
-verifyTerminalizedRetry("TerminalFreshFailure", "fresh", "fresh_state_invalid")
-verifyTerminalizedRetry("TerminalSaveFailure", "save", "state_save_failed")
 
 local spState = PlayerStateStore.create(StateCodec).store
 local localA = makePlayer("Local", 0)

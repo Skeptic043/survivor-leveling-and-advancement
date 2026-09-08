@@ -37,7 +37,7 @@ end
 local function exactOwner(owner)
     local allowed = {
         install = true, status = true, clientState = true, refreshOwner = true,
-        setClientStateListener = true, requestAdvancement = true,
+        setClientStateListener = true, setAdminResultListener = true, requestAdvancement = true,
         advancementStatus = true, requestAdmin = true, adminStatus = true,
     }
     if type(owner) ~= "table" or getmetatable(owner) ~= nil then return false end
@@ -46,7 +46,7 @@ local function exactOwner(owner)
         count = count + 1
         if not allowed[name] or type(rawget(owner, name)) ~= "function" then return false end
     end
-    return count == 9
+    return count == 10
 end
 
 local function validOwner(install)
@@ -55,6 +55,7 @@ local function validOwner(install)
         status = function() return { ok = true } end,
         clientState = function() return { ok = true, present = false } end,
         refreshOwner = function() return { ok = false } end,
+        setAdminResultListener = function() return { ok = true } end,
         setClientStateListener = function() return { ok = true } end,
         requestAdvancement = function() return { ok = false } end,
         advancementStatus = function() return { ok = true, pending = false } end,
@@ -113,6 +114,10 @@ if evidence == nil then
             end
             return { ok = true }
         end)
+        owner.setAdminResultListener = function(listener)
+            evidence.lastAdminListener = listener
+            return { ok = true }
+        end
         owner.setClientStateListener = function(listener)
             evidence.listenerSets = evidence.listenerSets + 1
             evidence.lastListener = listener
@@ -248,6 +253,8 @@ elseif evidence.phase == 4 then
     check(invalidListener.ok == false and invalidListener.code == "invalid_listener",
         "unresolved facade rejects nonfunction listener")
     check(facade.setClientStateListener(liveListener).ok, "unresolved facade accepts replacement listener")
+    local adminListener = function() end
+    check(facade.setAdminResultListener(adminListener).ok, "unresolved facade accepts admin listener")
     local listenerSets = evidence.listenerSets
     local creates = evidence.creates
     local firstPlayer, livePlayer, splitPlayer = {}, {}, {}
@@ -277,6 +284,7 @@ elseif evidence.phase == 4 then
         "SP player handoff invents no unobserved slots")
     check(evidence.listenerSets == listenerSets + 1 and evidence.lastListener == liveListener,
         "SP resolution hands off the exact latest early listener once")
+    check(evidence.lastAdminListener == adminListener, "resolution hands off exact early admin listener")
     local resolvedListener = function() end
     check(facade.setClientStateListener(resolvedListener).ok,
         "resolved facade delegates replacement listener")

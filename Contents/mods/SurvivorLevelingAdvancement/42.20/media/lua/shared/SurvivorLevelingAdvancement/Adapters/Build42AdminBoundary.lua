@@ -34,11 +34,6 @@ local function safeInteger(value)
         and value <= MAX_SAFE_INTEGER and math.floor(value) == value
 end
 
-local function finite(value)
-    return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge
-end
-
 local function username(value)
     if type(value) ~= "string" or #value == 0 or #value > 64 then return false end
     for index = 1, #value do

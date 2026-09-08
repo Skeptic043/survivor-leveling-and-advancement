@@ -236,6 +236,9 @@ function OwnerSession.create(dependencies)
     if type(store.save) ~= "function" then
         return failure("invalid_dependencies", "store.save is required")
     end
+    if type(store.clearPlayer) ~= "function" then
+        return failure("invalid_dependencies", "store.clearPlayer is required")
+    end
     local recoveryService = dependencies.recoveryService
     if type(recoveryService) ~= "table" or type(recoveryService.recoverLoadedState) ~= "function" then
         return failure("invalid_dependencies", "recoveryService.recoverLoadedState is required")
@@ -246,6 +249,9 @@ function OwnerSession.create(dependencies)
     end
     if type(accountingMode.transitionGeneration) ~= "function" then
         return failure("invalid_dependencies", "accountingMode.transitionGeneration is required")
+    end
+    if type(accountingMode.clearPlayer) ~= "function" then
+        return failure("invalid_dependencies", "accountingMode.clearPlayer is required")
     end
     local accountingSettings = dependencies.accountingSettings
     if type(accountingSettings) ~= "table" or type(accountingSettings.resolve) ~= "function" then
@@ -265,9 +271,15 @@ function OwnerSession.create(dependencies)
     if type(ActualObservation) ~= "table" or type(ActualObservation.set) ~= "function" then
         return failure("invalid_dependencies", "ActualObservation.set is required")
     end
+    if type(ActualObservation.clearPlayer) ~= "function" then
+        return failure("invalid_dependencies", "ActualObservation.clearPlayer is required")
+    end
     local xpSource = dependencies.xpSource
     if type(xpSource) ~= "table" or type(xpSource.initializePlayer) ~= "function" then
         return failure("invalid_dependencies", "xpSource.initializePlayer is required")
+    end
+    if type(xpSource.clearPlayer) ~= "function" then
+        return failure("invalid_dependencies", "xpSource.clearPlayer is required")
     end
     local ownerSnapshot = dependencies.ownerSnapshot
     if type(ownerSnapshot) ~= "table" or type(ownerSnapshot.project) ~= "function" then
@@ -277,8 +289,11 @@ function OwnerSession.create(dependencies)
     if type(inheritanceSession) ~= "table" or type(inheritanceSession.initialize) ~= "function" then
         return failure("invalid_dependencies", "inheritanceSession.initialize is required")
     end
+    if type(inheritanceSession.clearPlayer) ~= "function" then
+        return failure("invalid_dependencies", "inheritanceSession.clearPlayer is required")
+    end
 
-    local entries = setmetatable({}, { __mode = "k" })
+    local entries = {}
     local loadOptions = catalog.resolver.loadOptions
     local session = {}
 
@@ -526,7 +541,26 @@ function OwnerSession.create(dependencies)
     end
 
     function session.clearPlayer(player)
-        if player ~= nil then entries[player] = nil end
+        if player == nil then return failure("invalid_player", "player is required") end
+        entries[player] = nil
+        local cleanup = {
+            { "xp", xpSource.clearPlayer },
+            { "observation", ActualObservation.clearPlayer },
+            { "accounting", accountingMode.clearPlayer },
+            { "inheritance", inheritanceSession.clearPlayer },
+            { "store", store.clearPlayer },
+        }
+        local firstFailure = nil
+        for index = 1, #cleanup do
+            local called, cleared = pcall(cleanup[index][2], player)
+            if not called or not successful(cleared) then
+                firstFailure = firstFailure or failure(
+                    "cleanup_failed",
+                    cleanup[index][1] .. " cleanup failed"
+                )
+            end
+        end
+        if firstFailure ~= nil then return firstFailure end
         return { ok = true }
     end
 

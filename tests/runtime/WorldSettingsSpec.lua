@@ -321,4 +321,55 @@ expect(award.ok)
 expectEqual(award.settings.normalization, 0)
 expectEqual(resolver.awardSettings.resolve(opaquePlayer, "Strength").settings.normalization, 0)
 
+do
+    local awardRaw = {
+        survivorMultiplier = 2, fitnessStrengthNormalization = 0.25,
+        automaticCurveNormalization = true, survivorXpEnabled = true, allotmentMode = "Global",
+    }
+    local fullReads, awardReads = 0, 0
+    local provider = {
+        read = function() fullReads = fullReads + 1; return rawSettings() end,
+        readAward = function(perkId)
+            awardReads = awardReads + 1
+            expect(perkId == "Carving" or perkId == "Fitness", "selected perk reaches narrow provider")
+            return awardRaw
+        end,
+    }
+    local settings = WorldSettings.create({ provider = provider, normalizationByPerk = { Carving = 3, Fitness = 4 } })
+    expect(settings.ok)
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").settings.normalization, 3)
+    expectEqual(fullReads, 0)
+    expectEqual(awardReads, 1)
+    awardRaw.survivorXpEnabled = false
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").settings.normalization, 0)
+    awardRaw.survivorXpEnabled = true
+    awardRaw.automaticCurveNormalization = false
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").settings.normalization, 1)
+    expectEqual(settings.awardSettings.resolve(nil, "Fitness").settings.normalization, 0.25)
+    awardRaw.allotmentMode = "Free"
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").settings.accountingMode, "Free")
+    awardRaw.allotmentMode = "Global"
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").settings.accountingMode, "Tracked")
+    expectEqual(settings.awardSettings.resolve(nil, "Unknown").code, "unknown_perk")
+    expectEqual(settings.awardSettings.resolve(nil, "bad id").code, "invalid_perk_id")
+    expectEqual(fullReads, 0)
+    expect(settings.allotmentSettings.resolve(nil, "Carving").ok)
+    expectEqual(fullReads, 1, "full validation retained outside award path")
+    for _, field in ipairs({ "survivorMultiplier", "fitnessStrengthNormalization", "automaticCurveNormalization",
+        "survivorXpEnabled", "allotmentMode" }) do
+        local saved = awardRaw[field]
+        awardRaw[field] = nil
+        expectEqual(settings.awardSettings.resolve(nil, "Carving").code, "invalid_settings")
+        awardRaw[field] = saved
+    end
+    awardRaw.extra = true
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").code, "invalid_settings")
+    awardRaw.extra = nil
+    setmetatable(awardRaw, {})
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").code, "invalid_settings")
+    setmetatable(awardRaw, nil)
+    provider.readAward = function() error("provider") end
+    expectEqual(settings.awardSettings.resolve(nil, "Carving").code, "provider_failure")
+end
+
 return assertionCount

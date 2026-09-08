@@ -101,7 +101,8 @@ local providerCalled, providerResult = pcall(Build42WorldSettingsProvider.create
     readSandboxVars = function() return SandboxVars end,
     readSandboxOption = function(name)
         local option = getSandboxOptions():getOptionByName("SurvivorLevelingAdvancement." .. name)
-        return option ~= nil and option:getValue() or nil
+        if option ~= nil then return option:getValue() end
+        return nil
     end,
 })
 if not providerCalled or type(providerResult) ~= "table" or rawget(providerResult, "ok") ~= true

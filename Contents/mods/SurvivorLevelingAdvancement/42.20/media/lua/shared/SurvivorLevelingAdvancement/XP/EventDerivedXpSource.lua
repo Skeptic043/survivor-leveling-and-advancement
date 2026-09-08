@@ -5,7 +5,7 @@ local RELOAD_SENTINEL_SIGNATURE = "sla.event-derived-xp-source/42.20/v1/7f2c9d4a
 local MAX_HANDLER_DIAGNOSTIC_CODE_LENGTH = 64
 local MAX_HANDLER_DIAGNOSTIC_DETAIL_LENGTH = 160
 local GENERIC_HANDLER_DIAGNOSTIC = "unavailable"
-local ambiguousEvents = setmetatable({}, { __mode = "k" })
+local ambiguousEvent = nil
 
 local function result(ok, code, detail)
     return { ok = ok, code = code, detail = detail }
@@ -159,9 +159,9 @@ function EventDerivedXpSource.create(dependencies)
         return nil, result(false, "reload_registry_collision", nil)
     end
 
-    local cursors = setmetatable({}, { __mode = "k" })
-    local handleIds = setmetatable({}, { __mode = "k" })
-    local handlerScopes = setmetatable({}, { __mode = "k" })
+    local cursors = {}
+    local handleIds = {}
+    local handlerScopes = {}
     local routeFrames = {}
     local installed = false
     local capturing = false
@@ -720,14 +720,14 @@ function EventDerivedXpSource.create(dependencies)
             setLast("missing_Events_AddXP_Add")
             return result(false, "missing_seam", "Events.AddXP.Add")
         end
-        if ambiguousEvents[addXpEvent] then
+        if ambiguousEvent == addXpEvent then
             setLast("observer_registration_ambiguous")
             return result(false, "observer_registration_ambiguous", nil)
         end
 
         local addRegistered = callSafely(addXpEvent.Add, observe)
         if not addRegistered[1] then
-            ambiguousEvents[addXpEvent] = true
+            ambiguousEvent = addXpEvent
             observerState = "ambiguous"
             capturing = false
             setLast("observer_registration_ambiguous")
@@ -838,28 +838,12 @@ function EventDerivedXpSource.create(dependencies)
         })
     end
 
-    function instance.flushPlayerPerk(player, perkId)
-        setLast("no_pending_award")
-        return result(true, "no_pending_award", {
-            flushed = 0,
-            failed = 0,
-        })
-    end
-
-    function instance.flushPlayer(player)
-        setLast("no_pending_award")
-        return result(true, "no_pending_award", {
-            flushed = 0,
-            failed = 0,
-        })
-    end
-
-    function instance.flushAll()
-        setLast("no_pending_award")
-        return result(true, "no_pending_award", {
-            flushed = 0,
-            failed = 0,
-        })
+    function instance.clearPlayer(player)
+        if player == nil then return result(false, "invalid_player", nil) end
+        cursors[player] = nil
+        handleIds[player] = nil
+        handlerScopes[player] = nil
+        return result(true, "player_cleared", nil)
     end
 
     function instance.status()

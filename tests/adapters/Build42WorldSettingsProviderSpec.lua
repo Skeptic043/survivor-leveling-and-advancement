@@ -242,4 +242,48 @@ for percent, ratio in pairs(retainedCases) do
     expectEqual(creation.provider.read().retainedRatio, ratio, 'retained percentage divides exactly once')
 end
 
+do
+    local namespace = makeNamespace(1)
+    local live, lookups = {}, 0
+    local provider = Build42WorldSettingsProvider.create({
+        readSandboxVars = function() return { SurvivorLevelingAdvancement = namespace } end,
+        readSandboxOption = function(name) lookups = lookups + 1; return live[name] end,
+    }).provider
+    local award = provider.readAward("Axe")
+    expectEqual(lookups, 5, "one award reads only five live options")
+    expectEqual(award.survivorXpEnabled, true, "selected vanilla skill is enabled")
+    live.SkillSurvivorXp_Axe = false
+    live.AutomaticCurveNormalization = false
+    live.SurvivorXpMultiplier = 0
+    award = provider.readAward("Axe")
+    expectEqual(award.survivorXpEnabled, false, "live false overrides stale true")
+    expectEqual(award.automaticCurveNormalization, false, "live normalization false")
+    expectEqual(award.survivorMultiplier, 0, "live numeric zero")
+    live.CustomSkillSurvivorXp = false
+    expectEqual(provider.readAward("Mod:Skill").survivorXpEnabled, false, "dynamic mod skill uses live custom switch")
+    live.CustomSkillSurvivorXp = true
+    expectEqual(provider.readAward("Mod:Skill").survivorXpEnabled, true, "dynamic mod skill switch updates immediately")
+    for _, mode in ipairs({ 1, 2, 3, 1 }) do
+        live.AllotmentMode = mode
+        expectEqual(provider.readAward("Fitness").allotmentMode,
+            mode == 3 and "Free" or (mode == 2 and "PerSkill" or "Global"), "live mode")
+    end
+    for _, entry in ipairs({
+        { "SurvivorXpMultiplier", -1 }, { "SurvivorXpMultiplier", 101 },
+        { "FitnessStrengthContributionPercent", -1 }, { "FitnessStrengthContributionPercent", 101 },
+        { "AutomaticCurveNormalization", 1 }, { "SkillSurvivorXp_Axe", 1 }, { "AllotmentMode", 4 },
+    }) do
+        local saved = live[entry[1]]
+        live[entry[1]] = entry[2]
+        expectNil(provider.readAward("Axe"), "invalid selected award setting fails closed")
+        live[entry[1]] = saved
+    end
+    namespace.PerSkillLimit_Axe = -1
+    expect(provider.readAward("Axe") ~= nil, "unrelated invalid allotment does not rebuild on award")
+    expectNil(provider.read(), "full consumer still rejects malformed allotment")
+    expectNil(provider.readAward("unsafe id"), "unsafe perk rejected")
+    expectNil(Build42WorldSettingsProvider.create({ readSandboxVars = function() error("read") end }).provider.readAward("Axe"),
+        "award provider exception is contained")
+end
+
 return assertions

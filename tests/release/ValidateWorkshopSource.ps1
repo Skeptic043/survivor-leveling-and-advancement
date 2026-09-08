@@ -23,6 +23,7 @@ $changelogPath = Join-Path $projectRoot 'CHANGELOG.md'
 $workshopPath = Join-Path $projectRoot 'workshop.txt'
 $previewPath = Join-Path $projectRoot 'preview.png'
 $fullNamePosterPath = Join-Path $projectRoot 'assets\workshop\poster-full-name.png'
+$gameplayPosterPath = Join-Path $projectRoot 'assets\workshop\poster-gameplay.png'
 $modRoot = Join-Path $projectRoot 'Contents\mods\SurvivorLevelingAdvancement\42.20'
 $modInfoPath = Join-Path $modRoot 'mod.info'
 $posterPath = Join-Path $modRoot 'poster.png'
@@ -40,6 +41,7 @@ foreach ($requiredPath in @(
     $workshopPath,
     $previewPath,
     $fullNamePosterPath,
+    $gameplayPosterPath,
     $modInfoPath,
     $posterPath,
     $iconPath,
@@ -128,6 +130,10 @@ function Test-NoDateShapedText {
     return -not ([string]::Join("`n", $Lines) -match $dateShapedTextPattern)
 }
 
+Assert-ReleaseCondition (@($changelogLines -ceq '## 1.1.2 - 2026-09-08').Count -eq 1) 'exact released 1.1.2 changelog heading'
+Assert-ReleaseCondition (@($changelogLines -match '^## 1\.1\.2').Count -eq 1) 'exactly one changelog 1.1.2 heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.1.2').Count -eq 1) 'exact released Steam 1.1.2 heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -match '^## 1\.1\.2').Count -eq 1) 'exactly one Steam 1.1.2 heading'
 Assert-ReleaseCondition (@($changelogLines -ceq '## 1.0.0 - 2026-08-30').Count -eq 1) 'exact released 1.0.0 changelog heading'
 Assert-ReleaseCondition (@($changelogLines -ceq '## 1.0.0 - Unreleased').Count -eq 0) 'changelog omits stale 1.0.0 Unreleased heading'
 Assert-ReleaseCondition (@($changelogLines -ceq '## 1.1.0 - 2026-09-01').Count -eq 1) 'exact released 1.1.0 changelog heading'
@@ -147,7 +153,9 @@ $release100ChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Hea
 $releasedSteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.0.0')
 $release111ChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Heading '## 1.1.1 - 2026-09-06')
 $release111SteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.1.1')
-$release111GithubBody = @(Get-MarkdownDocumentBody -Lines $githubReleaseNoteLines -Heading '# Survivor Leveling & Advancement v1.1.1')
+$release112ChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Heading '## 1.1.2 - 2026-09-08')
+$release112SteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.1.2')
+$release112GithubBody = @(Get-MarkdownDocumentBody -Lines $githubReleaseNoteLines -Heading '# Survivor Leveling & Advancement v1.1.2')
 $release110ChangelogContent = @($release110ChangelogBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $release110SteamContent = @($release110SteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $releasedSteamContent = @($releasedSteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -178,12 +186,27 @@ $expectedRelease111Bullets = @(
     '- Controller users can now see the XP needed to free advancement slots.'
     '- Fixed the digital watch''s Survivor XP percentage updating every frame instead of once per second.'
 )
+$expectedRelease112Bullets = @(
+    '- Changing a skill level through Player Stats debug menu now clears that skill''s advancement accounting without refunding AP.'
+    '- Removed red recovery mechanic. Lost skill XP no longer blocks advancement or reduces Survivor XP earned as you regain it.'
+    '- Survivor XP now rounds down to the nearest 10th in the Skills panel so the display does not show XP you have not earned.'
+    '- The mastery tooltip now explains when it clears the skill''s occupied advancement slots.'
+    '- Per-skill slot limits and Survivor XP contribution settings now follow the Skills panel order.'
+    '- Fixed disabled sandbox options sometimes using enabled values.'
+    '- Reduced SLA''s processing overhead while earning XP and using the Skills panel.'
+    '- Fixed missing server replies leaving SLA advancement and admin controls stuck waiting.'
+    '- Player Stats level edits remain usable if SLA''s initial check fails.'
+    '- Fixed inheritance being lost if saving the replacement survivor fails.'
+    '- Fixed XP for another skill being missed when awarded during an AP purchase.'
+)
 $release110ChangelogBullets = @($release110ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 $release110SteamBullets = @($release110SteamBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 $release100ChangelogBullets = @($release100ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 $release111ChangelogBullets = @($release111ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 $release111SteamBullets = @($release111SteamBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
-$release111GithubBullets = @($githubReleaseNoteLines | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+$release112ChangelogBullets = @($release112ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+$release112SteamBullets = @($release112SteamBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+$release112GithubBullets = @($release112GithubBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 Assert-ReleaseCondition ($release110ChangelogContent.Count -gt 0) 'non-empty changelog 1.1.0 section'
 Assert-ReleaseCondition ($release110SteamContent.Count -gt 0) 'non-empty Steam 1.1.0 section'
 Assert-ReleaseCondition ([string]::Join("`n", $release110ChangelogBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact changelog 1.1.0 update bullets'
@@ -193,21 +216,26 @@ Assert-ReleaseCondition ([string]::Join("`n", $release100ChangelogBullets) -ceq 
 Assert-ReleaseCondition ([string]::Join("`n", $releasedSteamContent) -ceq [string]::Join("`n", $expectedRelease100SteamContent)) 'released Steam 1.0.0 content remains unchanged'
 Assert-ReleaseCondition ([string]::Join("`n", $release111ChangelogBullets) -ceq [string]::Join("`n", $expectedRelease111Bullets)) 'exact changelog 1.1.1 release bullets'
 Assert-ReleaseCondition ([string]::Join("`n", $release111SteamBullets) -ceq [string]::Join("`n", $expectedRelease111Bullets)) 'exact Steam 1.1.1 release bullets'
-Assert-ReleaseCondition ([string]::Join("`n", $release111GithubBullets) -ceq [string]::Join("`n", $expectedRelease111Bullets)) 'exact GitHub 1.1.1 release bullets'
 Assert-ReleaseCondition ([string]::Join("`n", $release111ChangelogBullets) -ceq [string]::Join("`n", $release111SteamBullets)) 'exact ordered equality between changelog and Steam 1.1.1 bullets'
-Assert-ReleaseCondition ([string]::Join("`n", $release111SteamBullets) -ceq [string]::Join("`n", $release111GithubBullets)) 'exact ordered equality between Steam and GitHub 1.1.1 bullets'
-$extraRelease111BulletFixture = @($release111ChangelogBullets + '- Unexpected extra v1.2 change-note bullet.')
-Assert-ReleaseCondition (-not ([string]::Join("`n", $extraRelease111BulletFixture) -ceq [string]::Join("`n", $expectedRelease111Bullets))) 'extra v1.2 change-note bullet fixture fails exact contract'
-Assert-ReleaseCondition (@($githubReleaseNoteLines -ceq '# Survivor Leveling & Advancement v1.1.1').Count -eq 1) 'exact GitHub v1.1.1 release title'
-Assert-ReleaseCondition (@($githubReleaseNoteLines -ceq 'Draft release notes').Count -eq 0) 'GitHub notes omit stale draft label'
-Assert-ReleaseCondition (-not $githubReleaseNoteText.Contains('Version 1.1.1 is not yet released and is awaiting live acceptance.')) 'GitHub notes omit stale unreleased blurb'
 Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release111ChangelogBody) 'changelog v1.1.1 body keeps the release date in its heading'
 Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release111SteamBody) 'Steam v1.1.1 body omits invented release date'
-Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release111GithubBody) 'GitHub v1.1.1 body omits invented release date'
-$datedChangelogBodyFixture = @($release111ChangelogBody + 'Planned release date: 2026-09-02')
-$datedSteamBodyFixture = @($release111SteamBody + 'Planned release date: 2026-09-02')
-Assert-ReleaseCondition (-not (Test-NoDateShapedText -Lines $datedChangelogBodyFixture)) 'invented date in changelog v1.1.1 body fixture fails'
-Assert-ReleaseCondition (-not (Test-NoDateShapedText -Lines $datedSteamBodyFixture)) 'invented date in Steam v1.1.1 body fixture fails'
+Assert-ReleaseCondition ([string]::Join("`n", $release112ChangelogBullets) -ceq [string]::Join("`n", $expectedRelease112Bullets)) 'exact changelog 1.1.2 release bullets'
+Assert-ReleaseCondition ([string]::Join("`n", $release112SteamBullets) -ceq [string]::Join("`n", $expectedRelease112Bullets)) 'exact Steam 1.1.2 release bullets'
+Assert-ReleaseCondition ([string]::Join("`n", $release112GithubBullets) -ceq [string]::Join("`n", $expectedRelease112Bullets)) 'exact GitHub 1.1.2 release bullets'
+Assert-ReleaseCondition ([string]::Join("`n", $release112ChangelogBullets) -ceq [string]::Join("`n", $release112SteamBullets)) 'exact ordered equality between changelog and Steam 1.1.2 bullets'
+Assert-ReleaseCondition ([string]::Join("`n", $release112SteamBullets) -ceq [string]::Join("`n", $release112GithubBullets)) 'exact ordered equality between Steam and GitHub 1.1.2 bullets'
+$extraRelease112BulletFixture = @($release112ChangelogBullets + '- Unexpected extra v1.1.2 change-note bullet.')
+Assert-ReleaseCondition (-not ([string]::Join("`n", $extraRelease112BulletFixture) -ceq [string]::Join("`n", $expectedRelease112Bullets))) 'extra v1.1.2 change-note bullet fixture fails exact contract'
+Assert-ReleaseCondition (@($githubReleaseNoteLines -ceq '# Survivor Leveling & Advancement v1.1.2').Count -eq 1) 'exact GitHub v1.1.2 release title'
+Assert-ReleaseCondition (@($githubReleaseNoteLines -ceq 'Draft release notes').Count -eq 0) 'GitHub notes omit stale draft label'
+Assert-ReleaseCondition (-not $githubReleaseNoteText.Contains('Version 1.1.2 is not yet released and is awaiting live acceptance.')) 'GitHub notes omit stale unreleased blurb'
+Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release112ChangelogBody) 'changelog v1.1.2 body omits invented release date'
+Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release112SteamBody) 'Steam v1.1.2 body omits invented release date'
+Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release112GithubBody) 'GitHub v1.1.2 body omits invented release date'
+$datedChangelogBodyFixture = @($release112ChangelogBody + 'Planned release date: 2026-09-02')
+$datedSteamBodyFixture = @($release112SteamBody + 'Planned release date: 2026-09-02')
+Assert-ReleaseCondition (-not (Test-NoDateShapedText -Lines $datedChangelogBodyFixture)) 'invented date in changelog v1.1.2 body fixture fails'
+Assert-ReleaseCondition (-not (Test-NoDateShapedText -Lines $datedSteamBodyFixture)) 'invented date in Steam v1.1.2 body fixture fails'
 $changelogWithoutWatchMapNote = @($release110ChangelogBullets | Where-Object { $_ -cne $expectedNextUpdateBullets[0] })
 $steamWithoutContributionNote = @($release110SteamBullets | Where-Object { $_ -cne $expectedNextUpdateBullets[1] })
 Assert-ReleaseCondition (-not ([string]::Join("`n", $changelogWithoutWatchMapNote) -ceq [string]::Join("`n", $expectedNextUpdateBullets))) 'missing watch-map changelog note fixture fails exact bullets'
@@ -234,8 +262,9 @@ function Test-NoDeveloperFacingReleaseHousekeeping {
     return @($developerFacingHousekeepingPatterns | Where-Object { $bulletText -match $_ }).Count -eq 0
 }
 
-Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release110ChangelogBullets) 'current changelog 1.1.0 bullets omit developer-facing housekeeping'
-Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release110SteamBullets) 'current Steam 1.1.0 bullets omit developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release112ChangelogBullets) 'current changelog 1.1.2 bullets omit developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release112SteamBullets) 'current Steam 1.1.2 bullets omit developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release112GithubBullets) 'current GitHub 1.1.2 bullets omit developer-facing housekeeping'
 $developerFacingHousekeepingFixtures = @(
     '- Removed semicolons from public copy.'
     '- Updated punctuation in public copy.'
@@ -276,12 +305,11 @@ $howItWorksCopy = "SLA gives each character a Survivor Level separate from their
 $advancementModeCopy = @(
     '**Global:** Shares one configurable pool of Advancement Slots across every skill, with a default limit of 3 active slots in total.'
     '**Per Skill:** Gives each skill its own configurable slot limit, using a default for compatible custom skills and optional overrides for vanilla skills.'
-    '**Free:** Removes Advancement Slot limits and catch-up or recovery restrictions.'
+    '**Free:** Removes Advancement Slot limits and catch-up restrictions.'
 )
 $staleFreeModeCopy = 'Free mode does not track catch-up or recovery.'
-$modeRecoveryCopy = 'In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts that skill into a recovery state that grants no Survivor XP until the lost progress is recovered.'
-$modeAccountingNote = 'Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved catch-up or recovery, and switching back to Global or Per Skill restores only what remains.'
-$combinedModeAccountingCopy = "$modeRecoveryCopy **Note:** $modeAccountingNote"
+$modeAccountingNote = 'Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved blue catch-up. Switching back to Global or Per Skill restores only what remains.'
+$combinedModeAccountingCopy = "**Note:** $modeAccountingNote"
 $levelInheritanceCopy = "Survivor Level inheritance is configured through sandbox settings. The host can set a percentage of a deceased character's Survivor Level to pass to that player's next eligible survivor. This lets a player retain some long-term progress while death still carries a cost."
 $addingRemovingCopy = 'SLA can be added to or removed from existing saves. Existing skills are preserved, and past progression does not grant retroactive Survivor Levels. Disabling SLA hides its interface but leaves AP-granted skill levels in place. Re-enabling it restores SLA state and reconciles supported progression earned while it was absent. As with any mod-list change, I strongly recommend backing up any ongoing world you care about.'
 function Get-NormalizedReleaseCopy {
@@ -343,14 +371,14 @@ foreach ($modeCopy in $advancementModeCopy) {
     Assert-ReleaseCondition (@($descriptionLines -ceq "- $modeCopy").Count -eq 1) "Markdown advancement mode semantics: $modeCopy"
 }
 Assert-ReleaseCondition (-not $normalizedMarkdown.Contains($staleFreeModeCopy)) 'Workshop omits stale Free-mode accounting copy'
-Assert-ReleaseCondition ($descriptionText.Contains($combinedModeAccountingCopy)) 'Workshop preserves recovery and mode-switch accounting boundary'
+Assert-ReleaseCondition ($descriptionText.Contains($combinedModeAccountingCopy)) 'Workshop preserves blue catch-up and mode-switch accounting boundary'
 Assert-ReleaseCondition ($descriptionText.Contains($addingRemovingCopy)) 'Workshop preserves existing-save and removing-mod boundary'
 
 $featureCopy = @(
     'Earn independent Survivor XP and Survivor Levels from supported trainable skill XP'
     'Gain one AP per Survivor Level and spend AP to advance skills directly'
     'Choose Global, Per Skill, or Free advancement modes'
-    'Keep AP advancement separate from natural progress through visible catch-up and recovery'
+    'Keep AP advancement separate from natural progress through visible blue catch-up'
     'Configure the Survivor XP multiplier, Fitness and Strength contribution, each vanilla skill toggle, and the compatible-custom-skill toggle'
     'Normalize progression curves for compatible custom skills'
     'Use server-authoritative multiplayer progression and administer existing online or offline profiles'
@@ -401,7 +429,7 @@ Assert-ReleaseCondition ($descriptionText.Contains('[Ko-fi](https://ko-fi.com/sk
 Assert-ReleaseCondition ($workshopText.Contains('[url=https://ko-fi.com/skeptic043]Ko-fi[/url]')) 'Workshop Ko-fi link'
 Assert-ReleaseCondition (@($descriptionLines -ceq '- [Ko-fi](https://ko-fi.com/skeptic043) donations are optional, and no mod features are locked behind a paywall.').Count -eq 1) 'Markdown support list copy'
 Assert-ReleaseCondition (@($workshopLines -ceq 'description=[*][url=https://ko-fi.com/skeptic043]Ko-fi[/url] donations are optional, and no mod features are locked behind a paywall.').Count -eq 1) 'Workshop support list copy'
-$administrationCopy = 'Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP.'
+$administrationCopy = 'Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP. Changing a skill level through Player Stats automatically clears advancement accounting for that skill.'
 $workshopAdministrationLine = "description=$administrationCopy"
 $dedicatedSaveLimitCopy = "SLA uses Project Zomboid's normal saves. On hosted and dedicated servers, enable SaveWorldEveryMinutes and shut down the server normally."
 $markdownDedicatedSaveLimitLine = $dedicatedSaveLimitCopy
@@ -589,8 +617,8 @@ Assert-ReleaseCondition ($markdownCurrentLimitsIndex -ge 0 -and $markdownCurrent
 Assert-ReleaseCondition ($workshopCurrentLimitsIndex -ge 0 -and $workshopCurrentLimitsIndex -lt $workshopAIUseIndex -and $workshopAIUseIndex -lt $workshopSupportIndex) 'Workshop AI Use section after current limits and before support'
 Assert-ReleaseCondition ($markdownSupportIndex -ge 0 -and $markdownSupportIndex -lt $markdownModInfoIndex) 'Markdown support section before mod information'
 Assert-ReleaseCondition ($workshopSupportIndex -ge 0 -and $workshopSupportIndex -lt $workshopModInfoIndex) 'Workshop support section before mod information'
-Assert-ReleaseCondition (@($descriptionLines -ceq '- Developed and tested on: Project Zomboid 42.20.4').Count -eq 1) 'exact Markdown developed-and-tested version'
-Assert-ReleaseCondition (@($workshopLines -ceq 'description=Developed and tested on: Project Zomboid 42.20.4').Count -eq 1) 'exact Workshop developed-and-tested version'
+Assert-ReleaseCondition (@($descriptionLines -ceq '- Developed/tested on version: 42.20.4').Count -eq 1) 'exact Markdown developed-and-tested version'
+Assert-ReleaseCondition (@($workshopLines -ceq 'description=Developed/tested on version: 42.20.4').Count -eq 1) 'exact Workshop developed-and-tested version'
 Assert-ReleaseCondition (@($descriptionLines -ceq '- Required dependencies: None').Count -eq 1) 'exact Markdown dependency declaration'
 Assert-ReleaseCondition (@($workshopLines -ceq 'description=Required dependencies: None').Count -eq 1) 'exact Workshop dependency declaration'
 Assert-ReleaseCondition (-not $descriptionText.Contains('content track')) 'Markdown omits content-track wording'
@@ -637,8 +665,8 @@ Assert-PngDimensions $previewPath 512 512 'preview'
 Assert-PngDimensions $posterPath 512 512 'poster'
 Assert-PngDimensions $iconPath 64 64 'icon'
 $previewHash = (Get-FileHash -LiteralPath $previewPath -Algorithm SHA256).Hash
-$fullNamePosterHash = (Get-FileHash -LiteralPath $fullNamePosterPath -Algorithm SHA256).Hash
-Assert-ReleaseCondition ($previewHash -eq $fullNamePosterHash) 'preview is byte-identical to full-name Workshop artwork'
+$gameplayPosterHash = (Get-FileHash -LiteralPath $gameplayPosterPath -Algorithm SHA256).Hash
+Assert-ReleaseCondition ($previewHash -eq $gameplayPosterHash) 'preview is byte-identical to approved gameplay Workshop artwork'
 Assert-ReleaseCondition ((Get-Item -LiteralPath $previewPath).Length -le 1MB) 'preview is at most 1 MB'
 
 $screenshots = @(Get-ChildItem -LiteralPath $screenshotsPath -File | Sort-Object Name)

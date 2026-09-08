@@ -3,6 +3,10 @@
     Spec = 'tests/xp/SupportedAwardProcessorSpec.lua'
     Sources = @(
         [pscustomobject]@{
+            Global = 'StateCodec'
+            Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/State/StateCodec.lua'
+        }
+        [pscustomobject]@{
             Global = 'NaturalLedger'
             Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Core/NaturalLedger.lua'
         }

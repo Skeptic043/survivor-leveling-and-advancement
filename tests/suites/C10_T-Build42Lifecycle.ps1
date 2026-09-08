@@ -55,7 +55,7 @@ if (-not $hasCleanupDefinition -or -not $hasCleanupPattern -or -not $hasInstallC
     throw 'C18-Q guard: terminal install, startup, and ownership-loss paths must clear both pending-player collections'
 }
 
-$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\)\s*\r?\n\s*if not installed or not ownEvents\(\) or not validSlot\(localSlot\) or player == nil then return end\s*\r?\n\s*if started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted and not pendingReferencesClosed then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnNewGame = function\(player\).*?^\s*end\s*\r?\n\s*callbacks\.OnCharacterDeath = function\(player\).*?^\s*end\s*\r?\n\s*callbacks\.OnTick = function\(\).*?^\s*end\s*\r?\n\s*callbacks\.OnMiniScoreboardUpdate = function\(\)\s*\r?\n\s*if not installed or not ownEvents\(\) then return end\s*\r?\n\s*inspectLocalPlayers\(\)\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
+$createPlayerPattern = '(?ms)^\s*callbacks\.OnCreatePlayer = function\(localSlot, player\)\s*\r?\n\s*if not installed or not ownEvents\(\) or not validSlot\(localSlot\) or player == nil then return end\s*\r?\n\s*if started then readySingle\(localSlot, player\)\s*\r?\n\s*elseif not startupAttempted and not pendingReferencesClosed then pendingPlayers\[localSlot\] = player end\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnNewGame = function\(player\).*?^\s*end\s*\r?\n\s*callbacks\.OnCharacterDeath = function\(player\).*?^\s*end\s*\r?\n\s*callbacks\.OnTick = function\(\).*?^\s*end\s*\r?\n\s*callbacks\.OnMiniScoreboardUpdate = function\(\)\s*\r?\n\s*if not installed or not ownEvents\(\) then return end\s*\r?\n\s*inspectLocalPlayers\(\)\s*\r?\n\s*expireRequests\(\)\s*\r?\n\s*end\s*\r?\n\s*callbacks\.OnServerCommand'
 if (-not [regex]::IsMatch($lifecycleSource, $createPlayerPattern)) {
     throw 'C10-X guard: OnCreatePlayer, one-shot tick, and finite post-ack callbacks must retain their exact boundaries'
 }
@@ -70,7 +70,7 @@ if ($postAckMentions.Count -ne 2) {
     throw 'C15-B guard: post-ack event must have one captured identity and one callback'
 }
 
-if ([regex]::IsMatch($lifecycleSource, 'EveryTenMinutes|EveryOneMinute|scoreboard')) {
+if ([regex]::IsMatch($lifecycleSource, 'EveryTenMinutes|scoreboard')) {
     throw 'C15-F guard: readiness must not add polling or scoreboard-row dependencies'
 }
 if ([regex]::Matches($lifecycleSource, 'getOnlinePlayers').Count -ne 4) {
@@ -82,8 +82,8 @@ if ((-not [regex]::IsMatch($lifecycleSource, $oneShotTickPattern)) -or ([regex]:
     throw 'C15-F guard: readiness must own only one removable one-shot tick path'
 }
 
-if ([regex]::IsMatch($lifecycleSource, 'getOnlineID')) {
-    throw 'C15-D guard: multiplayer readiness must not retain an online-ID dependency'
+if ([regex]::Matches($lifecycleSource, 'getOnlineID').Count -ne 1) {
+    throw 'C15-D guard: server disconnect cleanup must retain one bounded online-ID lookup seam'
 }
 
 $localScanCalls = [regex]::Matches($lifecycleSource, 'inspectLocalPlayers\(\)')

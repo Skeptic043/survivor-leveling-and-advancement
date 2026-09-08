@@ -1,6 +1,6 @@
 local ActualObservation = {}
 
-local observationsByPlayer = setmetatable({}, { __mode = "k" })
+local observationsByPlayer = {}
 
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }

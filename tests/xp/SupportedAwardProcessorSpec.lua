@@ -383,7 +383,6 @@ do
     expect(result.ok, "positive Free award succeeds")
     equal(result.survivorXp, 60, "Free normalization and multiplier apply once")
     equal(result.naturalEligibleBase, 10, "Free positive movement accepts the full base")
-    equal(result.recoveryApplied, 0, "Free has no red recovery")
     equal(result.postMaxBase, 0, "Free has no post-max accounting")
     equal(result.postMaxXp, 0, "Free has no post-max XP")
     equal(#result.clearedTargetIds, 0, "Free clears no targets")
@@ -463,8 +462,8 @@ do
     equal(result.apGained, 1, "threshold award AP gained")
     equal(env.store.state.survivor.level, 1, "threshold award persisted level")
     equal(env.store.state.survivor.xpIntoLevel, 5, "threshold award persisted remainder")
-    equal(env.store.state.perks.Aiming.naturalPosition, 10, "re-earned Free XP advances preserved recovery")
-    equal(env.store.state.perks.Aiming.highWaterPosition, 100, "re-earned Free XP preserves the old high water")
+    equal(env.store.state.perks.Aiming.naturalPosition, 10, "re-earned Free XP advances preserved natural position")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 10, "re-earned Free XP retires the old high water")
     equal(env.store.state.perks.Aiming.observedPosition, 10, "re-earned Free XP persists the exact actual boundary")
 end
 do
@@ -512,10 +511,10 @@ do
     state.perks.Aiming = perkRecord(10, 10, {}, 0, { observedPosition = 10 })
     local env = makeEnvironment({ state = state, position = 5 })
     local loss = env.service.process(env.player, award(0, -5, 10, 5), freeSettings())
-    expect(loss.ok, "Free negative movement updates preserved recovery")
+    expect(loss.ok, "Free negative movement updates preserved natural position")
     equal(loss.survivorXp, 0, "Free negative movement grants no Survivor XP")
     equal(env.store.state.perks.Aiming.naturalPosition, 5, "Free negative movement lowers natural position")
-    equal(env.store.state.perks.Aiming.highWaterPosition, 10, "Free negative movement preserves high water")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 5, "Free negative movement tracks natural position")
     equal(env.store.state.perks.Aiming.observedPosition, 5, "Free negative movement persists its actual boundary")
 end
 do
@@ -567,7 +566,7 @@ do
     equal(env.store.state.accountingMode, "Free", "Tracked-to-Free persisted mode")
     equal(env.store.state.revision, 1, "Tracked-to-Free persisted revision")
     equal(env.store.state.perks.Aiming.naturalPosition, 15, "Tracked-to-Free boundary advances preserved natural position")
-    equal(env.store.state.perks.Aiming.highWaterPosition, 15, "Tracked-to-Free boundary clears recovery then advances high water")
+    equal(env.store.state.perks.Aiming.highWaterPosition, 15, "Tracked-to-Free boundary advances natural position")
     equal(env.store.state.perks.Aiming.observedPosition, 15, "Tracked-to-Free boundary persists the current actual boundary")
     equal(env.resolver.resolveCount, 1, "Tracked-to-Free boundary resolves only its preserved record")
 end
@@ -748,7 +747,7 @@ do
     local negativeResult = negative.service.process(negative.player, award(0, 0, 10, 10), settings())
     expect(negativeResult.ok, "external negative observation reconciles")
     equal(negative.store.state.perks.Aiming.naturalPosition, 10, "external negative lowers natural position")
-    equal(negative.store.state.perks.Aiming.highWaterPosition, 20, "external negative preserves high water")
+    equal(negative.store.state.perks.Aiming.highWaterPosition, 10, "external negative tracks natural position")
     equal(negativeResult.survivorXp, 0, "external negative grants no Survivor XP")
 end
 
@@ -777,25 +776,23 @@ do
     local negativeResult = negative.service.process(negative.player, award(0, -5, 20, 15), settings())
     expect(negativeResult.ok, "ordinary negative succeeds")
     equal(negative.store.state.perks.Aiming.naturalPosition, 15, "ordinary negative lowers natural")
-    equal(negative.store.state.perks.Aiming.highWaterPosition, 20, "ordinary negative preserves high water")
+    equal(negative.store.state.perks.Aiming.highWaterPosition, 15, "ordinary negative tracks natural position")
     equal(negativeResult.survivorXp, 0, "ordinary negative grants nothing")
 
     state = freshState()
     state.perks.Aiming = perkRecord(0, 10)
     local boundary = makeEnvironment({ state = state, observed = 0, position = 10, level = 1 })
     local boundaryResult = boundary.service.process(boundary.player, award(10, 10, 0, 10), settings())
-    expect(boundaryResult.ok, "red boundary succeeds")
-    equal(boundaryResult.recoveryApplied, 10, "red boundary recovery")
-    equal(boundaryResult.naturalEligibleBase, 0, "red boundary has no eligible base")
+    expect(boundaryResult.ok, "old historical boundary succeeds")
+    equal(boundaryResult.naturalEligibleBase, 10, "legacy historical boundary receives full credit")
 
     state = freshState()
     state.perks.Aiming = perkRecord(0, 10)
     local partial = makeEnvironment({ state = state, observed = 0, position = 20, level = 2 })
     local partialResult = partial.service.process(partial.player, award(20, 20, 0, 20), settings())
-    expect(partialResult.ok, "partial recovery crossing succeeds")
-    equal(partialResult.recoveryApplied, 10, "partial recovery amount")
-    equal(partialResult.naturalEligibleBase, 10, "partial recovery eligible base")
-    equal(partialResult.survivorXp, 10, "partial recovery Survivor XP")
+    expect(partialResult.ok, "crossing old historical boundary succeeds")
+    equal(partialResult.naturalEligibleBase, 20, "crossing old boundary eligible base")
+    equal(partialResult.survivorXp, 20, "crossing old boundary Survivor XP")
 
     state = freshState()
     state.perks.Aiming = perkRecord(0, 0, { target("one", 1, 10), target("two", 2, 20) })
@@ -868,7 +865,7 @@ do
     expect(maxLossResult.ok, "signed max loss remains ordinary")
     equal(maxLossResult.survivorXp, 0, "signed max loss grants no Survivor XP")
     equal(maxLoss.store.state.perks.Aiming.naturalPosition, 90, "signed max loss lowers natural position")
-    equal(maxLoss.store.state.perks.Aiming.highWaterPosition, 100, "signed max loss preserves high water")
+    equal(maxLoss.store.state.perks.Aiming.highWaterPosition, 90, "signed max loss tracks natural position")
     equal(maxLoss.store.state.perks.Aiming.postMaxFullRateUsed, 0, "signed max loss consumes no postmax allowance")
 
     state = freshState()
@@ -894,33 +891,30 @@ do
         award(0, 0, 100, 100, 10),
         settings(1, 1, true, 100, 0.5)
     )
-    expect(zeroBaseDebtResult.ok, "zero-base max debt tracks evaluator movement")
-    equal(zeroBaseDebtResult.recoveryApplied, 10, "zero-base max debt recovery amount")
+    expect(zeroBaseDebtResult.ok, "zero-base max legacy debt needs no accounting movement")
     equal(zeroBaseDebtResult.survivorXp, 0, "zero-base max debt grants no Survivor XP")
     equal(zeroBaseDebtResult.postMaxBase, 0, "zero-base max debt has no postmax base")
-    equal(zeroBaseDebt.store.state.perks.Aiming.naturalPosition, 60, "zero-base max debt advances natural position")
+    equal(zeroBaseDebt.store.state.perks.Aiming.naturalPosition, 50, "zero-base max legacy debt leaves natural position unchanged")
     equal(zeroBaseDebt.store.state.perks.Aiming.postMaxFullRateUsed, 0, "zero-base max debt consumes no postmax allowance")
 
     state = freshState()
     state.perks.Aiming = perkRecord(50, 70)
     local redOnly = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
     local redOnlyResult = redOnly.service.process(redOnly.player, award(10, 0, 100, 100, 10), settings(1, 1, true, 100, 0.5))
-    expect(redOnlyResult.ok, "red-only max recovery succeeds")
-    equal(redOnlyResult.recoveryApplied, 10, "red-only max recovery amount")
-    equal(redOnlyResult.survivorXp, 0, "red-only max recovery grants nothing")
-    equal(redOnly.store.state.perks.Aiming.naturalPosition, 60, "red-only max advances virtual natural position")
-    equal(redOnly.store.state.perks.Aiming.highWaterPosition, 70, "red-only max preserves high water")
+    expect(redOnlyResult.ok, "legacy no-target max succeeds")
+    equal(redOnlyResult.survivorXp, 10, "legacy no-target max uses enabled post-max policy")
+    equal(redOnly.store.state.perks.Aiming.naturalPosition, 50, "legacy no-target max leaves natural position unchanged")
+    equal(redOnly.store.state.perks.Aiming.highWaterPosition, 70, "inert historical field remains compatible")
 
     state = freshState()
     state.perks.Aiming = perkRecord(50, 70, { target("max-boost", 10, 100) })
     local split = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
     local splitResult = split.service.process(split.player, award(80, 0, 100, 100, 80), settings(1, 1, true, 100, 0.5))
-    expect(splitResult.ok, "red blue overflow max split succeeds")
-    equal(splitResult.recoveryApplied, 20, "max split red recovery")
-    equal(splitResult.naturalEligibleBase, 30, "max split natural base")
+    expect(splitResult.ok, "legacy blue overflow max split succeeds")
+    equal(splitResult.naturalEligibleBase, 50, "max split natural base")
     equal(splitResult.postMaxBase, 30, "max split overflow base")
     equal(splitResult.postMaxXp, 30, "max split postmax XP")
-    equal(splitResult.survivorXp, 60, "max split total Survivor XP")
+    equal(splitResult.survivorXp, 80, "max split total Survivor XP")
     equal(splitResult.clearedTargetIds[1], "max-boost", "max split clears target")
     equal(split.store.state.perks.Aiming.naturalPosition, 100, "max split natural synchronization")
     equal(split.store.state.perks.Aiming.highWaterPosition, 100, "max split high-water synchronization")
@@ -968,6 +962,52 @@ do
     expect(deepEqual(inputSettings, originalSettings), "settings input remains immutable")
     equal(env.observation.peek(env.player, "Aiming"), 0, "failed save does not advance observation")
     equal(state.revision, 0, "failed save does not increment revision")
+end
+
+-- Old saves retain their shape, while new positive credit ignores historical debt.
+do
+    local function roundTrip(state)
+        local encoded = StateCodec.encode(state)
+        expect(encoded.ok, "legacy state encodes")
+        local decoded = StateCodec.decode(encoded.state)
+        expect(decoded.ok, "legacy state reloads")
+        return decoded.state
+    end
+    for _, blue in ipairs({ false, true }) do
+        local state = freshState()
+        state.perks.Aiming = perkRecord(20, 50,
+            blue and { target("old-blue", 6, 60) } or {})
+        state = roundTrip(state)
+        equal(state.perks.Aiming.highWaterPosition, 50, "read preserves valid old historical value")
+        local before = blue and 60 or 20
+        local env = makeEnvironment({ state = state, observed = before, position = before + 10, level = 2 })
+        local applied = env.service.process(env.player, award(10, 10, before, before + 10), settings())
+        expect(applied.ok, "legacy debt accepts award below old H")
+        equal(applied.survivorXp, 10, "award below old H gets full credit")
+        equal(env.store.state.perks.Aiming.naturalPosition, 30, "natural position advances exactly")
+        equal(env.store.state.perks.Aiming.highWaterPosition, 30, "processed state retires old H")
+        equal(#env.store.state.perks.Aiming.activeTargets, blue and 1 or 0, "old blue target survives")
+        local reload = makeEnvironment({ state = roundTrip(env.store.state),
+            observed = before + 10, position = before + 15, level = 2 })
+        local again = reload.service.process(reload.player, award(5, 5, before + 10, before + 15), settings())
+        expect(again.ok, "second award after reload succeeds")
+        equal(again.survivorXp, 5, "reload does not reintroduce XP withholding")
+        reload.player.position = before + 10
+        local loss = reload.service.process(reload.player, award(0, -5, before + 15, before + 10), settings())
+        expect(loss.ok, "negative loss remains accepted")
+        equal(loss.survivorXp, 0, "negative loss grants no credit")
+        reload.player.position = before + 15
+        local reearned = reload.service.process(reload.player, award(5, 5, before + 10, before + 15), settings())
+        expect(reearned.ok, "re-earned loss succeeds")
+        equal(reearned.survivorXp, 5, "re-earned XP earns full credit")
+    end
+    local state = freshState()
+    state.perks.Aiming = perkRecord(50, 70)
+    local capped = makeEnvironment({ state = roundTrip(state), observed = 100, position = 100, level = 10 })
+    local result = capped.service.process(capped.player, award(10, 0, 100, 100), settings())
+    expect(result.ok, "legacy no-target max needs no debt evaluator")
+    equal(result.survivorXp, 0, "disabled post-max still grants nothing")
+    equal(capped.store.state.perks.Aiming.postMaxFullRateUsed, 0, "disabled post-max consumes no allowance")
 end
 
 return assertions

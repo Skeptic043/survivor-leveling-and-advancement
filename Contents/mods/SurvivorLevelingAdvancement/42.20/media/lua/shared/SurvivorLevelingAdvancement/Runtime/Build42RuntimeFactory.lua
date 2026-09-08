@@ -138,7 +138,8 @@ function Factory.create(dependencies)
         readSandboxVars = function() return g.SandboxVars end,
         readSandboxOption = function(name)
             local option = singleton:getOptionByName("SurvivorLevelingAdvancement." .. name)
-            return option ~= nil and option:getValue() or nil
+            if option ~= nil then return option:getValue() end
+            return nil
         end,
     }); if err then return err end
     local provider; provider, err = resultField(providerResult, "provider", "world_provider_create_failed"); if err then return err end

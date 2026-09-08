@@ -28,7 +28,7 @@ description=
 description=[list]
 description=[*][b]Global:[/b] Shares one configurable pool of Advancement Slots across every skill, with a default limit of 3 active slots in total.
 description=[*][b]Per Skill:[/b] Gives each skill its own configurable slot limit, using a default for compatible custom skills and optional overrides for vanilla skills.
-description=[*][b]Free:[/b] Removes Advancement Slot limits and catch-up or recovery restrictions.
+description=[*][b]Free:[/b] Removes Advancement Slot limits and catch-up restrictions.
 description=[*]Adjust Survivor XP speed without changing skill XP. Choose whether Fitness, Strength, individual vanilla skills, and compatible custom skills contribute.
 description=[*]In Mod Options, enable higher-contrast advancement markers or Player 1 Survivor XP percentage on the digital watch.
 description=[/list]
@@ -37,11 +37,11 @@ description=[h2]Advancement details[/h2]
 description=
 description=The final advancement to a skill's effective maximum, normally level 9 to level 10, is considered mastering the skill. Mastery costs 2 AP and requires 2 free Advancement Slots, then clears any active Advancement Slots on that skill. If the Global or Per Skill slot limit is set to 1, mastery only requires 1 free slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while still retaining the 2 AP cost.
 description=
-description=In Global and Per Skill modes, losing levels or XP (Fitness/Strength) puts that skill into a recovery state that grants no Survivor XP until the lost progress is recovered. [b]Note:[/b] Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved catch-up or recovery, and switching back to Global or Per Skill restores only what remains.
+description=[b]Note:[/b] Changing modes does not reset tracked progress. Natural skill XP earned while Free is selected still counts toward any preserved blue catch-up. Switching back to Global or Per Skill restores only what remains.
 description=
 description=[h2]Dedicated servers and hosting[/h2]
 description=
-description=Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP.
+description=Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP. Changing a skill level through Player Stats automatically clears advancement accounting for that skill.
 description=
 description=SLA uses Project Zomboid's normal saves. On hosted and dedicated servers, enable SaveWorldEveryMinutes and shut down the server normally.
 description=
@@ -50,7 +50,7 @@ description=
 description=[list]
 description=[*][b]Incompatible: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3666281346]RPG Skills Systems B42 / RPGMenu[/url][/b]
 description=[*][b]Currently unsupported: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3765241705]Beyond Ten - Level 15 Skills[/url] and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3515515643]Seesaw Game[/url][/b]. These mods directly replace progression rules that SLA relies on.
-description=[*][b]Load-order dependent: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url][/b]. Load SLA after Detailed Skill Tooltips to append SLA's blue/red accounting text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue/red accounting text is replaced, while Survivor Level progression and the + button tooltips remain functional.
+description=[*][b]Load-order dependent: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url][/b]. Load SLA after Detailed Skill Tooltips to append SLA's blue catch-up text to DST's expanded skill tooltip. If SLA loads first, only SLA's blue catch-up text is replaced, while Survivor Level progression and the + button tooltips remain functional.
 description=[*][b]Tested together: [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3572846242]Detailed Skill Tooltips[/url], [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3545533939]Toughness Skill[/url], and [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3776490883]Show Skill XP Gain B42.20[/url][/b]. This combination worked without issue in testing, but compatibility with every interface or custom-skill mod cannot be guaranteed.
 description=[*][b]Potential hook conflicts:[/b] Mods that replace skill-XP award functions or Events.AddXP, the vanilla Skills panel, online-player context menus, or digital-watch rendering may conflict with the related SLA feature. If SLA detects a required hook was replaced, it disables that capability rather than risking incorrect behavior.
 description=[*][b]Custom progression boundary:[/b] Compatible trainable skills with a usable XP curve and supported XP events are expected to work. Mods that directly set skill XP or levels, replace caps or curves incompatibly, or bypass supported XP events may not grant Survivor XP.
@@ -76,7 +76,7 @@ description=[/list]
 description=
 description=[h2]Mod information[/h2]
 description=
-description=Developed and tested on: Project Zomboid 42.20.4
+description=Developed/tested on version: 42.20.4
 description=Required dependencies: None
 description=License: MIT
 description=[url=https://github.com/Skeptic043/survivor-leveling-and-advancement]Source and issue tracker[/url]
