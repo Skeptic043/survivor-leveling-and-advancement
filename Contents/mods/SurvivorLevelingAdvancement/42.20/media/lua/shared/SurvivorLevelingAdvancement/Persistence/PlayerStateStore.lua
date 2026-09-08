@@ -52,6 +52,11 @@ function PlayerStateStore.create(codec)
         return { ok = true }
     end
 
+    function store.clearPlayer(player)
+        if player == nil then return failure("missing_player_mod_data", "player_required") end
+        return { ok = true }
+    end
+
     return { ok = true, store = store }
 end
 

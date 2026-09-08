@@ -34,15 +34,13 @@ local translations = {
     IGUI_SLA_StatusSurvivorXp = "Survivor XP: %1 / %2",
     IGUI_SLA_Advance = "Advance to level %1 for %2 AP.",
     IGUI_SLA_Master = "Master skill for %1 AP.",
+    IGUI_SLA_MasterClearsSlots = "Clears this skill's occupied advancement slots.",
     IGUI_SLA_PerSkillActive = "Advancement Slots: %1/%2.",
     IGUI_SLA_TargetXpLeft = "%1 natural skill XP left",
     IGUI_SLA_TargetCatchUp = "Catch up to free this advancement slot.",
-    IGUI_SLA_RecoveryXpLeft = "%1 lost skill XP left",
-    IGUI_SLA_RecoveryNoSurvivorXp = "No Survivor XP during recovery.",
     IGUI_SLA_Reason_Pending = "An advancement request is pending.",
     IGUI_SLA_Reason_MaximumMismatch = "This skill's progression curve changed.",
     IGUI_SLA_Reason_AtMaximum = "This skill is already at its maximum.",
-    IGUI_SLA_Reason_RedRecovery = "Recover natural XP before advancing again.",
     IGUI_SLA_Reason_InsufficientAp = "Not enough AP.",
     IGUI_SLA_Reason_RequiredAp = "Requires %1 AP.",
     IGUI_SLA_Reason_AllotmentDisabled = "Advancement spending is disabled for this skill.",
@@ -385,6 +383,7 @@ local function makeEnvironment(options)
             end
             return { ok = true }
         end,
+        setAdminResultListener = function() return { ok = true } end,
         setClientStateListener = function(listener)
             evidence.listenerSets = evidence.listenerSets + 1
             if evidence.listenerFailure then return { ok = false, code = "bad", detail = "bad" } end
@@ -599,7 +598,10 @@ local function makeEnvironment(options)
             return evidence.now
         end,
         getText = formatText,
-        measureText = function(text) return #text * (evidence.measureScale or 1) end,
+        measureText = function(text)
+            evidence.measurements = (evidence.measurements or 0) + 1
+            return #text * (evidence.measureScale or 1)
+        end,
         smallFont = "small-font",
         joypadAButton = "A",
         highContrastEnabled = function()
@@ -609,7 +611,7 @@ local function makeEnvironment(options)
         end,
     }
     if options.headerTooltip then
-        dependencies.fontHeight = function() return 12 end
+        dependencies.fontHeight = function() return evidence.fontHeight or 12 end
         dependencies.ISToolTip = { new = function()
             local tooltip = { visible = false, managed = false }
             function tooltip:setOwner(value) self.owner = value end
@@ -895,7 +897,7 @@ end
 
 expect(type(Build42SkillsUi) == "table", "module loads")
 expect(type(Build42SkillsUi.create) == "function", "module exposes create")
-equal(SkillsUiBootstrapHarness, 25, "bootstrap harness checks")
+equal(SkillsUiBootstrapHarness, 28, "bootstrap harness checks")
 expect(C11CBootstrapFirst == rawget(_G, "__C11C_BOOTSTRAP_EVIDENCE").integration,
     "bootstrap returns integration")
 expect(C11CBootstrapReload == C11CBootstrapFirst, "reload returns exact integration")
@@ -910,7 +912,7 @@ expect(exact(environment.owner, {
     status = true,
     clientState = true,
     refreshOwner = true,
-    setClientStateListener = true,
+    setClientStateListener = true, setAdminResultListener = true,
     requestAdvancement = true,
     advancementStatus = true,
     requestAdmin = true,
@@ -933,20 +935,18 @@ end
 local ownerMissingAdmin = copyOwner(environment.owner)
 ownerMissingAdmin.requestAdmin = nil
 local missingAdmin = createWithOwner(ownerMissingAdmin)
-equal(missingAdmin.ok, false, "owner missing admin request fails closed")
-equal(missingAdmin.code, "invalid_dependencies", "missing admin request failure code")
+equal(missingAdmin.ok, true, "Skills consumer does not require admin requests")
 
 local ownerNoncallableAdmin = copyOwner(environment.owner)
 ownerNoncallableAdmin.adminStatus = true
 local noncallableAdmin = createWithOwner(ownerNoncallableAdmin)
-equal(noncallableAdmin.ok, false, "owner noncallable admin status fails closed")
-equal(noncallableAdmin.code, "invalid_dependencies", "noncallable admin status failure code")
+equal(noncallableAdmin.ok, true, "Skills consumer ignores unused admin status")
 
 local ownerWithExtraMember = copyOwner(environment.owner)
 ownerWithExtraMember.unexpected = function() end
 local extraOwnerMember = createWithOwner(ownerWithExtraMember)
-equal(extraOwnerMember.ok, false, "owner extra member fails closed")
-equal(extraOwnerMember.code, "invalid_dependencies", "extra owner member failure code")
+equal(extraOwnerMember.ok, true, "Skills consumer accepts unrelated owner capabilities")
+
 
 local missingRemovalDependencies = {}
 for key, value in pairs(environment.dependencies) do missingRemovalDependencies[key] = value end
@@ -1105,7 +1105,7 @@ local fractionalView = makeView(fractionalEnvironment, 0, { fractionalBar }, fal
 fractionalView:prerender()
 fractionalView:render()
 expect(lastDrawText(fractionalView.statusDraws, "Survivor XP: 105.4 / 1200") ~= nil,
-    "Survivor XP display rounds fractional values to one decimal place")
+    "Survivor XP display truncates fractional values to one decimal place")
 equal(fractionalEnvironment.lastModelView.survivor.xpIntoLevel, 105.40056410233345,
     "Survivor XP cache retains exact current value")
 equal(fractionalEnvironment.lastModelView.survivor.xpForNextLevel, 1200,
@@ -1114,7 +1114,19 @@ equal(fractionalEnvironment.lastModelView.survivor.xpForNextLevel, 1200,
 local survivorXpDisplayCases = {
     { current = 10, required = 100, display = "Survivor XP: 10 / 100" },
     { current = 10.04, required = 100, display = "Survivor XP: 10 / 100" },
-    { current = 10.05, required = 100, display = "Survivor XP: 10.1 / 100" },
+    { current = 10.05, required = 100, display = "Survivor XP: 10 / 100" },
+    { current = 1199.96, required = 1200, display = "Survivor XP: 1199.9 / 1200" },
+    { current = 0.0999, required = 100, display = "Survivor XP: 0 / 100" },
+    { current = 0.1, required = 100, display = "Survivor XP: 0.1 / 100" },
+    { current = 10.1999, required = 100, display = "Survivor XP: 10.1 / 100" },
+    { current = 10.2, required = 100, display = "Survivor XP: 10.2 / 100" },
+    { current = 10.9999, required = 100, display = "Survivor XP: 10.9 / 100" },
+    { current = 11, required = 100, display = "Survivor XP: 11 / 100" },
+    {
+        current = 900719925474100.375,
+        required = 900719925474101,
+        display = "Survivor XP: 900719925474100.3 / 900719925474101",
+    },
     {
         current = 9007199254740990,
         required = 9007199254740991,
@@ -1278,50 +1290,70 @@ do
     local masteryView = makeView(masteryEnvironment, 0, { masteryBar })
     masteryView:prerender()
     masteryView:render()
-    equal(masteryBar.children[1].tooltip, "Master skill for 2 AP.",
-        "final two-point advancement uses mastery copy")
+    equal(masteryBar.children[1].tooltip,
+        "Master skill for 2 AP. <LINE> Clears this skill's occupied advancement slots.",
+        "eligible tracked mastery explains clearance of this skill's occupied slots")
+    for _, mode in ipairs({ "Global", "PerSkill", "Free" }) do
+        for _, occupied in ipairs({ false, true }) do
+            masteryEnvironment.mode = mode
+            masteryEnvironment.activeTargets = occupied
+                and { { targetLevel = 4, targetPosition = 400 } } or {}
+            masteryEnvironment.listener(0)
+            masteryView:prerender()
+            local hasClearance = string.find(masteryBar.children[1].tooltip or "",
+                translations.IGUI_SLA_MasterClearsSlots, 1, true) ~= nil
+            equal(hasClearance, occupied and mode ~= "Free",
+                "mastery clearance requires this skill's occupied targets in tracked mode " .. mode)
+        end
+    end
+    masteryEnvironment.mode = "Global"
+    masteryEnvironment.activeTargets = { { targetLevel = 4, targetPosition = 400 } }
+    for _, reason in ipairs({ "allotment_capacity", "insufficient_ap", "pending" }) do
+        masteryEnvironment.reason = reason
+        masteryEnvironment.listener(0)
+        masteryView:prerender()
+        equal(string.find(masteryBar.children[1].tooltip or "",
+            translations.IGUI_SLA_MasterClearsSlots, 1, true), nil,
+            "blocked mastery does not advertise slot clearance " .. reason)
+    end
+    masteryEnvironment.reason = nil
+    masteryBar.perk.level = 8
+    masteryBar:renderPerkRect()
+    masteryView:prerender()
+    equal(string.find(masteryBar.children[1].tooltip or "",
+        translations.IGUI_SLA_MasterClearsSlots, 1, true), nil,
+        "ordinary advancement does not advertise occupied slot clearance")
 end
 
 axe:renderPerkRect()
 equal(environment.drawOrder[1], "gold", "vanilla gold renders before overlays")
-equal(#axe.draws, 5, "two targets, accounting marker, recovery span, and recovery marker draw")
+equal(#axe.draws, 3, "legacy debt draws only two blue targets and natural progress")
 equal(axe.draws[1].kind, "border", "first overlay is target outline")
 equal(axe.draws[1].x, 20, "level two outline boundary")
 equal(axe.draws[2].x, 60, "level four outline boundary")
-equal(axe.draws[3].x, 29, "fractional high-water marker")
-equal(axe.draws[4].x, 20, "red recovery starts at natural position")
-equal(axe.draws[4].width, 10, "red recovery ends at high-water")
-equal(axe.draws[5].x, 19, "recovery current-position line tracks natural position")
+equal(axe.draws[3].x, 19, "blue marker immediately uses natural position for legacy debt")
 expect(axe.draws[1].alpha == 0.95 and axe.draws[1].width == 20 and axe.draws[1].height == 20,
     "target border alpha and geometry remain unchanged")
 expect(axe.draws[3].alpha == 0.85 and axe.draws[3].width == 2 and axe.draws[3].height == 20,
     "accounting-position line alpha and thickness remain unchanged")
-expect(axe.draws[4].alpha == 0.75 and axe.draws[4].height == 2,
-    "recovery span alpha and thickness remain unchanged")
-expect(axe.draws[5].alpha == 0.90 and axe.draws[5].width == 2 and axe.draws[5].height == 20,
-    "recovery-position line alpha and thickness remain unchanged")
 expect(axe.draws[1].r == 0.35 and axe.draws[1].g == 0.72 and axe.draws[1].b == 1.00,
     "target border uses exact brighter blue")
 expect(axe.draws[3].r == 0.12 and axe.draws[3].g == 0.32 and axe.draws[3].b == 0.65,
     "accounting-position line uses exact darker blue")
-expect(axe.draws[4].r == 0.95 and axe.draws[4].g == 0.25 and axe.draws[4].b == 0.25,
-    "recovery span uses exact brighter red")
-expect(axe.draws[5].r == 0.45 and axe.draws[5].g == 0.08 and axe.draws[5].b == 0.08,
-    "recovery-position line uses exact darker red")
 
 axe.mouseX = 20
 axe:updateTooltip()
 equal(environment.priorTooltip, 1, "vanilla tooltip runs once")
 expect(string.find(axe.message, "Vanilla tooltip", 1, true) == 1, "vanilla tooltip retained")
-expect(string.find(axe.message, "50 lost skill XP left", 1, true) ~= nil, "recovery amount uses high-water minus natural XP")
-expect(string.find(axe.message, "No Survivor XP during recovery.", 1, true) ~= nil, "recovery consequence appended")
-equal(string.find(axe.message, "natural skill XP left", 1, true), nil, "red recovery wins blue overlap")
+equal(string.find(axe.message, "lost skill XP left", 1, true), nil, "legacy debt has no recovery tooltip")
+equal(string.find(axe.message, "No Survivor XP", 1, true), nil, "no obsolete credit penalty is displayed")
+expect(string.find(axe.message, "100 natural skill XP left", 1, true) ~= nil, "blue target wins the formerly red overlap")
 equal(string.find(axe.message, ";", 1, true), nil, "row tooltip has no semicolon")
 
 axe.mouseX = 30
 axe:updateTooltip()
-expect(string.find(axe.message, "50 lost skill XP left", 1, true) ~= nil,
-    "final red outer edge belongs to recovery region")
+expect(string.find(axe.message, "100 natural skill XP left", 1, true) ~= nil,
+    "blue tooltip remains present at the old red outer edge")
 axe.mouseX = 35
 axe:updateTooltip()
 expect(string.find(axe.message, "100 natural skill XP left", 1, true) ~= nil,
@@ -1401,16 +1433,16 @@ local redOnlyBar = makeBar(redOnlyEnvironment, "Axe", { mouseX = 20 })
 local redOnlyView = makeView(redOnlyEnvironment, 0, { redOnlyBar })
 redOnlyView:prerender()
 redOnlyBar:renderPerkRect()
-equal(#redOnlyBar.draws, 2, "red-only recovery draws span and position without blue overlays")
-expect(redOnlyBar.draws[1].r == 0.95 and redOnlyBar.draws[1].g == 0.25
-    and redOnlyBar.draws[1].b == 0.25 and redOnlyBar.draws[1].width == 10,
-    "red-only recovery retains the red span")
-expect(redOnlyBar.draws[2].r == 0.45 and redOnlyBar.draws[2].g == 0.08
-    and redOnlyBar.draws[2].b == 0.08 and redOnlyBar.draws[2].x == 19,
-    "red-only recovery retains the red position marker")
+equal(#redOnlyBar.draws, 0, "legacy debt without blue draws no overlay")
 redOnlyBar:updateTooltip()
-expect(string.find(redOnlyBar.message, "50 lost skill XP left", 1, true) ~= nil,
-    "red-only recovery retains its recovery tooltip")
+equal(redOnlyBar.message, "Vanilla tooltip", "legacy debt without blue keeps the vanilla tooltip")
+redOnlyBar:removeTooltip()
+redOnlyBar.mouseX = -1
+redOnlyView.joyfocus, redOnlyView.joypadIndex = true, 1
+local debtCreates, debtUpdates = redOnlyEnvironment.skillTooltipCreates, redOnlyEnvironment.priorTooltip
+for index = 1, 10 do redOnlyView:prerender(); redOnlyBar:render(); redOnlyView:render() end
+equal(redOnlyEnvironment.skillTooltipCreates, debtCreates, "legacy debt creates no controller tooltip")
+equal(redOnlyEnvironment.priorTooltip, debtUpdates, "legacy debt does not rebuild controller accounting")
 
 local cleanupEnvironment = makeEnvironment()
 expect(cleanupEnvironment.integration.install().ok, "tooltip cleanup integration installs")
@@ -1797,7 +1829,7 @@ local aboveTen = makeBar(aboveTenEnvironment, "LongCurve", { maximum = 12 })
 local aboveTenView = makeView(aboveTenEnvironment, 0, { aboveTen })
 aboveTenView:prerender()
 aboveTen:renderPerkRect()
-equal(#aboveTen.draws, 4, "level eleven is not fabricated beyond ten cells")
+equal(#aboveTen.draws, 2, "level eleven is not fabricated beyond ten cells")
 equal(aboveTen.draws[1].x, 180, "level ten uses last vanilla cell")
 
 local invalidOverlayEnvironment = makeEnvironment()
@@ -1909,7 +1941,6 @@ local reasons = {
     "pending",
     "maximum_mismatch",
     "at_maximum",
-    "red_recovery",
     "insufficient_ap",
     "allotment_disabled",
     "allotment_capacity",
@@ -1987,12 +2018,6 @@ do
             result = { ok = true, applied = false, requestId = "result-2", perkId = "Axe",
                 code = "at_maximum", detail = "secret terminal detail" },
             copy = "This skill is already at its maximum.",
-        },
-        {
-            name = "red recovery",
-            result = { ok = true, applied = false, requestId = "result-3", perkId = "Axe",
-                code = "red_recovery", detail = "secret terminal detail" },
-            copy = "Recover natural XP before advancing again.",
         },
         {
             name = "stale revision",
@@ -3001,15 +3026,15 @@ do
     env.now = env.now + 1000
     view:prerender()
     bar:renderPerkRect()
-    equal(#bar.draws, 10, "contrast adds narrow black outlines to both marker types")
+    equal(#bar.draws, 6, "contrast adds narrow black outlines to blue targets and position")
     equal(bar.draws[1].r, 0, "target has black inner outline")
     equal(bar.draws[2].b, 1, "target remains blue")
     expect(bar.draws[6].b > bar.draws[6].r, "catch-up position remains blue")
-    expect(bar.draws[10].r > bar.draws[10].b, "recovery position remains red")
+    equal(bar.draws[6].x, 19, "high contrast blue position follows natural XP")
     local otherBar = makeBar(env, "Cooking")
     local otherView = makeView(env, 1, { otherBar })
     otherView:prerender(); otherView:render(); otherBar:renderPerkRect()
-    equal(#otherBar.draws, 10, "all local Skills views use the shared setting")
+    equal(#otherBar.draws, 6, "all local Skills views use the shared setting")
     for _, fails in ipairs({ false, true }) do
         env.highContrast = fails
         env.contrastThrows = fails
@@ -3017,7 +3042,7 @@ do
         view:prerender()
         bar.draws = {}
         bar:renderPerkRect()
-        equal(#bar.draws, 5, "off or failed setting restores original draw count")
+        equal(#bar.draws, 3, "off or failed setting restores original draw count")
         for index = 1, #bar.draws do
             for key, value in pairs(bar.draws[index]) do
                 equal(value, original[index][key], "off or failed setting retains original geometry and palette")
@@ -3060,8 +3085,8 @@ do
         panel:onJoypadDirDown()
         expect(string.find(first.message or "", "100 natural skill XP left", 1, true) ~= nil,
             "controller selection without mouse shows nearest target debt")
-        expect(string.find(first.message or "", "50 lost skill XP left", 1, true) ~= nil,
-            "controller accounting includes recovery when present")
+        equal(string.find(first.message or "", "lost skill XP left", 1, true), nil,
+            "controller accounting omits retired recovery for legacy debt")
         equal(string.find(first.message or "", "300 natural", 1, true), nil,
             "controller keeps accounting limited to the next target")
         first:render()
@@ -3161,6 +3186,131 @@ do
         expect(other.tooltip == nil, "hook ownership loss clears controller tooltip")
     end
     controllerCases()
+end
+
+do
+    local function stableUiCases()
+    for _, key in ipairs({ "clientState", "refreshOwner", "setClientStateListener",
+        "requestAdvancement", "advancementStatus" }) do
+        local owner = copyOwner(environment.owner)
+        owner[key] = nil
+        equal(createWithOwner(owner).ok, false, "missing used consumer capability rejects " .. key)
+    end
+
+    local env = makeEnvironment({ headerTooltip = true, adminLauncher = true })
+    expect(env.integration.install().ok, "stable workload installs")
+    local rows = {}
+    for index = 1, 35 do rows[index] = makeBar(env, "Skill" .. tostring(index)) end
+    local panel = makeView(env, 0, rows)
+    panel:prerender()
+    panel:render()
+    panel:prerender()
+    panel:render()
+    local attached = rawget(panel, "__slaSkillsViewState")
+    local order, widths = attached.order, attached.textWidths
+    local measurements, builds, controls = env.measurements, env.modelBuilds, env.buttonCreates
+    for frame = 1, 60 do panel:prerender(); panel:render() end
+    equal(env.measurements, measurements, "35 unchanged bars across 60 frames perform no new text measurements")
+    equal(env.modelBuilds, builds, "stable frames build no model")
+    equal(attached.order, order, "stable frames allocate no row order")
+    equal(attached.textWidths, widths, "stable frames reuse bounded width cache")
+    local widthCount = 0
+    for _ in pairs(attached.textWidths) do widthCount = widthCount + 1 end
+    expect(widthCount <= 5, "only five current header widths are retained")
+    env.fontHeight, env.measureScale = 18, 2
+    panel:prerender()
+    panel:render()
+    expect(env.measurements > measurements, "font metric change invalidates text measurements")
+    measurements = env.measurements
+    for frame = 1, 5 do panel:prerender(); panel:render() end
+    equal(env.measurements, measurements, "changed metrics settle without repeated measures")
+    env.survivorLevel = 20
+    env.listener(0)
+    panel:prerender()
+    panel:render()
+    expect(env.measurements > measurements, "changed header text remeasures")
+    panel.vanillaWidth = panel.vanillaWidth + 100
+    panel:prerender()
+    panel:render()
+    expect(panel.width >= panel.vanillaWidth, "native width changes survive cached text")
+
+    local first = rows[1]
+    local originalButton = first.children[1]
+    local requests = total(env.requests)
+    panel:setVisible(false)
+    originalButton.onclick(originalButton.target)
+    equal(total(env.requests), requests, "hidden button cannot mutate state")
+    attached.dirty = false
+    env.listener(0)
+    equal(attached.dirty, false, "hidden view is released from global listener ownership")
+    panel:setVisible(true)
+    panel:prerender()
+    panel:render()
+    equal(first.children[1], originalButton, "reopening reuses the existing advancement control")
+    equal(env.buttonCreates, controls, "reopen creates no duplicate controls")
+    panel:onGainJoypadFocus()
+    panel:onJoypadDirDown()
+    first:render()
+    panel:render()
+    expect(first.tooltip ~= nil, "reopened controller row displays accounting")
+    local replacement = makeView(env, 0, { makeBar(env, "Replacement") })
+    replacement:prerender()
+    replacement:render()
+    replacement:prerender()
+    expect(first.tooltip == nil, "replacement releases prior controller tooltip")
+    requests = total(env.requests)
+    originalButton.onclick(originalButton.target)
+    equal(total(env.requests), requests, "replaced view's button cannot mutate the active slot")
+    attached.dirty = false
+    env.listener(0)
+    equal(attached.dirty, false, "replaced view is not globally retained by slot listener")
+    expect(rawget(replacement, "__slaSkillsViewState").dirty, "active replacement receives invalidation")
+    panel:setVisible(true)
+    panel:prerender()
+    panel:render()
+    local reordered = { rows[2], rows[1] }
+    panel.progressBars = reordered
+    panel:render()
+    equal(attached.order[1], rows[2], "native bar collection change refreshes order")
+    expect(attached.order ~= order, "changed collection rebuilds order once")
+    local settledOrder = attached.order
+    panel:render()
+    equal(attached.order, settledOrder, "replacement collection settles without allocations")
+
+    local plain = makeEnvironment()
+    expect(plain.integration.install().ok, "no-admin integration installs")
+    local plainBar = makeBar(plain, "Axe")
+    local initiallyHidden = makeView(plain, 0, { plainBar })
+    local nativeVisibility = rawget(initiallyHidden, "setVisible")
+    initiallyHidden:setVisible(false)
+    initiallyHidden:prerender()
+    initiallyHidden:render()
+    equal(rawget(initiallyHidden, "__slaSkillsViewState"), nil, "hidden first render acquires no view ownership")
+    equal(plain.buttonCreates, 0, "hidden first render creates no advancement controls")
+    initiallyHidden:setVisible(true)
+    initiallyHidden:prerender()
+    initiallyHidden:render()
+    initiallyHidden:prerender()
+    expect(rawget(initiallyHidden, "setVisible") ~= nativeVisibility,
+        "no-admin panel acquires visibility hook on first visible render")
+    local plainState = rawget(initiallyHidden, "__slaSkillsViewState")
+    local plainButton = plainBar.children[1]
+    expect(plainButton.enabled, "shown no-admin panel exposes advancement")
+    initiallyHidden:setVisible(false)
+    plainState.dirty = false
+    plain.listener(0)
+    equal(plainState.dirty, false, "no-admin hide releases listener ownership")
+    local plainRequests = total(plain.requests)
+    plainButton.onclick(plainButton.target)
+    equal(total(plain.requests), plainRequests, "no-admin hidden stale callback is inert")
+    initiallyHidden:setVisible(true)
+    initiallyHidden:prerender()
+    initiallyHidden:render()
+    equal(plainBar.children[1], plainButton, "no-admin reopen reuses control")
+    expect(plainButton.enabled, "no-admin reopened advancement is available")
+    equal(plain.adminAvailabilityReads, 0, "no-admin panel never queries admin authority")
+    end
+    stableUiCases()
 end
 
 return assertions

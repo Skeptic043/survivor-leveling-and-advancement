@@ -275,6 +275,7 @@ local function makeEnvironment(processMode)
         status = function() return { ok = true } end,
         clientState = function() return { ok = true, present = false } end,
         refreshOwner = function() return { ok = true } end,
+        setAdminResultListener = function() return { ok = true } end,
         setClientStateListener = function() return { ok = true } end,
         requestAdvancement = function() return { ok = false, code = "unavailable", detail = "unavailable" } end,
         advancementStatus = function() return { ok = true, pending = false } end,

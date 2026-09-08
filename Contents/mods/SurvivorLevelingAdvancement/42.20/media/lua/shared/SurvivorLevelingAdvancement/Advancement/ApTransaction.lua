@@ -283,6 +283,46 @@ local function loadState(store, player, options)
     return { ok = true, state = loaded.state }
 end
 
+local RESERVATION_FIELDS = {
+    "requestId", "perkId", "preRevision", "preSpent", "preLevel", "prePosition",
+    "targetLevel", "targetPosition", "adapterId", "adapterVersion",
+    "curveFingerprint", "effectiveMaximum",
+}
+
+local function sameReservation(left, right)
+    if type(left) ~= "table" or type(right) ~= "table" then return false end
+    for index = 1, #RESERVATION_FIELDS do
+        local field = RESERVATION_FIELDS[index]
+        if left[field] ~= right[field] then return false end
+    end
+    for key in pairs(left) do
+        local known = false
+        for index = 1, #RESERVATION_FIELDS do
+            if RESERVATION_FIELDS[index] == key then known = true; break end
+        end
+        if not known then return false end
+    end
+    return true
+end
+
+local function reloadReservedState(deps, player, reservation, code, allowCommitted)
+    local loaded = loadState(deps.store, player, deps.loadOptions)
+    if not loaded.ok then return failure(code, detailOf(loaded)) end
+    local latest = loaded.state
+    local survivor = latest.survivor
+    local apCost = advancementCost(reservation.targetLevel, reservation.effectiveMaximum)
+    local atPre = latest.revision == reservation.preRevision
+        and type(survivor) == "table" and survivor.spent == reservation.preSpent
+    local atCommitted = allowCommitted == true
+        and latest.revision == reservation.preRevision + 1
+        and type(survivor) == "table" and survivor.spent == reservation.preSpent + apCost
+    if not sameReservation(latest.inFlightAdvancement, reservation)
+        or (not atPre and not atCommitted) then
+        return failure(code, "reservation_changed_during_engine_mutation")
+    end
+    return { ok = true, state = latest }
+end
+
 local function saveState(store, player, state, code)
     local saved = callResult(store.save, "store_save", player, state)
     if not saved.ok then return failure(code, detailOf(saved)) end
@@ -493,9 +533,6 @@ local function recoverLoaded(deps, player, state)
             if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
                 return failure("recovery_quarantined", "ledger_" .. detailOf(ledgerInspection))
             end
-            if ledgerInspection.red then
-                return failure("recovery_quarantined", "natural_recovery_required")
-            end
             ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), reservation.targetPosition)
         else
             local targetId = durableTargetId(reservation.requestId, reservation.preRevision)
@@ -537,7 +574,15 @@ local function recoverLoaded(deps, player, state)
     )
     if not ensured.ok then return failure("recovery_quarantined", detailOf(ensured)) end
 
-    local committed, stateError = cloneValue(state)
+    local reloaded = reloadReservedState(
+        deps,
+        player,
+        reservation,
+        "recovery_quarantined",
+        true
+    )
+    if not reloaded.ok then return reloaded end
+    local committed, stateError = cloneValue(reloaded.state)
     if not committed then return failure("recovery_quarantined", "state_" .. stateError) end
     if free then
         local bounded = setPreservedFreeBoundary(
@@ -746,7 +791,14 @@ function ApTransaction.create(dependencies)
             )
             if not ensured.ok then return ensured end
 
-            local committed, commitError = cloneValue(reservationState)
+            local reloaded = reloadReservedState(
+                deps,
+                player,
+                reservationState.inFlightAdvancement,
+                "commit_save_failed"
+            )
+            if not reloaded.ok then return reloaded end
+            local committed, commitError = cloneValue(reloaded.state)
             if not committed then return failure("commit_save_failed", commitError) end
             bounded = setPreservedFreeBoundary(
                 committed,
@@ -824,7 +876,6 @@ function ApTransaction.create(dependencies)
         if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
             return failure("perk_quarantined", "ledger_" .. detailOf(ledgerInspection))
         end
-        if ledgerInspection.red then return failure("red_recovery", "natural_recovery_required") end
 
         local ledgerResult
         if mastered then
@@ -898,7 +949,14 @@ function ApTransaction.create(dependencies)
         )
         if not ensured.ok then return ensured end
 
-        local committed, commitError = cloneValue(reservationState)
+        local reloaded = reloadReservedState(
+            deps,
+            player,
+            reservationState.inFlightAdvancement,
+            "commit_save_failed"
+        )
+        if not reloaded.ok then return reloaded end
+        local committed, commitError = cloneValue(reloaded.state)
         if not committed then return failure("commit_save_failed", commitError) end
         local committedRecord, recordError = applyLedger(record, ledgerResult.state)
         if not committedRecord then return failure("commit_save_failed", recordError) end

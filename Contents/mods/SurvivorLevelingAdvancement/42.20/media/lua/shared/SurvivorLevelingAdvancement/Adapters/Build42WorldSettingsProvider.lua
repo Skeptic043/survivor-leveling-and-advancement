@@ -12,6 +12,9 @@ local VANILLA_PERK_IDS = {
     'Fishing', 'PlantScavenging', 'Tracking', 'Trapping', 'Butchering', 'Glassmaking'
 }
 
+local vanillaPerks = {}
+for index = 1, #VANILLA_PERK_IDS do vanillaPerks[VANILLA_PERK_IDS[index]] = true end
+
 local function isFiniteNumber(value)
     return type(value) == 'number'
         and value == value
@@ -148,6 +151,37 @@ local function readSettings(readSandboxVars, readSandboxOption)
     }
 end
 
+local function readAward(readSandboxVars, readSandboxOption, perkId)
+    if not isSafePerkId(perkId) then return nil end
+    local vars = readSandboxVars()
+    local namespace = isPlainTable(vars) and vars.SurvivorLevelingAdvancement or nil
+    if not isPlainTable(namespace) then return nil end
+    local function namedValue(name)
+        if readSandboxOption ~= nil then
+            local value = readSandboxOption(name)
+            if value ~= nil then return value end
+        end
+        return namespace[name]
+    end
+    local multiplier = namedValue('SurvivorXpMultiplier')
+    local contribution = namedValue('FitnessStrengthContributionPercent')
+    local automatic = namedValue('AutomaticCurveNormalization')
+    local enabled = namedValue(vanillaPerks[perkId]
+        and SURVIVOR_XP_PREFIX .. perkId or 'CustomSkillSurvivorXp')
+    local mode = namedValue('AllotmentMode')
+    if not isFiniteNumber(multiplier) or multiplier < 0 or multiplier > 100
+        or not isFiniteNumber(contribution) or contribution < 0 or contribution > 100
+        or type(automatic) ~= 'boolean' or type(enabled) ~= 'boolean'
+        or (mode ~= 1 and mode ~= 2 and mode ~= 3) then return nil end
+    return {
+        survivorMultiplier = multiplier,
+        fitnessStrengthNormalization = contribution / 100,
+        automaticCurveNormalization = automatic,
+        survivorXpEnabled = enabled,
+        allotmentMode = mode == 3 and 'Free' or (mode == 2 and 'PerSkill' or 'Global'),
+    }
+end
+
 function Build42WorldSettingsProvider.create(dependencies)
     if type(dependencies) ~= 'table' or getmetatable(dependencies) ~= nil then
         return { ok = false, code = 'invalid_capability', detail = 'readSandboxVars capability is required' }
@@ -168,6 +202,12 @@ function Build42WorldSettingsProvider.create(dependencies)
         if not ok then
             return nil
         end
+        return settings
+    end
+
+    function provider.readAward(perkId)
+        local ok, settings = pcall(readAward, readSandboxVars, readSandboxOption, perkId)
+        if not ok then return nil end
         return settings
     end
 

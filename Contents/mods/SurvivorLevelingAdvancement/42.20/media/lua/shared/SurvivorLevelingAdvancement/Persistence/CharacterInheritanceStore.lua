@@ -60,7 +60,7 @@ local function playerModData(player)
 end
 
 function CharacterInheritanceStore.create()
-    local issued = setmetatable({}, { __mode = "k" })
+    local issued = {}
     local store = {}
 
     local function read(player)
@@ -113,15 +113,16 @@ function CharacterInheritanceStore.create()
     end
 
     function store.markInitialized(player)
-        issued[player] = nil
         local modData, root, err = read(player)
         if err ~= nil then return err end
-        return write(modData, {
+        local saved = write(modData, {
             schemaVersion = SCHEMA_VERSION,
             newCharacterToken = false,
             initialized = true,
             deathRecorded = root.deathRecorded,
         })
+        if saved.ok then issued[player] = nil end
+        return saved
     end
 
     function store.markDeathRecorded(player)
@@ -136,6 +137,12 @@ function CharacterInheritanceStore.create()
             initialized = true,
             deathRecorded = true,
         })
+    end
+
+    function store.clearPlayer(player)
+        if player == nil then return failure("invalid_player", "player_required") end
+        issued[player] = nil
+        return { ok = true }
     end
 
     return { ok = true, store = store }

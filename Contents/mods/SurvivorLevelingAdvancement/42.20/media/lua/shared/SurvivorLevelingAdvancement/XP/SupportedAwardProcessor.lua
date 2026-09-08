@@ -374,7 +374,6 @@ local function processOrdinary(deps, record, award, settings)
         naturalAward = natural.award,
         postMaxAward = zeroAward(),
         postMaxXp = 0,
-        recoveryApplied = transitioned.effect.recoveryApplied,
         clearedTargetIds = transitioned.effect.clearedTargetIds,
         changed = award.appliedDelta ~= 0,
     }
@@ -392,10 +391,9 @@ local function processAtMaximum(deps, record, award, settings, maximumPosition)
     local nextRecord = record
     local naturalRatio = 0
     local postMaxRatio = 0
-    local recoveryApplied = 0
     local clearedTargetIds = {}
     local changed = false
-    if not inspected.red and inspected.activeCount == 0 then
+    if inspected.activeCount == 0 then
         postMaxRatio = 1
     else
         if award.effectiveDelta == nil then
@@ -407,9 +405,6 @@ local function processAtMaximum(deps, record, award, settings, maximumPosition)
         if award.effectiveDelta > 0 then
             local movement = math.min(award.effectiveDelta, maximumPosition - record.naturalPosition)
             local transitionPosition = award.actualPositionAfter
-            if inspected.activeCount == 0 then
-                transitionPosition = record.naturalPosition + movement
-            end
             local transitioned = deps.NaturalLedger.applySupported(
                 ledgerFromPerk(record),
                 movement,
@@ -421,7 +416,6 @@ local function processAtMaximum(deps, record, award, settings, maximumPosition)
             local recordError
             nextRecord, recordError = applyLedger(record, transitioned.state)
             if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
-            recoveryApplied = transitioned.effect.recoveryApplied
             naturalRatio = transitioned.effect.eligibleApplied / award.effectiveDelta
             postMaxRatio = (award.effectiveDelta - movement) / award.effectiveDelta
             clearedTargetIds = transitioned.effect.clearedTargetIds
@@ -460,7 +454,6 @@ local function processAtMaximum(deps, record, award, settings, maximumPosition)
         naturalAward = natural.award,
         postMaxAward = postMax.award,
         postMaxXp = postMaxApplied.effect.survivorXp,
-        recoveryApplied = recoveryApplied,
         clearedTargetIds = clearedTargetIds,
         changed = changed,
     }
@@ -469,20 +462,20 @@ end
 local function processPreservedFreeRecord(deps, player, state, award)
     local record = state.perks[award.perkId]
     if record == nil then
-        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+        return { ok = true, changed = false, clearedTargetIds = {} }
     end
 
     local resolved = resolveAdapter(deps.resolver, award.perkId)
     if not resolved.ok then
-        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+        return { ok = true, changed = false, clearedTargetIds = {} }
     end
     local described = describeAdapter(resolved.adapter, resolved.handle)
     if not described.ok or not sameIdentity(record, described.identity) then
-        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+        return { ok = true, changed = false, clearedTargetIds = {} }
     end
     local inspected = inspectAdapter(resolved.adapter, resolved.handle, player, described.identity)
     if not inspected.ok or inspected.inspection.actualPosition ~= award.actualPositionAfter then
-        return { ok = true, changed = false, recoveryApplied = 0, clearedTargetIds = {} }
+        return { ok = true, changed = false, clearedTargetIds = {} }
     end
 
     local nextRecord = record
@@ -525,7 +518,6 @@ local function processPreservedFreeRecord(deps, player, state, award)
     return {
         ok = true,
         changed = observedPosition == nil or reconciledBoundary or award.appliedDelta ~= 0,
-        recoveryApplied = transitioned.effect.recoveryApplied,
         clearedTargetIds = clearedTargetIds,
     }
 end
@@ -588,16 +580,34 @@ function SupportedAwardProcessor.create(dependencies)
 
         local loaded = loadState(deps.store, player, deps.loadOptions)
         if not loaded.ok then return loaded end
-        local recovered = callResult(
-            deps.recoveryService.recoverLoadedState,
-            "recovery",
-            player,
-            loaded.state
-        )
-        if not recovered.ok then
-            return failure("recovery_failed", detailOf(recovered))
+        local state = loaded.state
+        local reservation = state.inFlightAdvancement
+        local foreignActiveReservation = false
+        if type(reservation) == "table" and reservation.perkId ~= award.perkId then
+            local reservationScopeOk, reservationScopeActive = pcall(
+                deps.MutationScope.isActive,
+                player,
+                reservation.perkId
+            )
+            if not reservationScopeOk then return failure("scope_check_failed", "dependency_threw") end
+            if type(reservationScopeActive) ~= "boolean" then
+                return failure("scope_check_failed", "boolean_required")
+            end
+            foreignActiveReservation = reservationScopeActive
         end
-        local state = recovered.state
+        local recovered = { ok = true, state = state, recovered = false }
+        if not foreignActiveReservation then
+            recovered = callResult(
+                deps.recoveryService.recoverLoadedState,
+                "recovery",
+                player,
+                state
+            )
+            if not recovered.ok then
+                return failure("recovery_failed", detailOf(recovered))
+            end
+        end
+        state = recovered.state
         if type(state) ~= "table"
             or type(state.perks) ~= "table"
             or type(state.survivor) ~= "table"
@@ -658,7 +668,6 @@ function SupportedAwardProcessor.create(dependencies)
                 survivorXp = survivorXp,
                 levelsGained = applied.effects.levelsGained,
                 apGained = applied.effects.apGained,
-                recoveryApplied = preserved.recoveryApplied,
                 naturalEligibleBase = computed.award.eligibleBase,
                 postMaxBase = 0,
                 postMaxXp = 0,
@@ -794,7 +803,6 @@ function SupportedAwardProcessor.create(dependencies)
             survivorXp = survivorXp,
             levelsGained = applied.effects.levelsGained,
             apGained = applied.effects.apGained,
-            recoveryApplied = accounting.recoveryApplied,
             naturalEligibleBase = accounting.naturalAward.eligibleBase,
             postMaxBase = accounting.postMaxAward.eligibleBase,
             postMaxXp = accounting.postMaxXp,

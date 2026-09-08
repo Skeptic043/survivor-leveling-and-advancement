@@ -9,6 +9,7 @@ local MAX_REQUEST_ID_LENGTH = 64
 local MAX_PERK_ID_LENGTH = 128
 local MAX_CODE_LENGTH = 64
 local MAX_DETAIL_LENGTH = 160
+local RESPONSE_TIMEOUT_MILLISECONDS = 15000
 
 local nextRequestNumber = 0
 
@@ -477,16 +478,19 @@ local function inspectAcceptance(accept, localSlot, snapshot)
 end
 
 function Build42AdvancementTransport.createClient(dependencies)
-    if not exactPlainTable(dependencies, { ownerClient = true, sendClientCommand = true }) then
+    if not exactPlainTable(dependencies, {
+        ownerClient = true, sendClientCommand = true, nowMilliseconds = true,
+    }) then
         return failure("invalid_dependencies", "dependencies")
     end
 
     local ownerClient = rawget(dependencies, "ownerClient")
     local sender = rawget(dependencies, "sendClientCommand")
+    local nowMilliseconds = rawget(dependencies, "nowMilliseconds")
     if type(ownerClient) ~= "table" or getmetatable(ownerClient) ~= nil
         or type(rawget(ownerClient, "get")) ~= "function"
         or type(rawget(ownerClient, "acceptLocal")) ~= "function"
-        or type(sender) ~= "function" then
+        or type(sender) ~= "function" or type(nowMilliseconds) ~= "function" then
         return failure("invalid_dependencies", "dependencies")
     end
 
@@ -495,6 +499,30 @@ function Build42AdvancementTransport.createClient(dependencies)
     local pendingBySlot = {}
     local lastBySlot = {}
     local client = {}
+
+    local function readTime()
+        local called, value = pcall(nowMilliseconds)
+        return called and safeInteger(value) and value or nil
+    end
+
+    local function expirePending(localSlot)
+        local pending = pendingBySlot[localSlot]
+        if pending == nil then return false end
+        local now = readTime()
+        if now == nil then return false end
+        if now < pending.startedAt then pending.startedAt = now; return false end
+        if now - pending.startedAt < RESPONSE_TIMEOUT_MILLISECONDS then return false end
+        pendingBySlot[localSlot] = nil
+        lastBySlot[localSlot] = {
+            ok = false,
+            requestId = pending.requestId,
+            perkId = pending.perkId,
+            code = "response_timeout",
+            detail = "server response",
+            committed = true,
+        }
+        return true
+    end
 
     local function findPending(requestId)
         for localSlot = 0, 3 do
@@ -532,6 +560,8 @@ function Build42AdvancementTransport.createClient(dependencies)
             return failure("request_id_exhausted", "counter")
         end
 
+        local startedAt = readTime()
+        if startedAt == nil then return failure("clock_unavailable", "nowMilliseconds") end
         nextRequestNumber = nextRequestNumber + 1
         local requestId = "advancement:" .. tostring(nextRequestNumber)
         local envelope = {
@@ -540,7 +570,7 @@ function Build42AdvancementTransport.createClient(dependencies)
             perkId = perkId,
             expectedRevision = rawget(ownerSnapshot, "revision"),
         }
-        pendingBySlot[localSlot] = { requestId = requestId, perkId = perkId }
+        pendingBySlot[localSlot] = { requestId = requestId, perkId = perkId, startedAt = startedAt }
         lastBySlot[localSlot] = nil
 
         local sent = pcall(sender, player, MODULE, REQUEST_COMMAND, envelope)
@@ -599,6 +629,7 @@ function Build42AdvancementTransport.createClient(dependencies)
 
     function client.status(localSlot)
         if not validSlot(localSlot) then return failure("invalid_slot", "slot") end
+        expirePending(localSlot)
         local pending = pendingBySlot[localSlot]
         if pending ~= nil then
             return {
@@ -611,6 +642,11 @@ function Build42AdvancementTransport.createClient(dependencies)
         local result = copySummary(lastBySlot[localSlot])
         if result == nil then return { ok = true, pending = false } end
         return { ok = true, pending = false, result = result }
+    end
+
+    function client.expire()
+        for localSlot = 0, 3 do expirePending(localSlot) end
+        return { ok = true }
     end
 
     function client.resetSlot(localSlot)

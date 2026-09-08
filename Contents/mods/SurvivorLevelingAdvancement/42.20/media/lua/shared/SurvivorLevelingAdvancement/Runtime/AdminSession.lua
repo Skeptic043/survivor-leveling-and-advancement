@@ -141,10 +141,14 @@ local function validateRequest(request)
     if kind == "clearAdvancementSlots" then
         if not exactPlainTable(
             request,
-            { kind = true, expectedRevision = true },
+            { kind = true, expectedRevision = true, perkId = true },
             { "kind", "expectedRevision" }
         ) then
             return failure("invalid_request", "clear request fields are invalid")
+        end
+        if request.perkId ~= nil and (type(request.perkId) ~= "string"
+            or #request.perkId > 128 or not string.match(request.perkId, "^[%w%._:%-]+$")) then
+            return failure("invalid_request", "perkId is invalid")
         end
         if not safeInteger(request.expectedRevision) then
             return failure("invalid_request", "expectedRevision must be a nonnegative safe integer")
@@ -169,6 +173,7 @@ function AdminSession.create(dependencies)
             NaturalLedger = true,
             ActualObservation = true,
             offlineStore = true,
+            xpSource = true,
         },
         { "store", "catalog", "ownerSession", "SurvivorEconomy", "NaturalLedger", "ActualObservation" }
     ) then
@@ -494,6 +499,61 @@ function AdminSession.create(dependencies)
         return { ok = true, state = candidate }
     end
 
+    local function clearSkillCandidate(target, state, perkId)
+        if rawget(state, "inFlightAdvancement") ~= nil then
+            return failure("advancement_in_flight", "in-flight advancement must be resolved first")
+        end
+        local record = state.perks[perkId]
+        if rawget(loadOptions.loadedPerks, perkId) == nil then
+            return failure("invalid_perk", "selected perk is not loaded")
+        end
+        if record == nil then
+            local candidate, cloneError = cloneValue(state)
+            if not candidate then return failure("invalid_state", cloneError) end
+            return { ok = true, state = candidate }
+        end
+        local xpSource = dependencies.xpSource
+        if type(catalog.perkFor) ~= "function" or type(actualObservation.set) ~= "function"
+            or type(xpSource) ~= "table" or type(xpSource.rebasePlayerPerk) ~= "function" then
+            return failure("skill_clear_unavailable", "selected-perk observation capabilities are required")
+        end
+        local resolved, resolveError = protectedCall(catalog.perkFor, perkId)
+        if resolveError or type(resolved) ~= "table" or resolved.ok ~= true or resolved.perk == nil then
+            return failure("invalid_perk", "selected perk cannot be resolved")
+        end
+        local read, readError = protectedCall(readPosition, target, perkId)
+        if readError or type(read) ~= "table" or read.ok ~= true
+            or not finite(read.position) or read.position < 0 then
+            return failure("position_read_failed", "selected perk position cannot be read")
+        end
+        local rebased, baselineError = protectedCall(baseline, read.position)
+        if baselineError or type(rebased) ~= "table" or rebased.ok ~= true
+            or type(rebased.state) ~= "table" or rebased.state.naturalPosition ~= read.position
+            or rebased.state.highWaterPosition ~= read.position
+            or type(rebased.state.activeTargets) ~= "table" or hasEntries(rebased.state.activeTargets) then
+            return failure("ledger_baseline_invalid", "selected perk baseline is invalid")
+        end
+        local candidate, cloneError = cloneValue(state)
+        if not candidate then return failure("invalid_state", "loaded state cannot be detached: " .. cloneError) end
+        local selected = candidate.perks[perkId]
+        selected.naturalPosition = read.position
+        selected.highWaterPosition = read.position
+        selected.observedPosition = read.position
+        selected.activeTargets = {}
+        local cursor, cursorError = protectedCall(xpSource.rebasePlayerPerk, target, resolved.perk)
+        if cursorError or type(cursor) ~= "table" or cursor.ok ~= true
+            or type(cursor.detail) ~= "table" or cursor.detail.perkId ~= perkId
+            or cursor.detail.position ~= read.position then
+            return failure("observation_rebase_failed", "selected perk XP cursor could not be aligned")
+        end
+        local observed, observationError = protectedCall(actualObservation.set, target, perkId, read.position)
+        if observationError or type(observed) ~= "table" or observed.ok ~= true
+            or observed.position ~= read.position then
+            return failure("observation_rebase_failed", "selected perk observation could not be aligned")
+        end
+        return { ok = true, state = candidate }
+    end
+
     function session.inspect(target)
         local ready = requireReady(target)
         if not ready.ok then return ready end
@@ -530,7 +590,9 @@ function AdminSession.create(dependencies)
 
         local candidate
         if request.kind == "clearAdvancementSlots" then
-            local cleared = clearSlotsCandidate(target, loaded.state)
+            local cleared = request.perkId ~= nil
+                and clearSkillCandidate(target, loaded.state, request.perkId)
+                or clearSlotsCandidate(target, loaded.state)
             if not cleared.ok then return cleared end
             candidate = cleared.state
         else

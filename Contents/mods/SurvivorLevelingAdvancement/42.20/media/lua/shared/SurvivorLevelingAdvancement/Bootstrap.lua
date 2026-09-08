@@ -7,6 +7,7 @@ local OWNER_METHODS = {
     clientState = true,
     refreshOwner = true,
     setClientStateListener = true,
+    setAdminResultListener = true,
     requestAdvancement = true,
     advancementStatus = true,
     requestAdmin = true,
@@ -125,6 +126,7 @@ local function createFacade()
     local resolutionAttempted = false
     local pendingNewPlayers, pendingLocalPlayers = {}, {}
     local deferredClientStateListener = nil
+    local deferredAdminResultListener = nil
     local facade, callbacks = {}, {}
 
     local function clearPendingNewPlayers()
@@ -139,6 +141,7 @@ local function createFacade()
 
     local function clearDeferredClientStateListener()
         deferredClientStateListener = nil
+        deferredAdminResultListener = nil
     end
 
     local function retain(code, detail)
@@ -180,6 +183,7 @@ local function createFacade()
         if concreteOwner ~= nil or resolutionAttempted then return concreteOwner ~= nil end
         resolutionAttempted = true
         local handedOff, localPlayers = nil, nil
+        local adminResultListener = deferredAdminResultListener
         if mode == "single_player" then
             handedOff = {}
             for index = 1, #pendingNewPlayers do handedOff[index] = pendingNewPlayers[index] end
@@ -225,6 +229,13 @@ local function createFacade()
                         "owner.setClientStateListener"
                     )
                     or retain("listener_handoff_threw", "owner.setClientStateListener")
+                return false
+            end
+        end
+        if adminResultListener ~= nil then
+            local called, result = pcall(candidateOwner.setAdminResultListener, adminResultListener)
+            if not called or type(result) ~= "table" or result.ok ~= true then
+                retainedFailure = failure("listener_handoff_invalid", "owner.setAdminResultListener")
                 return false
             end
         end
@@ -386,6 +397,13 @@ local function createFacade()
             return failure("invalid_listener", "listener")
         end
         deferredClientStateListener = listener
+        return { ok = true }
+    end
+    function facade.setAdminResultListener(listener)
+        if concreteOwner ~= nil then return concreteOwner.setAdminResultListener(listener) end
+        if resolutionAttempted then return retainedFailure or unavailable("setAdminResultListener") end
+        if listener ~= nil and type(listener) ~= "function" then return failure("invalid_listener", "listener") end
+        deferredAdminResultListener = listener
         return { ok = true }
     end
     function facade.requestAdvancement(localSlot, perkId)

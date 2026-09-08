@@ -413,7 +413,7 @@ do
     assertSame(request, requestBefore, "request immutable")
     assertSame(globalThree, configBefore, "config immutable")
     assertSame(store.receivedOptions, resolver.loadOptions, "resolver options reach load")
-    assertEqual(store.loads, 1, "spend loads once")
+    assertEqual(store.loads, 2, "spend reloads the durable reservation before commit")
 end
 
 -- A restarted process may reuse its first transport ID; the durable revision keeps the new slot distinct.
@@ -583,10 +583,9 @@ do
     end
 end
 
--- Final mastery remains fail-closed for red, stale, and misaligned state.
+-- Final mastery remains fail-closed for stale and misaligned state.
 do
     local scenarios = {
-        { code = "red_recovery", natural = 200, high = 250, expected = 0, position = 250 },
         { code = "stale_revision", natural = 250, high = 250, expected = 1, position = 250 },
         { code = "misaligned_progression", natural = 200, high = 200, expected = 0, position = 200 },
     }
@@ -594,7 +593,6 @@ do
         local item = scenarios[index]
         local state = newState(3, 0)
         state.perks.Axe = newPerk(item.natural, item.high)
-        if item.code == "red_recovery" then state.perks.Axe.observedPosition = item.position end
         local store = makeStore(state)
         local adapter, resolver = makeRuntime()
         local service = createService(store, adapter, resolver)
@@ -664,11 +662,10 @@ do
     end
 end
 
--- No AP, red recovery, maximum, and adapter misalignment all fail before engine mutation.
+-- No AP, maximum, and adapter misalignment all fail before engine mutation.
 do
     local scenarios = {
         { code = "no_ap", state = newState(1, 1), level = 0, position = 0 },
-        { code = "red_recovery", state = newState(2, 0), level = 0, position = 50, natural = 50, high = 100 },
         { code = "at_maximum", state = newState(2, 0), level = 3, position = 450 },
         { code = "misaligned_progression", state = newState(2, 0), level = 0, position = 100 },
     }
@@ -890,7 +887,7 @@ do
     assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "original_target")
 end
 
--- Unexplained positive progress clears targets without reward/revision; negative progress creates red recovery.
+-- Unexplained positive progress clears targets without reward/revision; negative progress does not block a new advancement.
 do
     local state = newState(3, 0)
     state.survivor.xpIntoLevel = 77
@@ -920,11 +917,13 @@ do
     local service = createService(store, adapter, resolver)
     local player = newPlayer("Axe", 0, 50)
     ActualObservation.set(player, "Axe", 100)
-    assertCode(service.spend(player, { perkId = "Axe", requestId = "after_loss", expectedRevision = 0 }, globalThree), "red_recovery")
+    assertTrue(service.spend(player, { perkId = "Axe", requestId = "after_loss", expectedRevision = 0 }, globalThree).ok, "XP loss does not block new advancement")
     assertEqual(store.current.perks.Axe.naturalPosition, 50)
-    assertEqual(store.current.perks.Axe.highWaterPosition, 100)
-    assertEqual(store.current.revision, 0)
-    assertEqual(adapter.ensureCalls, 0)
+    assertEqual(store.current.perks.Axe.highWaterPosition, 50)
+    assertEqual(store.current.revision, 1)
+    assertEqual(adapter.ensureCalls, 1)
+    assertEqual(#store.current.perks.Axe.activeTargets, 1)
+    assertEqual(store.current.survivor.spent, 1)
 end
 
 -- Load, reservation, scope, and commit failures preserve the correct boundary.
@@ -1046,7 +1045,7 @@ do
     local player = newPlayer("Axe", 1, 100)
     local result = service.spend(player, { perkId = "Axe", requestId = "after_recovery_transition", expectedRevision = 0 }, { mode = "Free" })
     assertCode(result, "stale_revision")
-    assertEqual(store.loads, 1, "recovery-transition spend loads once")
+    assertEqual(store.loads, 2, "recovery-transition spend reloads the durable reservation")
     assertEqual(store.saves, 2, "recovery and transition each save once")
     assertEqual(adapter.ensureCalls, 1, "only recovery mutates the engine")
     assertEqual(resolver.resolveCount, 1, "stale post-transition request does not resolve again")
@@ -1067,7 +1066,7 @@ do
     local result = service.recoverLoadedState(player, loaded.state)
     assertTrue(result.ok)
     assertTrue(result.recovered)
-    assertEqual(store.loads, 1, "loaded reservation recovery performs no second load")
+    assertEqual(store.loads, 2, "loaded reservation recovery reloads before commit")
     assertEqual(store.saves, 1, "loaded reservation recovery commits once")
     assertEqual(result.state.revision, 1)
     assertEqual(result.state.survivor.spent, 1)
@@ -1234,13 +1233,14 @@ do
     local service = createService(store, adapter, resolver)
     local player = newPlayer("Axe", 2, 250)
     local result = service.recover(player)
-    assertCode(result, "recovery_quarantined")
-    assertEqual(result.detail, "natural_recovery_required")
-    assertEqual(adapter.ensureCalls, 0)
-    assertEqual(store.saves, 0)
-    assertEqual(player.skills.Axe.level, 2)
-    assertEqual(player.skills.Axe.position, 250)
-    assertSame(store.current, before, "red final reservation remains unchanged")
+    assertTrue(result.ok, "legacy debt does not block final reservation recovery")
+    assertEqual(adapter.ensureCalls, 1)
+    assertEqual(store.saves, 1)
+    assertEqual(player.skills.Axe.level, 3)
+    assertEqual(player.skills.Axe.position, 450)
+    assertEqual(store.current.perks.Axe.naturalPosition, 450)
+    assertEqual(store.current.perks.Axe.highWaterPosition, 450)
+    assertEqual(store.current.survivor.spent, before.survivor.spent + 2)
 end
 
 -- Already-complete and committed-but-not-cleared reservations normalize without duplicate writes/targets.
@@ -1333,4 +1333,38 @@ do
     assertEqual(store.current.survivor.spent, 1)
 end
 
+-- Saved historical debt neither blocks restored slots nor fresh purchases and mastery.
+do
+    local cases = {
+        { level = 0, position = 50, high = 250, targets = {}, cost = 1, count = 1 },
+        { level = 0, position = 50, high = 75,
+            targets = { { targetId = "old-slot", targetLevel = 1, targetPosition = 100 } }, cost = 1, count = 1 },
+        { level = 2, position = 250, high = 400,
+            targets = { { targetId = "old-final", targetLevel = 3, targetPosition = 450 } }, cost = 2, count = 0 },
+    }
+    for index, item in ipairs(cases) do
+        local state = newState(3, 0)
+        state.survivor.xpIntoLevel = 17
+        state.perks.Axe = newPerk(item.position, item.high, item.targets)
+        state.perks.Axe.observedPosition = item.position
+        local encoded = StateCodec.encode(state)
+        assertTrue(encoded.ok, "old AP state encodes")
+        local decoded = StateCodec.decode(encoded.state)
+        assertTrue(decoded.ok, "old AP state reloads")
+        local store = makeStore(decoded.state)
+        local adapter, resolver = makeRuntime()
+        local service = createService(store, adapter, resolver)
+        local player = newPlayer("Axe", item.level, item.position)
+        local spent = service.spend(player, { perkId = "Axe", requestId = "old_debt_" .. index,
+            expectedRevision = 0 }, globalThree)
+        assertTrue(spent.ok, "old debt permits requested advancement")
+        assertEqual(store.current.survivor.spent, item.cost, "only requested AP cost is charged")
+        assertEqual(store.current.survivor.xpIntoLevel, 17, "AP movement grants no Survivor XP")
+        assertEqual(#store.current.perks.Axe.activeTargets, item.count, "blue slot count preserved or cleared by mastery")
+        if index == 2 then
+            assertEqual(store.current.perks.Axe.activeTargets[1].targetId, "old-slot", "restore preserves original target")
+        end
+        assertTrue(StateCodec.decode(StateCodec.encode(store.current).state).ok, "post-purchase state reloads")
+    end
+end
 return assertions

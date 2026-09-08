@@ -125,7 +125,10 @@ end
 local function playerWith(state, level, position)
     local player = {
         modData = { [NAMESPACE] = encoded(state) },
-        skills = { X = { level = level or 2, position = position or 250 } },
+        skills = {
+            X = { level = level or 2, position = position or 250 },
+            Woodwork = { level = 0, position = 15 },
+        },
     }
     function player:getModData() return self.modData end
     return player
@@ -144,34 +147,36 @@ local function runtime(options)
     local resolver = { loadOptions = options, resolveCalls = 0 }
 
     function adapter.describe(handle)
+        local spec = handle.perkId == "X" and CURVE_B or OTHER
         return {
             ok = true,
-            adapterId = CURVE_B.adapterId,
-            adapterVersion = CURVE_B.adapterVersion,
-            curveFingerprint = CURVE_B.curveFingerprint,
-            effectiveMaximum = CURVE_B.effectiveMaximum,
+            adapterId = spec.adapterId,
+            adapterVersion = spec.adapterVersion,
+            curveFingerprint = spec.curveFingerprint,
+            effectiveMaximum = spec.effectiveMaximum,
             cumulativeThresholds = thresholds,
         }
     end
 
     function adapter.inspect(handle, player)
-        local skill = player.skills.X
+        local spec = handle.perkId == "X" and CURVE_B or OTHER
+        local skill = player.skills[handle.perkId]
         local derivedLevel = 0
-        for candidate = 1, CURVE_B.effectiveMaximum do
+        for candidate = 1, spec.effectiveMaximum do
             if skill.position >= thresholds[candidate] then derivedLevel = candidate end
         end
         local nextLevel = nil
         local nextPosition = nil
-        if skill.level < CURVE_B.effectiveMaximum then
+        if skill.level < spec.effectiveMaximum then
             nextLevel = skill.level + 1
             nextPosition = thresholds[nextLevel]
         end
         return {
             ok = true,
-            adapterId = CURVE_B.adapterId,
-            adapterVersion = CURVE_B.adapterVersion,
-            curveFingerprint = CURVE_B.curveFingerprint,
-            effectiveMaximum = CURVE_B.effectiveMaximum,
+            adapterId = spec.adapterId,
+            adapterVersion = spec.adapterVersion,
+            curveFingerprint = spec.curveFingerprint,
+            effectiveMaximum = spec.effectiveMaximum,
             storedLevel = skill.level,
             actualPosition = skill.position,
             nextTargetLevel = nextLevel,
@@ -183,10 +188,11 @@ local function runtime(options)
 
     function adapter.ensureTarget(handle, player, targetLevel, targetPosition)
         adapter.ensureCalls = adapter.ensureCalls + 1
-        local skill = player.skills.X
+        local skill = player.skills[handle.perkId]
         local xpWrite = false
         local levelWrite = false
         if skill.position < targetPosition then skill.position = targetPosition; xpWrite = true end
+        if adapter.onEnsure ~= nil then adapter.onEnsure(player, handle.perkId) end
         if skill.level < targetLevel then skill.level = targetLevel; levelWrite = true end
         return {
             ok = true,
@@ -199,7 +205,9 @@ local function runtime(options)
 
     function resolver.resolve(perkId)
         resolver.resolveCalls = resolver.resolveCalls + 1
-        if perkId ~= "X" then return { ok = false, code = "unsupported", detail = perkId } end
+        if perkId ~= "X" and perkId ~= "Woodwork" then
+            return { ok = false, code = "unsupported", detail = perkId }
+        end
         return { ok = true, adapter = adapter, handle = { perkId = perkId } }
     end
     return adapter, resolver
@@ -390,6 +398,106 @@ do
     sameTable(saved.perks.Woodwork, unrelatedActive, "AP preserves unrelated active record")
     sameTable(saved.orphanedPerks.OldSkill, unrelatedOrphan, "AP preserves unrelated orphan")
     expect(StateCodec.encode(saved).ok, "AP output has no active/orphan duplicate")
+end
+
+-- Unrelated awards emitted inside an AP ensure stay durable across commit recovery.
+do
+    local initial = curveAState()
+    initial.survivor = { level = 2, xpIntoLevel = 2590, spent = 0 }
+    local player = playerWith(initial, 2, 250)
+    local durableStore = realPlayerStore()
+    local store = { saveCount = 0 }
+    function store.load(actualPlayer, options)
+        return durableStore.load(actualPlayer, options)
+    end
+    function store.save(actualPlayer, state)
+        store.saveCount = store.saveCount + 1
+        expect(StateCodec.encode(state).ok, "every nested transaction write passes the real codec")
+        if store.saveCount == 4 then
+            return { ok = false, code = "injected_commit_failure", detail = "once" }
+        end
+        return durableStore.save(actualPlayer, state)
+    end
+
+    local adapter, resolver = runtime()
+    local ap, processor = services(store, resolver)
+    local nestedResults = {}
+    adapter.onEnsure = function(actualPlayer, perkId)
+        if perkId ~= "X" then return end
+        local skill = actualPlayer.skills.Woodwork
+        local before = skill.position
+        skill.position = 25
+        nestedResults[1] = processor.process(actualPlayer, {
+            perkId = "Woodwork", survivorCreditBase = 20,
+            appliedDelta = 25 - before,
+            actualPositionBefore = before, actualPositionAfter = 25,
+        }, trackedSettings())
+        before = skill.position
+        skill.position = 40
+        nestedResults[2] = processor.process(actualPlayer, {
+            perkId = "Woodwork", survivorCreditBase = 30,
+            appliedDelta = 40 - before,
+            actualPositionBefore = before, actualPositionAfter = 40,
+        }, trackedSettings())
+    end
+
+    local failed = ap.spend(player, {
+        perkId = "X", requestId = "nested_awards", expectedRevision = 7,
+    }, GLOBAL_THREE)
+    expect(not failed.ok, "injected AP commit failure is reported")
+    equal(failed.code, "commit_save_failed", "injected AP commit failure code")
+    expect(nestedResults[1].ok and nestedResults[2].ok,
+        "both unrelated nested awards succeed")
+    local reserved = durableStore.load(player, loadOptions(CURVE_B)).state
+    expect(reserved.inFlightAdvancement ~= nil, "failed commit leaves reservation recoverable")
+    equal(reserved.revision, 7, "nested awards retain reservation revision")
+    equal(reserved.survivor.level, 3, "nested awards preserve Survivor level gain")
+    equal(reserved.survivor.xpIntoLevel, 40, "nested awards preserve exact aggregate credit")
+    equal(reserved.survivor.spent, 0, "nested awards do not spend AP")
+    expect(StateCodec.encode(reserved).ok, "nested reservation reload passes real codec")
+
+    adapter.onEnsure = nil
+    local recovered = ap.recover(player)
+    expect(recovered.ok and recovered.recovered, "failed AP commit recovers")
+    local saved = durableStore.load(player, loadOptions(CURVE_B)).state
+    equal(saved.revision, 8, "recovery increments AP revision exactly once")
+    equal(saved.survivor.level, 3, "recovery preserves nested Survivor level")
+    equal(saved.survivor.xpIntoLevel, 40, "recovery preserves nested aggregate credit")
+    equal(saved.survivor.spent, 1, "recovery spends AP exactly once")
+    equal(#saved.perks.X.activeTargets, 1, "recovery creates one AP target")
+    equal(saved.perks.X.activeTargets[1].targetId, "nested_awards:revision:7",
+        "recovery preserves durable target identity")
+    equal(saved.inFlightAdvancement, nil, "recovery clears reservation")
+    expect(StateCodec.encode(saved).ok, "recovered nested transaction passes real codec")
+end
+
+-- A foreign in-flight reservation cannot hide an accounting-mode transition.
+do
+    local state = curveAState()
+    state.perks.X = curveBRecord(250)
+    state.inFlightAdvancement = {
+        requestId = "active_mode_guard", perkId = "X",
+        preRevision = 7, preSpent = 2, preLevel = 2, prePosition = 250,
+        targetLevel = 3, targetPosition = 450,
+        adapterId = CURVE_B.adapterId, adapterVersion = CURVE_B.adapterVersion,
+        curveFingerprint = CURVE_B.curveFingerprint,
+        effectiveMaximum = CURVE_B.effectiveMaximum,
+    }
+    local player = playerWith(state, 2, 250)
+    player.skills.Woodwork.position = 25
+    local store = countingStore(realPlayerStore())
+    local _, resolver = runtime()
+    local _, processor = services(store, resolver)
+    local begun = MutationScope.begin(player, "X")
+    expect(begun.ok, "mode guard reservation scope begins")
+    local result = processor.process(player, {
+        perkId = "Woodwork", survivorCreditBase = 10, appliedDelta = 10,
+        actualPositionBefore = 15, actualPositionAfter = 25,
+    }, freeSettings())
+    expect(not result.ok, "mode transition during foreign reservation is refused")
+    equal(result.code, "accounting_mode_failed", "mode guard failure code")
+    equal(store.saves, 0, "mode guard writes no conflicting state")
+    expect(MutationScope.finish(begun.handle).ok, "mode guard scope finishes")
 end
 
 -- Rejection before reservation does not persist the replacement.

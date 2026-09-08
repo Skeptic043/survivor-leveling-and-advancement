@@ -142,19 +142,8 @@ local function transition(state, delta, actualPositionAfter, survivorEligible)
         nextNatural = 0
     end
 
-    local nextHighWater = ledger.highWaterPosition
-    local recoveryApplied = 0
-    local earnedHighWater = 0
-    if delta > 0 then
-        local recoveryRemaining = ledger.highWaterPosition - ledger.naturalPosition
-        recoveryApplied = math.min(delta, recoveryRemaining)
-        earnedHighWater = delta - recoveryApplied
-        nextHighWater = ledger.highWaterPosition + earnedHighWater
-    end
-
-    if earnedHighWater > 0 and actualPositionAfter < nextHighWater then
-        return failure("POSITION_BEHIND_HIGH_WATER", "actual position is behind newly earned high water")
-    end
+    -- Keep the persisted field compatible while retiring historical XP debt.
+    local nextHighWater = nextNatural
 
     if beganWithTargets then
         if actualPositionAfter < nextNatural then
@@ -182,8 +171,8 @@ local function transition(state, delta, actualPositionAfter, survivorEligible)
     local eligibleApplied = 0
     local eligibleRatio = 0
     if survivorEligible and delta > 0 then
-        eligibleApplied = earnedHighWater
-        eligibleRatio = eligibleApplied / delta
+        eligibleApplied = delta
+        eligibleRatio = 1
     end
 
     if beganWithTargets and #remainingTargets == 0 and #clearedTargetIds > 0 then
@@ -199,7 +188,6 @@ local function transition(state, delta, actualPositionAfter, survivorEligible)
             activeTargets = remainingTargets,
         },
         effect = {
-            recoveryApplied = recoveryApplied,
             eligibleApplied = eligibleApplied,
             eligibleRatio = eligibleRatio,
             clearedTargetIds = clearedTargetIds,
@@ -227,11 +215,8 @@ function NaturalLedger.inspect(state)
     if stateError then
         return stateError
     end
-    local recoveryRemaining = ledger.highWaterPosition - ledger.naturalPosition
     return {
         ok = true,
-        red = recoveryRemaining > 0,
-        recoveryRemaining = recoveryRemaining,
         activeCount = #ledger.activeTargets,
     }
 end
@@ -253,8 +238,8 @@ function NaturalLedger.master(state, actualPositionAfter)
     if positionError then
         return positionError
     end
-    if actualPositionAfter < ledger.highWaterPosition then
-        return failure("POSITION_BEHIND_HIGH_WATER", "mastery position cannot lower high water")
+    if actualPositionAfter < ledger.naturalPosition then
+        return failure("INCONSISTENT_POSITION", "mastery position cannot lower natural progress")
     end
 
     local clearedTargetIds = {}
@@ -269,7 +254,6 @@ function NaturalLedger.master(state, actualPositionAfter)
             activeTargets = {},
         },
         effect = {
-            recoveryApplied = 0,
             eligibleApplied = 0,
             eligibleRatio = 0,
             clearedTargetIds = clearedTargetIds,
@@ -282,6 +266,7 @@ function NaturalLedger.appendTarget(state, target, effectiveMaximum)
     if stateError then
         return stateError
     end
+    ledger.highWaterPosition = ledger.naturalPosition
     if type(target) ~= "table" or type(target.targetId) ~= "string" or target.targetId == "" then
         return failure("MALFORMED_TARGET", "target identity is malformed")
     end

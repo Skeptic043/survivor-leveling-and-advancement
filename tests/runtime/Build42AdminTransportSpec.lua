@@ -1062,7 +1062,10 @@ local function makeClientHarness(options)
         }
         if options.sendThrow then error("send failure") end
     end
-    local created = Build42AdminTransport.createClient({ sendClientCommand = sender })
+    local created = Build42AdminTransport.createClient({
+        sendClientCommand = sender,
+        nowMilliseconds = options.now or function() return 0 end,
+    })
     check(created.ok == true, "client harness construction")
     return {
         client = created.client,
@@ -1127,7 +1130,7 @@ do
         code = "invalid_dependencies",
         detail = "dependencies",
     }, "client requires exact dependency")
-    exact(Build42AdminTransport.createClient({ sendClientCommand = {} }), {
+    exact(Build42AdminTransport.createClient({ sendClientCommand = {}, nowMilliseconds = function() return 0 end }), {
         ok = false,
         code = "invalid_dependencies",
         detail = "dependencies",
@@ -1135,13 +1138,14 @@ do
 
     local calls = 0
     local captured = function() calls = calls + 1 end
-    local dependencies = { sendClientCommand = captured }
+    local dependencies = { sendClientCommand = captured, nowMilliseconds = function() return 0 end }
     local created = Build42AdminTransport.createClient(dependencies)
     dependencies.sendClientCommand = function() error("replacement sender") end
     exact(created.client, {
         request = created.client.request,
         handle = created.client.handle,
         status = created.client.status,
+        expire = created.client.expire,
         resetSlot = created.client.resetSlot,
         reset = created.client.reset,
     }, "exact client surface")
@@ -1440,4 +1444,51 @@ do
     exact(harness.client.status(4), { ok = false, code = "invalid_slot", detail = "slot" }, "invalid status slot")
 end
 
+do
+    local client = makeClientHarness()
+    local logical = adminLogicalClear()
+    logical.perkId = "Fitness"
+    check(client.client.request(0, client.actor0, logical).ok, "selected clear client accepts known shape")
+    local envelope = client.events[1].envelope
+    equal(envelope.perkId, "Fitness", "selected perk survives client envelope")
+    local server = makeHarness()
+    check(server.server.handle("SurvivorLevelingAdvancement", "adminRequest", server.actor, envelope).ok,
+        "selected clear server dispatch succeeds")
+    equal(server.events[2].request.perkId, "Fitness", "selected perk reaches authorized session")
+    equal(server.events[2].request.expectedRevision, 7, "prepared revision reaches session")
+    equal(server.events[1].name, "boundary", "permission check still precedes selected clear")
+    for _, invalid in ipairs({ "", "bad id", repeated("p", 129), 17 }) do
+        local bad = makeClientHarness()
+        local request = adminLogicalClear()
+        request.perkId = invalid
+        check(not bad.client.request(0, bad.actor0, request).ok, "malformed selected perk rejected")
+        equal(#bad.events, 0, "malformed selected perk sends nothing")
+    end
+    local offline = makeClientHarness()
+    local request = adminLogicalClear()
+    request.target = { username = "Offline", profileIndex = 0, incarnationId = "old" }
+    request.perkId = "Fitness"
+    check(not offline.client.request(0, offline.actor0, request).ok, "selected clear cannot route offline")
+end
+
+do
+    local now = 0
+    local harness = makeClientHarness({ now = function() return now end })
+    local first = harness.client.request(0, harness.actor0, adminLogicalInspect())
+    now = 15000
+    local timedOut = harness.client.status(0)
+    check(not timedOut.pending, "expired admin request releases pending route")
+    equal(timedOut.result.code, "response_timeout", "expired admin request reports uncertainty")
+    check(timedOut.result.committed == false, "expired inspection is safely known read-only")
+    exact(harness.client.handle("SurvivorLevelingAdvancement", "adminResult",
+        adminResponse({ requestId = first.requestId, operation = "inspect", target = { username = "Target" } }, "inspected")), {
+        ok = false, code = "unknown_response", detail = "route",
+    }, "late admin response cannot overwrite timeout")
+    now = 0
+    local mutation = makeClientHarness({ now = function() return now end })
+    check(mutation.client.request(0, mutation.actor0, adminLogicalXp()).ok, "mutation request starts")
+    now = 15000
+    local uncertain = mutation.client.status(0)
+    check(uncertain.result.committed == true, "expired mutation may have applied")
+end
 return assertions

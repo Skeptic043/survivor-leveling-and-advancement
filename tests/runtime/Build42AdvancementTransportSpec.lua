@@ -318,7 +318,7 @@ do
         "store_load_failed", "recovery_quarantined", "invalid_request", "resolver_failed",
         "adapter_description_failed", "adapter_inspection_failed", "adapter_identity_mismatch",
         "perk_quarantined", "observation_failed", "stale_revision", "invalid_state", "no_ap",
-        "misaligned_progression", "at_maximum", "red_recovery", "target_rejected",
+        "misaligned_progression", "at_maximum", "target_rejected",
         "allotment_invalid", "allotment_rejected", "scope_begin_failed", "reservation_save_failed",
         "scope_finish_failed", "engine_mutation_failed", "post_inspection_failed", "commit_save_failed",
     }
@@ -522,7 +522,11 @@ local function makeClient(options)
             args = args,
         }
     end
-    local dependencies = { ownerClient = owner, sendClientCommand = sender }
+    local dependencies = {
+        ownerClient = owner,
+        sendClientCommand = sender,
+        nowMilliseconds = options.now or function() return 0 end,
+    }
     local created = Build42AdvancementTransport.createClient(dependencies)
     truthy(created.ok, "client construction")
     trace.owner = owner
@@ -544,7 +548,7 @@ do
         end,
     }
     local sender = function() sendCalls = sendCalls + 1 end
-    local dependencies = { ownerClient = owner, sendClientCommand = sender }
+    local dependencies = { ownerClient = owner, sendClientCommand = sender, nowMilliseconds = function() return 0 end }
     local created = Build42AdvancementTransport.createClient(dependencies)
     truthy(created.ok, "captured client constructed")
     equal(getCalls, 0, "client construction does not read owner")
@@ -572,11 +576,11 @@ do
     local invalid = {
         {},
         { ownerClient = owner },
-        { ownerClient = owner, sendClientCommand = sender, extra = true },
-        setmetatable({ ownerClient = owner, sendClientCommand = sender }, {}),
-        { ownerClient = setmetatable({ get = function() end, acceptLocal = function() end }, {}), sendClientCommand = sender },
-        { ownerClient = { get = function() end }, sendClientCommand = sender },
-        { ownerClient = owner, sendClientCommand = {} },
+        { ownerClient = owner, sendClientCommand = sender, nowMilliseconds = function() return 0 end, extra = true },
+        setmetatable({ ownerClient = owner, sendClientCommand = sender, nowMilliseconds = function() return 0 end }, {}),
+        { ownerClient = setmetatable({ get = function() end, acceptLocal = function() end }, {}), sendClientCommand = sender, nowMilliseconds = function() return 0 end },
+        { ownerClient = { get = function() end }, sendClientCommand = sender, nowMilliseconds = function() return 0 end },
+        { ownerClient = owner, sendClientCommand = {}, nowMilliseconds = function() return 0 end },
     }
     for index = 1, #invalid do
         equal(Build42AdvancementTransport.createClient(invalid[index]).code, "invalid_dependencies", "invalid client dependency " .. index)
@@ -995,6 +999,21 @@ do
     truthy(afterReset.requestId ~= first.requestId and afterReset.requestId ~= second.requestId, "reset preserves monotone counter")
     equal(client.resetSlot(-1).code, "invalid_slot", "reset slot validates low")
     equal(client.resetSlot(4).code, "invalid_slot", "reset slot validates high")
+end
+
+do
+    local now = 0
+    local client = makeClient({ now = function() return now end })
+    local first = client.request(0, {}, "Axe")
+    now = 15000
+    local timedOut = client.status(0)
+    falsy(timedOut.pending, "expired request releases pending route")
+    equal(timedOut.result.code, "response_timeout", "expired request reports uncertainty")
+    truthy(timedOut.result.committed, "expired request may have applied")
+    equal(client.handle("SurvivorLevelingAdvancement", "advancementResult",
+        rejectionResponse(first.requestId, "Axe", "no_ap")).code, "unknown_response",
+        "late response cannot overwrite timeout")
+    truthy(client.request(0, {}, "Axe").ok, "timeout permits reconciliation owner to issue a new request")
 end
 
 return assertions

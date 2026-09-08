@@ -199,7 +199,7 @@ end
 do
     local pending = { schemaVersion = 1, deadSurvivorLevel = 10 }
     local consumes = 0
-    local f = fixture(function(dependencies, values)
+    local f = fixture(function(dependencies)
         dependencies.recordStore = {
             peek = function() return { ok = true, found = true, record = {
                 schemaVersion = pending.schemaVersion, deadSurvivorLevel = pending.deadSurvivorLevel,
@@ -211,31 +211,19 @@ do
             end,
             put = function() return { ok = true, stored = true } end,
         }
-        dependencies.stateStore.save = function() return { ok = false, code = "disk_failed", detail = "save" } end
     end)
     local p = player(0)
     yes(f.session.tokenNewCharacter(p).ok, "compare-mismatch token issued")
     local failed = f.session.initialize(p)
-    eq(failed.ok, false, "fresh save failure reported")
-    eq(failed.committed, true, "compare mismatch terminalization committed")
+    eq(failed.code, "pending_consume_mismatch", "compare mismatch is reported")
+    eq(failed.committed, true, "compare mismatch follows committed replacement")
     eq(consumes, 1, "compare attempted once")
     eq(pending.deadSurvivorLevel, 20, "newer pending remains untouched")
-    eq(f.session.initialize(p).outcome, "existing", "immediate replay cannot consume newer death")
-    eq(consumes, 1, "immediate replay performs no compare")
-    local restartedStore = CharacterInheritanceStore.create().store
-    local restarted = fixture(function(dependencies)
-        dependencies.characterStore = restartedStore
-        dependencies.recordStore = {
-            peek = function() error("restart must not peek") end,
-            consume = function() error("restart must not consume") end,
-            put = function() return { ok = true, stored = true } end,
-        }
-        dependencies.stateStore = f.stateStore
-    end)
-    eq(restarted.session.initialize(p).outcome, "existing", "restart after mismatch remains terminalized")
+    eq(f.stateStore.load(p).state.survivor.level, 5, "compare mismatch preserves intended inheritance")
+    eq(f.session.initialize(p).outcome, "existing", "compare mismatch retry adopts stored inheritance")
 end
 
-local function assertPostConsumeTerminal(freshReplacement, saveReplacement, expectedCode, label)
+local function assertBeforeConsumeFailure(freshReplacement, saveReplacement, expectedCode, label)
     local p = player(0)
     local consumes = 0
     local f = fixture(function(dependencies)
@@ -247,52 +235,150 @@ local function assertPostConsumeTerminal(freshReplacement, saveReplacement, expe
             return originalConsume(...)
         end
         if freshReplacement ~= nil then dependencies.StateCodec.fresh = freshReplacement end
-        if saveReplacement ~= nil then dependencies.stateStore.save = saveReplacement end
+        if saveReplacement ~= nil then
+            local originalSave = dependencies.stateStore.save
+            local attempts = 0
+            dependencies.stateStore.save = function(...)
+                attempts = attempts + 1
+                if attempts == 1 then return saveReplacement(...) end
+                return originalSave(...)
+            end
+        end
     end)
     local failed = f.session.initialize(p)
     eq(failed.code, expectedCode, label .. " returns bounded failure")
-    eq(failed.committed, true, label .. " reports committed consume")
-    eq(consumes, 1, label .. " consumes original pending once")
-    yes(f.recordStore.put({ kind = "sp", profileIndex = 0 }, 20).ok, label .. " seeds newer death")
-    eq(f.session.initialize(p).outcome, "existing", label .. " immediate replay is terminalized")
-    eq(consumes, 1, label .. " immediate replay cannot consume newer death")
-    eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 20,
-        label .. " newer pending survives immediate replay")
-    local restarted = fixture(function(dependencies)
-        dependencies.characterStore = CharacterInheritanceStore.create().store
-        dependencies.recordStore = f.recordStore
-        dependencies.stateStore = f.stateStore
-    end)
-    eq(restarted.session.initialize(p).outcome, "existing", label .. " restart-style replay is terminalized")
-    eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 20,
-        label .. " newer pending survives restart-style replay")
+    eq(failed.committed, nil, label .. " has no confirmed committed replacement")
+    eq(consumes, 0, label .. " performs no consume")
+    eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 10,
+        label .. " preserves original pending")
 end
 
-assertPostConsumeTerminal(function()
+assertBeforeConsumeFailure(function()
     local state = StateCodec.fresh()
     state.extra = true
     return state
-end, nil, "fresh_state_invalid", "post-consume fresh failure")
+end, nil, "fresh_state_invalid", "pre-consume fresh failure")
 
-assertPostConsumeTerminal(function()
+assertBeforeConsumeFailure(function()
     error("fresh boom")
-end, nil, "fresh_state_invalid", "post-consume fresh throw")
+end, nil, "fresh_state_invalid", "pre-consume fresh throw")
 
-assertPostConsumeTerminal(function()
+assertBeforeConsumeFailure(function()
     return "not a state"
-end, nil, "fresh_state_invalid", "post-consume non-table fresh result")
+end, nil, "fresh_state_invalid", "pre-consume non-table fresh result")
 
-assertPostConsumeTerminal(nil, function()
+assertBeforeConsumeFailure(nil, function()
     return { ok = false, code = "disk_failed", detail = "save" }
-end, "state_save_failed", "post-consume save failure")
+end, "state_save_failed", "pre-consume save failure")
 
-assertPostConsumeTerminal(nil, function()
+assertBeforeConsumeFailure(nil, function()
     error("save boom")
-end, "state_save_threw", "post-consume save throw")
+end, "state_save_threw", "pre-consume save throw")
 
-assertPostConsumeTerminal(nil, function()
-    return { ok = true, extra = true }
-end, "state_save_invalid", "post-consume malformed save success")
+do
+    local p = player(0)
+    local consumes = 0
+    local f = fixture(function(dependencies)
+        dependencies.characterStore.tokenNewCharacter(p)
+        dependencies.recordStore.put({ kind = "sp", profileIndex = 0 }, 10)
+        local originalSave = dependencies.stateStore.save
+        dependencies.stateStore.save = function(...)
+            local saved = originalSave(...)
+            if not saved.ok then return saved end
+            return { ok = true, extra = true }
+        end
+        local originalConsume = dependencies.recordStore.consume
+        dependencies.recordStore.consume = function(...)
+            consumes = consumes + 1
+            return originalConsume(...)
+        end
+    end)
+    local failed = f.session.initialize(p)
+    eq(failed.code, "state_save_invalid", "malformed save result is bounded")
+    eq(failed.committed, true, "malformed save acknowledges uncertain stored state")
+    eq(consumes, 0, "malformed save does not consume pending")
+    eq(f.stateStore.load(p).state.survivor.level, 5,
+        "malformed save preserves an already stored intended inheritance")
+    eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 10,
+        "malformed save preserves pending")
+    eq(f.session.initialize(p).outcome, "existing", "malformed save retry adopts stored inheritance")
+end
+
+do
+    local p = player(0)
+    local markerAttempts = 0
+    local f = fixture(function(dependencies)
+        dependencies.characterStore.tokenNewCharacter(p)
+        dependencies.recordStore.put({ kind = "sp", profileIndex = 0 }, 10)
+        local originalMark = dependencies.characterStore.markInitialized
+        dependencies.characterStore.markInitialized = function(...)
+            markerAttempts = markerAttempts + 1
+            if markerAttempts == 1 then
+                return { ok = false, code = "marker_failed", detail = "write" }
+            end
+            return originalMark(...)
+        end
+    end)
+    local failed = f.session.initialize(p)
+    eq(failed.code, "metadata_initialize_failed", "post-save marker failure is reported")
+    eq(failed.committed, true, "post-save marker failure reports committed state")
+    eq(f.stateStore.load(p).state.survivor.level, 5, "marker failure preserves inherited level")
+    eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 10,
+        "marker failure preserves pending")
+    local progressed = f.stateStore.load(p).state
+    progressed.survivor.level = 6
+    progressed.survivor.spent = 2
+    progressed.revision = 3
+    yes(f.stateStore.save(p, progressed).ok, "intervening progress saved")
+    local retried = f.session.initialize(p)
+    eq(retried.outcome, "existing", "marker failure retry adopts stored state")
+    local preserved = f.stateStore.load(p).state
+    eq(preserved.survivor.level, 6, "retry preserves intervening level")
+    eq(preserved.survivor.spent, 2, "retry preserves intervening AP spending")
+    eq(preserved.revision, 3, "retry preserves intervening revision")
+    yes(f.characterStore.inspect(p).metadata.initialized, "retry repairs actual SP marker")
+    eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 10,
+        "retry does not consume pending after committed failure")
+end
+
+local consumeFailures = {
+    { "failure", "pending_consume_failed", function()
+        return { ok = false, code = "write_failed", detail = "consume" }
+    end },
+    { "throw", "pending_consume_threw", function() error("consume boom") end },
+    { "malformed", "pending_consume_invalid", function() return { ok = true, consumed = true } end },
+}
+for index = 1, #consumeFailures do
+    local item = consumeFailures[index]
+    local p = player(0)
+    local attempts = 0
+    local f = fixture(function(dependencies)
+        dependencies.characterStore.tokenNewCharacter(p)
+        dependencies.recordStore.put({ kind = "sp", profileIndex = 0 }, 10)
+        dependencies.recordStore.consume = function(...)
+            attempts = attempts + 1
+            return item[3](...)
+        end
+    end)
+    local failed = f.session.initialize(p)
+    eq(failed.code, item[2], "consume " .. item[1] .. " is bounded")
+    eq(failed.committed, true, "consume " .. item[1] .. " follows committed inheritance")
+    eq(attempts, 1, "consume " .. item[1] .. " attempts once")
+    eq(f.stateStore.load(p).state.survivor.level, 5,
+        "consume " .. item[1] .. " preserves intended level")
+    eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 10,
+        "consume " .. item[1] .. " preserves pending")
+    local progressed = f.stateStore.load(p).state
+    progressed.survivor.level = 6
+    progressed.survivor.spent = 1
+    yes(f.stateStore.save(p, progressed).ok, "consume " .. item[1] .. " progress saved")
+    eq(f.session.initialize(p).outcome, "existing", "consume " .. item[1] .. " retry adopts state")
+    eq(f.stateStore.load(p).state.survivor.level, 6,
+        "consume " .. item[1] .. " retry preserves later level")
+    eq(f.stateStore.load(p).state.survivor.spent, 1,
+        "consume " .. item[1] .. " retry preserves later AP")
+    eq(attempts, 1, "consume " .. item[1] .. " retry does not deliberately reapply")
+end
 
 do
     local f = fixture()
@@ -375,6 +461,7 @@ do
     local oldPlayer = player(0)
     local newerPlayer = player(0)
     local putAttempts = 0
+    local oldMarkerAttempts = 0
     local touches = 0
     local f = fixture(function(dependencies)
         local underlyingCharacter = dependencies.characterStore
@@ -394,7 +481,10 @@ do
             markDeathRecorded = function(actual, ...)
                 touches = touches + 1
                 if actual == oldPlayer then
-                    return { ok = false, code = "marker_failed", detail = "write" }
+                    oldMarkerAttempts = oldMarkerAttempts + 1
+                    if oldMarkerAttempts == 1 then
+                        return { ok = false, code = "marker_failed", detail = "write" }
+                    end
                 end
                 return underlyingCharacter.markDeathRecorded(actual, ...)
             end,
@@ -454,14 +544,14 @@ do
     eq(markerFailed.committed, true, "post-put marker failure reports committed pending write")
     eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 5,
         "marker failure preserves committed pending record")
+    local repaired = f.session.recordDeath(oldPlayer)
+    yes(repaired.ok and repaired.recorded, "marker failure retry repairs durable death marker")
     yes(f.session.recordDeath(newerPlayer).recorded, "different character records newer death")
     eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 9,
         "different character overwrites with newer level")
 
-    local touchesBeforeReplay = touches
     local replay = f.session.recordDeath(oldPlayer)
     yes(replay.ok and replay.alreadyRecorded, "guarded old replay is successful no-op")
-    eq(touches, touchesBeforeReplay, "guarded replay touches no inheritance dependency")
     eq(f.recordStore.peek({ kind = "sp", profileIndex = 0 }).record.deadSurvivorLevel, 9,
         "guarded old replay leaves newer record untouched")
 end

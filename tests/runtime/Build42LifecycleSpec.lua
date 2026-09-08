@@ -34,7 +34,7 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
     local calls = {}
     local debugCalls = 0
     local specificPlayers, specificPlayerCalls = {}, {}
-    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnMiniScoreboardUpdate = event(), OnTick = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event(), OnNewGame = event(), OnCharacterDeath = event() }
+    local events = { OnServerStarted = event(), OnClientCommand = event(), OnCreatePlayer = event(), OnMiniScoreboardUpdate = event(), OnTick = event(), OnServerCommand = event(), OnDisconnect = event(), OnGameStart = event(), OnNewGame = event(), OnCharacterDeath = event(), EveryOneMinute = event() }
     local session = {
         ready = function(player) calls[#calls + 1] = { "ready", player }; return { ok = true, snapshot = { marker = player, ready = true, revision = 0 } } end,
         snapshot = function(player) calls[#calls + 1] = { "snapshot", player }; return { ok = true, snapshot = { marker = player } } end,
@@ -128,6 +128,7 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
             } }
         end,
         status = function() return { ok = true, pending = false } end,
+        expire = function() return { ok = true } end,
         resetSlot = function(slot) calls[#calls + 1] = { "adv_reset_slot", slot }; return { ok = true } end,
         reset = function() calls[#calls + 1] = { "adv_reset" }; return { ok = true } end,
     }
@@ -147,6 +148,7 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
             } }
         end,
         status = function() return { ok = true, pending = false } end,
+        expire = function() return { ok = true } end,
         resetSlot = function(slot) calls[#calls + 1] = { "admin_reset_slot", slot }; return { ok = true } end,
         reset = function() calls[#calls + 1] = { "admin_reset" }; return { ok = true } end,
     }
@@ -277,10 +279,10 @@ do
     yes(created.ok, "server creates")
     exactKeys(created.owner, {
         install = true, status = true, clientState = true,
-        refreshOwner = true, setClientStateListener = true,
+        refreshOwner = true, setClientStateListener = true, setAdminResultListener = true,
         requestAdvancement = true, advancementStatus = true,
         requestAdmin = true, adminStatus = true,
-    }, 9, "exact owner API")
+    }, 10, "exact owner API")
     eq(f.clientCreates(), 0, "server creates no client transport")
     eq(f.factoryCalls(), 0, "server construction is inert")
     eq(f.events.OnServerStarted.adds(), 0, "server construction registers no event")
@@ -2845,4 +2847,167 @@ if bootstrapEvidence ~= nil then
     eq(indexedOwner.code, "lifecycle_sentinel_collision", "bootstrap indexed owner is collision")
 end
 
+do
+    local order = {}
+    local created, f = fixture(false, true)
+    created.owner.install()
+    acknowledge(f, 0, {})
+    created.owner.setAdminResultListener(function(slot, kind, terminal)
+        order[#order + 1] = "admin"
+        if kind == "admin_terminal" then
+            yes(type(terminal) == "table" and type(terminal.requestId) == "string",
+                "admin listener receives detached correlated terminal")
+        end
+    end)
+    created.owner.setClientStateListener(function(slot, kind)
+        if kind == "admin_terminal" then
+            order[#order + 1] = "ui"
+            created.owner.requestAdmin(slot, { operation = "inspect", target = { username = "Other" } })
+        end
+    end)
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "adminResult", {})
+    eq(order[1], "admin", "matched admin callback precedes unrelated UI reentrant request")
+    eq(order[2], "ui", "existing UI listener remains chained")
+    f.events.OnDisconnect.fire()
+    eq(order[#order], "admin", "disconnect notifies admin capture reset")
+    no(created.owner.setAdminResultListener({}).ok, "admin listener rejects nonfunction")
+    yes(created.owner.setAdminResultListener(nil).ok, "admin listener can be cleared")
+end
+
+do
+    local player, notices = {}, {}
+    local timeout = {
+        ok = false, requestId = "admin:inspect-timeout", operation = "inspect",
+        target = { username = "Target" }, code = "response_timeout",
+        detail = "server response", committed = false,
+    }
+    local created, f = fixture(false, true, function(values)
+        values.adminClient.status = function(slot)
+            if slot == 0 then return { ok = true, pending = false, result = timeout } end
+            return { ok = true, pending = false }
+        end
+    end)
+    yes(created.owner.install().ok, "read-only timeout fixture installs")
+    created.owner.setAdminResultListener(function(slot, kind, terminal)
+        notices[#notices + 1] = { slot, kind, terminal }
+    end)
+    f.specificPlayers[0] = player
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(notices[1][1], 0, "read-only timeout retains local slot")
+    eq(notices[1][2], "admin_terminal", "read-only timeout reaches wrapper listener")
+    eq(notices[1][3].committed, false, "read-only timeout stays safe for native fallback")
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(#notices, 1, "read-only timeout is not repeatedly delivered")
+end
+
+do
+    local player, notices, refreshCalls = {}, {}, 0
+    local timeout = {
+        ok = false, requestId = "admin:mutation-timeout", operation = "awardSurvivorXp",
+        target = { onlineId = 17, username = "Target" }, code = "response_timeout",
+        detail = "server response", committed = true,
+    }
+    local created, f = fixture(false, true, function(values)
+        values.adminClient.status = function(slot)
+            if slot == 0 then return { ok = true, pending = false, result = timeout } end
+            return { ok = true, pending = false }
+        end
+        values.localClient.refresh = function(slot, refreshedPlayer)
+            refreshCalls = refreshCalls + 1
+            if refreshCalls == 2 then return { ok = false, code = "refresh_pending", detail = "localSlot" } end
+            return { ok = true }
+        end
+        values.localClient.handle = function(_, _, args)
+            if args == "old" then
+                return { ok = true, handled = true, accepted = false, code = "stale_snapshot", localSlot = 0 }
+            end
+            return { ok = true, handled = true, accepted = true, localSlot = 0 }
+        end
+    end)
+    yes(created.owner.install().ok, "mutation timeout fixture installs")
+    created.owner.setAdminResultListener(function(slot, kind, terminal)
+        notices[#notices + 1] = { slot, kind, terminal }
+    end)
+    acknowledge(f, 0, player)
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(refreshCalls, 1, "uncertain mutation requests authoritative refresh")
+    local pending = created.owner.adminStatus(0)
+    yes(pending.pending, "uncertain mutation remains pending through refresh")
+    eq(created.owner.requestAdmin(0, { operation = "inspect" }).code, "reconciliation_pending",
+        "uncertain mutation cannot reuse stale owner revision")
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", "old")
+    eq(notices[#notices][2], "reset", "late prior refresh reply cannot release mutation gate")
+    f.events.OnMiniScoreboardUpdate.fire()
+    eq(refreshCalls, 3, "unanswered owner refresh retries on existing cadence")
+    f.events.OnServerCommand.fire("SurvivorLevelingAdvancement", "ownerSnapshot", "current")
+    eq(notices[#notices][2], "admin_terminal", "refreshed mutation releases one terminal")
+    local terminal = created.owner.adminStatus(0)
+    eq(terminal.result.requestId, "admin:mutation-timeout", "terminal remains observable after refresh")
+    eq(refreshCalls, 3, "settled timeout cannot start another refresh")
+end
+
+do
+    local lookups, connected = 0, {}
+    local created, f = fixture(true, false, function(values)
+        values.globals.getPlayerByOnlineID = function(onlineId)
+            lookups = lookups + 1
+            return connected[onlineId]
+        end
+    end)
+    yes(created.owner.install().ok, "server disconnect roster installs")
+    f.events.OnServerStarted.fire()
+    local players = {}
+    for id = 1, 33 do
+        local onlineId = id
+        local player = { getOnlineID = function() return onlineId end }
+        players[id], connected[id] = player, player
+        f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", player, {})
+    end
+    connected[2] = { getOnlineID = function() return 2 end }
+    connected[3] = nil
+    f.events.EveryOneMinute.fire()
+    eq(lookups, 32, "server cleanup resolves at most thirty-two active players per minute")
+    local clears = callsNamed(f.calls, "server_clear")
+    yes(#clears >= 2, "replacement and disconnect clear stale authoritative player state")
+    eq(clears[#clears - 1][2], players[2], "same online ID replacement clears prior exact player")
+    eq(clears[#clears][2], players[3], "missing online ID clears disconnected exact player")
+end
+
+do
+    local connected, lookups, clearCalls, clearSucceeds, lookupThrows = {}, 0, 0, false, true
+    local created, f = fixture(true, false, function(values)
+        values.globals.getPlayerByOnlineID = function(onlineId)
+            lookups = lookups + 1
+            if lookupThrows then error("resolver unavailable") end
+            return connected[onlineId]
+        end
+        values.serverTransport.clearPlayer = function(player)
+            clearCalls = clearCalls + 1
+            return clearSucceeds and { ok = true } or { ok = false, code = "retry", detail = "ownerSession" }
+        end
+    end)
+    yes(created.owner.install().ok, "bounded cleanup retry fixture installs")
+    f.events.OnServerStarted.fire()
+    local player = { getOnlineID = function() return 91 end }
+    connected[91] = player
+    f.events.OnClientCommand.fire("SurvivorLevelingAdvancement", "ownerReady", player, {})
+    connected[91] = nil
+    f.events.EveryOneMinute.fire()
+    eq(lookups, 1, "one-entry roster performs one lookup per callback")
+    eq(clearCalls, 0, "throwing lookup preserves uncertain player route")
+    lookupThrows = false
+    f.events.EveryOneMinute.fire()
+    eq(clearCalls, 1, "disconnected player receives one cleanup attempt")
+    f.events.EveryOneMinute.fire()
+    eq(clearCalls, 2, "failed cleanup remains tracked for bounded retry")
+    clearSucceeds = true
+    f.events.EveryOneMinute.fire()
+    eq(clearCalls, 3, "successful retry releases disconnected route")
+    f.events.EveryOneMinute.fire()
+    eq(clearCalls, 3, "released route is no longer retried")
+    f.events.OnCharacterDeath.fire(player)
+    eq(clearCalls, 4, "death clears pre-death owner state before recording the guard")
+    f.events.EveryOneMinute.fire()
+    eq(clearCalls, 5, "dead player remains tracked for later disconnect cleanup")
+end
 return assertions

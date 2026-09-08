@@ -213,7 +213,7 @@ do
     local ordinaryCodes = {
         "store_load_failed", "recovery_quarantined", "invalid_request", "resolver_failed", "adapter_description_failed",
         "adapter_inspection_failed", "adapter_identity_mismatch", "perk_quarantined", "observation_failed",
-        "stale_revision", "invalid_state", "no_ap", "misaligned_progression", "at_maximum", "red_recovery",
+        "stale_revision", "invalid_state", "no_ap", "misaligned_progression", "at_maximum",
         "target_rejected", "allotment_invalid", "allotment_rejected", "scope_begin_failed", "reservation_save_failed",
         "scope_finish_failed", "engine_mutation_failed", "post_inspection_failed", "commit_save_failed",
     }

@@ -14,6 +14,11 @@ local allowedRawKeys = {
     retainedRatio = true,
 }
 
+local allowedAwardKeys = {
+    survivorMultiplier = true, fitnessStrengthNormalization = true,
+    automaticCurveNormalization = true, survivorXpEnabled = true, allotmentMode = true,
+}
+
 local function isFiniteNumber(value)
     return type(value) == "number"
         and value == value
@@ -194,6 +199,9 @@ function WorldSettings.create(dependencies)
         return failed("invalid_provider", "provider.read must be a function")
     end
 
+    if provider.readAward ~= nil and type(provider.readAward) ~= "function" then
+        return failed("invalid_provider", "provider.readAward must be a function")
+    end
     local normalizationByPerk = copyNormalization(dependencies.normalizationByPerk)
     if normalizationByPerk == nil then
         return failed("invalid_normalization", "normalizationByPerk must be a safe finite map")
@@ -224,14 +232,36 @@ function WorldSettings.create(dependencies)
     local awardSettings = {}
 
     function awardSettings.resolve(_, perkId)
-        local raw, code, detail = resolveRaw(perkId)
-        if raw == nil then
-            return failed(code, detail)
+        local raw, code, detail
+        if provider.readAward ~= nil then
+            if not isSafePerkId(perkId) then return failed("invalid_perk_id", "perkId is unsafe") end
+            if normalizationByPerk[perkId] == nil then return failed("unknown_perk", "perkId is not published") end
+            local called
+            called, raw = pcall(provider.readAward, perkId)
+            if not called then return failed("provider_failure", "provider.readAward failed") end
+            if not noMetatable(raw) then return failed("invalid_settings", "invalid award settings") end
+            for key in pairs(raw) do
+                if not allowedAwardKeys[key] then return failed("invalid_settings", "unexpected award setting") end
+            end
+            if not isFiniteNumber(raw.survivorMultiplier) or raw.survivorMultiplier < 0
+                or not isFiniteNumber(raw.fitnessStrengthNormalization) or raw.fitnessStrengthNormalization < 0
+                or type(raw.automaticCurveNormalization) ~= "boolean"
+                or type(raw.survivorXpEnabled) ~= "boolean"
+                or (raw.allotmentMode ~= "Global" and raw.allotmentMode ~= "PerSkill"
+                    and raw.allotmentMode ~= "Free") then
+                return failed("invalid_settings", "invalid award settings")
+            end
+        else
+            raw, code, detail = resolveRaw(perkId)
+            if raw == nil then return failed(code, detail) end
         end
 
         local normalization = 1
-        local survivorXpEnabled = raw.perSkillSurvivorXpEnabled[perkId]
-        if survivorXpEnabled == nil then survivorXpEnabled = raw.customSkillSurvivorXpEnabled end
+        local survivorXpEnabled = raw.survivorXpEnabled
+        if provider.readAward == nil then
+            survivorXpEnabled = raw.perSkillSurvivorXpEnabled[perkId]
+            if survivorXpEnabled == nil then survivorXpEnabled = raw.customSkillSurvivorXpEnabled end
+        end
         if not survivorXpEnabled then
             normalization = 0
         elseif perkId == "Fitness" or perkId == "Strength" then

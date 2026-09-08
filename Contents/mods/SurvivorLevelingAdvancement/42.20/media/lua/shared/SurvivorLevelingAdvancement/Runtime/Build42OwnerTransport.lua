@@ -9,6 +9,7 @@ local MAX_CORRELATION_LENGTH = 64
 local MAX_CODE_LENGTH = 64
 local MAX_DETAIL_LENGTH = 160
 local MAX_SAFE_INTEGER = 9007199254740991
+local REFRESH_TIMEOUT_MILLISECONDS = 15000
 
 local REQUEST_FIELDS = { protocolVersion = true, correlationId = true }
 local SUCCESS_FIELDS = {
@@ -245,8 +246,7 @@ function Build42OwnerTransport.createServer(dependencies)
         return failure("invalid_dependencies", "sendServerCommand")
     end
 
-    local bindings = setmetatable({}, { __mode = "k" })
-    local readiness = setmetatable({}, { __mode = "k" })
+    local bindings, readiness = {}, {}
     local server = {}
 
     function server.handle(module, command, player, args)
@@ -419,7 +419,10 @@ function Build42OwnerTransport.createClient(dependencies)
         if entry == nil and create then
             local inbox, createFailure = createInbox()
             if inbox == nil then return nil, createFailure end
-            entry = { inbox = inbox, pending = nil, active = nil, refreshPending = false, failure = nil }
+            entry = {
+                inbox = inbox, pending = nil, active = nil, refreshPending = false,
+                refreshStartedAt = nil, failure = nil,
+            }
             slots[localSlot] = entry
         end
         return entry
@@ -484,15 +487,30 @@ function Build42OwnerTransport.createClient(dependencies)
             if not retried.ok then return retried end
             return { ok = true }
         end
-        if entry.refreshPending then return failure("refresh_pending", "localSlot") end
+        if entry.refreshPending then
+            local now = readTime()
+            if now == nil then return failure("refresh_pending", "localSlot") end
+            if entry.refreshStartedAt == nil then
+                entry.refreshStartedAt = now
+                return failure("refresh_pending", "localSlot")
+            end
+            if now < entry.refreshStartedAt then entry.refreshStartedAt = now end
+            if now - entry.refreshStartedAt < REFRESH_TIMEOUT_MILLISECONDS then
+                return failure("refresh_pending", "localSlot")
+            end
+            local retried = client.ready(localSlot, player)
+            if not retried.ok then return retried end
+            return { ok = true }
+        end
 
         entry.refreshPending = true
+        entry.refreshStartedAt = readTime()
         local sent = sendClient(send, player, REFRESH_COMMAND, {
             protocolVersion = PROTOCOL_VERSION,
             correlationId = entry.active,
         })
         if not sent.ok then
-            entry.refreshPending = false
+            entry.refreshPending, entry.refreshStartedAt = false, nil
             entry.failure = { code = sent.code, detail = sent.detail }
             return sent
         end
@@ -523,7 +541,7 @@ function Build42OwnerTransport.createClient(dependencies)
                 routes[response.correlationId] = nil
                 entry.pending = nil
             end
-            if route.phase == "active" then entry.refreshPending = false end
+            if route.phase == "active" then entry.refreshPending, entry.refreshStartedAt = false, nil end
             entry.failure = { code = response.code, detail = response.detail }
             return {
                 ok = true,
@@ -541,7 +559,7 @@ function Build42OwnerTransport.createClient(dependencies)
         end
         if not accepted.accepted then
             local code = safeId(accepted.code, MAX_CODE_LENGTH) and accepted.code or "not_accepted"
-            if route.phase == "active" then entry.refreshPending = false end
+            if route.phase == "active" then entry.refreshPending, entry.refreshStartedAt = false, nil end
             return { ok = true, handled = true, accepted = false, code = code, localSlot = route.slot }
         end
 
@@ -551,7 +569,7 @@ function Build42OwnerTransport.createClient(dependencies)
         entry.pending = nil
         entry.active = response.correlationId
         route.phase = "active"
-        entry.refreshPending = false
+        entry.refreshPending, entry.refreshStartedAt = false, nil
         entry.failure = nil
         local result = { ok = true, handled = true, accepted = true, localSlot = route.slot }
         if rawget(response, "completion") ~= nil then
@@ -580,7 +598,7 @@ function Build42OwnerTransport.createClient(dependencies)
         local resetResult, resetFailure = inboxCall(entry.inbox, "reset")
         if resetResult == nil then return resetFailure end
         removeRoutes(entry)
-        entry.refreshPending = false
+        entry.refreshPending, entry.refreshStartedAt = false, nil
         entry.failure = nil
         return { ok = true }
     end

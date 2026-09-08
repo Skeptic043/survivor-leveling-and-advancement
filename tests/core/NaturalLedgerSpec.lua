@@ -45,16 +45,13 @@ equal(baseline.ok, true, "baseline succeeds")
 sameLedger(baseline.state, ledger(100, 100), "baseline")
 local inspection = NaturalLedger.inspect(baseline.state)
 equal(inspection.ok, true, "inspection succeeds")
-equal(inspection.red, false, "baseline is not red")
-equal(inspection.recoveryRemaining, 0, "baseline has no recovery")
 equal(inspection.activeCount, 0, "baseline has no targets")
 
 local zeroInput = ledger(90, 100, { target("one", 2, 120) })
 local zeroTarget = zeroInput.activeTargets[1]
 local zero = NaturalLedger.applySupported(zeroInput, 0, 120)
 equal(zero.ok, true, "zero delta succeeds")
-sameLedger(zero.state, zeroInput, "zero delta")
-equal(zero.effect.recoveryApplied, 0, "zero recovery")
+sameLedger(zero.state, ledger(90, 90, zeroInput.activeTargets), "zero delta retires historical high water")
 equal(zero.effect.eligibleApplied, 0, "zero eligibility")
 equal(zero.effect.eligibleRatio, 0, "zero ratio")
 equal(#zero.effect.clearedTargetIds, 0, "zero clears nothing")
@@ -78,32 +75,25 @@ failed(NaturalLedger.applySupported(baseline.state, 1, math.huge), "NON_FINITE_N
 
 local loss = NaturalLedger.applySupported(baseline.state, -150, 0)
 equal(loss.ok, true, "loss succeeds")
-sameLedger(loss.state, ledger(0, 100), "loss clamps at zero")
-equal(loss.effect.recoveryApplied, 0, "loss does not recover")
+sameLedger(loss.state, ledger(0, 0), "loss clamps at zero")
 equal(loss.effect.eligibleApplied, 0, "loss is not eligible")
 equal(loss.effect.eligibleRatio, 0, "loss ratio is zero")
-local redInspection = NaturalLedger.inspect(loss.state)
-equal(redInspection.red, true, "loss creates red")
-equal(redInspection.recoveryRemaining, 100, "loss creates exact recovery")
 
 local partial = NaturalLedger.applySupported(loss.state, 40, 40)
-equal(partial.ok, true, "partial recovery succeeds")
-sameLedger(partial.state, ledger(40, 100), "partial recovery")
-equal(partial.effect.recoveryApplied, 40, "partial recovery amount")
-equal(partial.effect.eligibleApplied, 0, "partial recovery is ineligible")
-equal(partial.effect.eligibleRatio, 0, "partial recovery ratio")
+equal(partial.ok, true, "partial regained XP succeeds")
+sameLedger(partial.state, ledger(40, 40), "partial regained XP")
+equal(partial.effect.eligibleApplied, 40, "regained XP is fully eligible")
+equal(partial.effect.eligibleRatio, 1, "partial regained XP ratio")
 local complete = NaturalLedger.applySupported(partial.state, 60, 100)
-equal(complete.ok, true, "complete recovery succeeds")
-sameLedger(complete.state, ledger(100, 100), "complete recovery")
-equal(complete.effect.recoveryApplied, 60, "complete recovery amount")
-equal(complete.effect.eligibleApplied, 0, "complete recovery is ineligible")
+equal(complete.ok, true, "fully regained XP succeeds")
+sameLedger(complete.state, ledger(100, 100), "fully regained XP")
+equal(complete.effect.eligibleApplied, 60, "re-earned XP at the old boundary is fully eligible")
 
 local split = NaturalLedger.applySupported(ledger(70, 100), 50, 120)
-equal(split.ok, true, "split recovery award succeeds")
-sameLedger(split.state, ledger(120, 120), "split recovery award")
-equal(split.effect.recoveryApplied, 30, "split recovery portion")
-equal(split.effect.eligibleApplied, 20, "split eligible portion")
-equal(split.effect.eligibleRatio, 0.4, "split eligible ratio")
+equal(split.ok, true, "old-boundary crossing award succeeds")
+sameLedger(split.state, ledger(120, 120), "old-boundary crossing award")
+equal(split.effect.eligibleApplied, 50, "split eligible portion")
+equal(split.effect.eligibleRatio, 1, "split eligible ratio")
 
 local orderedState = ledger(100, 100, {
     target("first", 2, 110),
@@ -158,12 +148,11 @@ failed(NaturalLedger.appendTarget(appendInput, target("infinite", 3, math.huge),
 
 local externalLoss = NaturalLedger.reconcileExternal(baseline.state, -40, 60)
 equal(externalLoss.ok, true, "external loss succeeds")
-sameLedger(externalLoss.state, ledger(60, 100), "external loss")
+sameLedger(externalLoss.state, ledger(60, 60), "external loss")
 equal(externalLoss.effect.eligibleApplied, 0, "external loss is ineligible")
 local externalGain = NaturalLedger.reconcileExternal(externalLoss.state, 50, 110)
 equal(externalGain.ok, true, "external gain succeeds")
-sameLedger(externalGain.state, ledger(110, 110), "external recovery and gain")
-equal(externalGain.effect.recoveryApplied, 40, "external gain restores recovery")
+sameLedger(externalGain.state, ledger(110, 110), "external gain after loss")
 equal(externalGain.effect.eligibleApplied, 0, "external gain is ineligible")
 equal(externalGain.effect.eligibleRatio, 0, "external gain ratio is zero")
 local externalClear = NaturalLedger.reconcileExternal(ledger(100, 100, { target("external", 2, 110) }), 15, 130)
@@ -179,7 +168,6 @@ local masteryInput = ledger(25, 50, {
 local mastery = NaturalLedger.master(masteryInput, 450)
 equal(mastery.ok, true, "mastery succeeds")
 sameLedger(mastery.state, ledger(450, 450), "mastery exact maximum")
-equal(mastery.effect.recoveryApplied, 0, "mastery has no recovery")
 equal(mastery.effect.eligibleApplied, 0, "mastery has no eligibility")
 equal(mastery.effect.eligibleRatio, 0, "mastery has zero ratio")
 equal(#mastery.effect.clearedTargetIds, 2, "mastery clears complete chain")
@@ -198,11 +186,12 @@ equal(#emptyMastery.effect.clearedTargetIds, 0, "empty mastery clears nothing")
 failed(NaturalLedger.master(nil, 9), "MALFORMED_STATE", "mastery missing state")
 failed(NaturalLedger.master(ledger(0, 0), -1), "INCONSISTENT_POSITION", "mastery negative maximum")
 failed(NaturalLedger.master(ledger(0, 0), math.huge), "NON_FINITE_NUMBER", "mastery infinite maximum")
-failed(NaturalLedger.master(ledger(50, 100), 99), "POSITION_BEHIND_HIGH_WATER", "mastery cannot lower high water")
+equal(NaturalLedger.master(ledger(50, 100), 99).ok, true, "legacy high water cannot block mastery")
+failed(NaturalLedger.master(ledger(50, 100), 49), "INCONSISTENT_POSITION", "mastery cannot lower natural position")
 
 failed(NaturalLedger.applySupported(baseline.state, 10, 115), "INCONSISTENT_POSITION", "inconsistent delta and position")
-failed(NaturalLedger.applySupported(ledger(100, 100, { target("ahead", 2, 200) }), 20, 110), "POSITION_BEHIND_HIGH_WATER", "actual behind earned high water")
-failed(NaturalLedger.applySupported(ledger(80, 100, { target("ahead", 2, 200) }), 10, 85), "INCONSISTENT_POSITION", "active recovery position behind movement")
+failed(NaturalLedger.applySupported(ledger(100, 100, { target("ahead", 2, 200) }), 20, 110), "INCONSISTENT_POSITION", "actual behind natural movement")
+failed(NaturalLedger.applySupported(ledger(80, 100, { target("ahead", 2, 200) }), 10, 85), "INCONSISTENT_POSITION", "active blue position behind natural movement")
 
 local wholeRecovery = NaturalLedger.applySupported(
     NaturalLedger.applySupported(baseline.state, -60, 40).state,
@@ -212,23 +201,18 @@ local wholeRecovery = NaturalLedger.applySupported(
 local chunkedRecovery = baseline.state
 chunkedRecovery = NaturalLedger.applySupported(chunkedRecovery, -20, 80).state
 chunkedRecovery = NaturalLedger.applySupported(chunkedRecovery, -40, 40).state
-local recoveryTotal = 0
 local eligibleTotal = 0
 local chunk
 chunk = NaturalLedger.applySupported(chunkedRecovery, 10, 50)
 chunkedRecovery = chunk.state
-recoveryTotal = recoveryTotal + chunk.effect.recoveryApplied
 eligibleTotal = eligibleTotal + chunk.effect.eligibleApplied
 chunk = NaturalLedger.applySupported(chunkedRecovery, 30, 80)
 chunkedRecovery = chunk.state
-recoveryTotal = recoveryTotal + chunk.effect.recoveryApplied
 eligibleTotal = eligibleTotal + chunk.effect.eligibleApplied
 chunk = NaturalLedger.applySupported(chunkedRecovery, 40, 120)
 chunkedRecovery = chunk.state
-recoveryTotal = recoveryTotal + chunk.effect.recoveryApplied
 eligibleTotal = eligibleTotal + chunk.effect.eligibleApplied
-sameLedger(chunkedRecovery, wholeRecovery.state, "loss and recovery chunk equivalence")
-equal(recoveryTotal, wholeRecovery.effect.recoveryApplied, "chunked recovery total")
+sameLedger(chunkedRecovery, wholeRecovery.state, "loss and regained XP chunk equivalence")
 equal(eligibleTotal, wholeRecovery.effect.eligibleApplied, "chunked eligibility total")
 
 local thresholdStart = ledger(100, 100, {
@@ -257,4 +241,19 @@ equal(#cleared, #wholeThreshold.effect.clearedTargetIds, "chunked clear count")
 equal(cleared[1], wholeThreshold.effect.clearedTargetIds[1], "chunked first clear order")
 equal(cleared[2], wholeThreshold.effect.clearedTargetIds[2], "chunked second clear order")
 
+local oldDebtPurchase = NaturalLedger.appendTarget(ledger(50, 200), target("new-after-loss", 2, 100), 10)
+equal(oldDebtPurchase.ok, true, "old debt does not block a new target below historical H")
+sameLedger(oldDebtPurchase.state, ledger(50, 50, { target("new-after-loss", 2, 100) }), "new purchase preserves natural debt")
+local lostBlue = NaturalLedger.applySupported(ledger(100, 100, { target("blue", 3, 200) }), -40, 160)
+sameLedger(lostBlue.state, ledger(60, 60, { target("blue", 3, 200) }), "loss increases blue catch-up")
+local restoredBlue = NaturalLedger.appendTarget(lostBlue.state, target("restore", 3, 200), 10)
+equal(restoredBlue.ok, true, "blue restoration after loss succeeds")
+equal(restoredBlue.added, false, "blue restoration occupies no extra slot")
+local reearnedBlue = NaturalLedger.applySupported(restoredBlue.state, 40, 240)
+equal(reearnedBlue.effect.eligibleApplied, 40, "re-earned blue XP earns full Survivor credit")
+equal(#reearnedBlue.state.activeTargets, 1, "re-earned loss does not clear unfinished blue")
+local clearedBlue = NaturalLedger.applySupported(reearnedBlue.state, 100, 340)
+equal(#clearedBlue.state.activeTargets, 0, "blue clears at natural target")
+local lossAfterClear = NaturalLedger.applySupported(clearedBlue.state, -20, 320)
+equal(#lossAfterClear.state.activeTargets, 0, "cleared targets never resurrect")
 return assertions

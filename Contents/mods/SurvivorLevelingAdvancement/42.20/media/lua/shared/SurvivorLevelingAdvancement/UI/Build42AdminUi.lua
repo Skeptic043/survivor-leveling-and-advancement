@@ -58,6 +58,7 @@ local function validOwner(owner)
         clientState = true,
         refreshOwner = true,
         setClientStateListener = true,
+        setAdminResultListener = true,
         requestAdvancement = true,
         advancementStatus = true,
         requestAdmin = true,
@@ -714,6 +715,10 @@ function Build42AdminUi.create(dependencies)
         end
 
         if type(rawget(result, "committed")) ~= "boolean" then return false end
+        if rawget(result, "committed") and rawget(result, "code") == "response_timeout" then
+            state.summary = nil
+            state.target = nil
+        end
         state.message = localized(rawget(result, "committed")
             and "IGUI_SLA_Admin_CommittedFailure" or "IGUI_SLA_Admin_Failure")
         state.waiting = false

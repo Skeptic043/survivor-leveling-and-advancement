@@ -80,6 +80,7 @@ local function environment(options)
         store.state = copy(state)
         return { ok = true }
     end
+    function store.clearPlayer() return { ok = true } end
 
     local adapter = {}
     function adapter.describe(handle)
@@ -161,7 +162,7 @@ local function environment(options)
         ActualObservation = ActualObservation,
         xpSource = { initializePlayer = function()
             return { ok = true, detail = { initialized = 2, skipped = 0 } }
-        end },
+        end, clearPlayer = function() return { ok = true } end },
         ownerSnapshot = { project = function(state, sequence, ready)
             local perks = {}
             for perkId, perk in pairs(state.perks) do
@@ -181,7 +182,7 @@ local function environment(options)
         end },
         inheritanceSession = { initialize = function()
             return { ok = true, outcome = "existing", survivorLevel = 3, consumed = false }
-        end },
+        end, clearPlayer = function() return { ok = true } end },
     })
     expect(ownerCreated.ok, "owner session creation")
 

@@ -104,6 +104,9 @@ expectEqual(calls.saved, toFree.state, "save receives transition candidate")
 expectEqual(calls.order[1], "clear", "clear precedes save")
 expectEqual(calls.order[2], "save", "save follows clear")
 expectEqual(service.transitionGeneration(player).generation, 1, "successful transition advances generation once")
+expect(service.clearPlayer(player).ok, "accounting cleanup succeeds")
+expectEqual(service.transitionGeneration(player).generation, 0,
+    "accounting cleanup releases transition generation")
 tracked.perks.Axe.adapterId = "changed"
 expectEqual(toFree.state.perks.Axe.adapterId, "old", "later source mutation cannot change frozen candidate")
 

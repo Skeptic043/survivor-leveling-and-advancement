@@ -32,12 +32,14 @@ local function makeDependencies(overrides)
     local store = {
         load = function() return { ok = true, state = {} } end,
         save = function() return { ok = true } end,
+        clearPlayer = function() return { ok = true } end,
     }
     local characterInheritanceStore = {
         inspect = function() return { ok = true } end,
         tokenNewCharacter = function() return { ok = true } end,
         markInitialized = function() return { ok = true } end,
         markDeathRecorded = function() return { ok = true } end,
+        clearPlayer = function() return { ok = true } end,
     }
     local inheritanceRecordStore = {
         peek = function() return { ok = true, found = false } end,
@@ -48,6 +50,7 @@ local function makeDependencies(overrides)
         tokenNewCharacter = function() return { ok = true } end,
         initialize = function() return { ok = true } end,
         recordDeath = function() return { ok = true } end,
+        clearPlayer = function() return { ok = true } end,
     }
     local apService = {
         spend = function() return { ok = true } end,
@@ -56,6 +59,7 @@ local function makeDependencies(overrides)
     }
     local accountingMode = {
         synchronizeLoaded = function() return { ok = true } end,
+        clearPlayer = function() return { ok = true } end,
     }
     local ownerSnapshot = {
         project = function() return { ok = true, snapshot = {} } end,
@@ -92,6 +96,7 @@ local function makeDependencies(overrides)
         install = function() return { ok = true } end,
         initializePlayer = function() return { ok = true } end,
         rebasePlayerPerk = function() return { ok = true } end,
+        clearPlayer = function() return { ok = true } end,
         status = function() return { ok = true } end,
     }
     local settings = {
@@ -395,11 +400,11 @@ do
         adminDependencyCount = adminDependencyCount + 1
         assertTrue(
             key == "store" or key == "catalog" or key == "ownerSession" or key == "SurvivorEconomy"
-                or key == "NaturalLedger" or key == "ActualObservation",
+                or key == "NaturalLedger" or key == "ActualObservation" or key == "xpSource",
             "admin dependency allowlist"
         )
     end
-    assertEqual(adminDependencyCount, 6, "admin receives six dependencies only")
+    assertEqual(adminDependencyCount, 7, "admin receives seven dependencies only")
     assertSame(result.services.store, fixture.store, "result store")
     assertSame(result.services.worldSettings, fixture.worldSettings, "result settings")
     assertSame(result.services.accountingMode, fixture.accountingMode, "result accounting mode")

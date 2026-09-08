@@ -269,7 +269,6 @@ function ServerPlayerRecordStore.create(dependencies)
         or type(generateIncarnationId) ~= "function" then
         return failure("invalid_dependencies", "store capabilities required")
     end
-    local scopedRoots = setmetatable({}, { __mode = "k" })
     local sourceGenerator = generateIncarnationId
     local generationGuard = {}
     generateIncarnationId = function(context)
@@ -284,7 +283,47 @@ function ServerPlayerRecordStore.create(dependencies)
     local decode, encode = codec.decode, codec.encode
     local resolveIdentity, loadLegacy, inspectLegacy = identity.resolve,
         legacyStateStore.load, legacyCharacterStore.inspect
-    local completedPlayers = setmetatable({}, { __mode = "k" })
+    local completedPlayers = {}
+    local completedByOwner = {}
+    local completedOwnerByPlayer = {}
+
+    local function clearCompleted(owner, player)
+        local username = owner.primaryLoginUsername
+        local bucket = completedByOwner[username]
+        if bucket ~= nil then
+            local completed = bucket[owner.profileIndex]
+            if completed ~= nil then
+                completedPlayers[completed] = nil
+                completedOwnerByPlayer[completed] = nil
+            end
+            bucket[owner.profileIndex] = nil
+            if empty(bucket) then completedByOwner[username] = nil end
+        end
+        if player ~= nil then
+            completedPlayers[player] = nil
+            completedOwnerByPlayer[player] = nil
+        end
+    end
+
+    local function recordCompleted(owner, player)
+        local username = owner.primaryLoginUsername
+        local bucket = completedByOwner[username]
+        if bucket == nil then
+            bucket = {}
+            completedByOwner[username] = bucket
+        end
+        local prior = bucket[owner.profileIndex]
+        if prior ~= nil and prior ~= player then
+            completedPlayers[prior] = nil
+            completedOwnerByPlayer[prior] = nil
+        end
+        bucket[owner.profileIndex] = player
+        completedPlayers[player] = true
+        completedOwnerByPlayer[player] = {
+            primaryLoginUsername = owner.primaryLoginUsername,
+            profileIndex = owner.profileIndex,
+        }
+    end
 
     local function resolve(player)
         local called, result = pcall(resolveIdentity, player)
@@ -326,8 +365,7 @@ function ServerPlayerRecordStore.create(dependencies)
         return true
     end
 
-    local function writeRoot(root)
-        local scope = scopedRoots[root]
+    local function writeRoot(root, scope)
         local target, previous = root, nil
         if scope ~= nil then
             local readCalled, current = pcall(getOrCreate, NAMESPACE)
@@ -370,10 +408,10 @@ function ServerPlayerRecordStore.create(dependencies)
         for _, record in pairs(copied.players[username] or {}) do
             generationGuard[record.incarnationId] = true
         end
-        scopedRoots[copied] = { root = raw, players = raw.players,
+        local scope = { root = raw, players = raw.players,
             username = username, previous = profiles, worldId = raw.worldId,
             stamps = accountStamp(profiles) }
-        return copied, nil
+        return copied, nil, scope
     end
 
     local function readRoot(owner)
@@ -450,7 +488,7 @@ function ServerPlayerRecordStore.create(dependencies)
         return rawget(data, LEGACY_STATE_NAMESPACE) ~= nil
     end
 
-    local function adoptLegacy(player, owner, root, options)
+    local function adoptLegacy(player, owner, root, scope, options)
         if not legacyPresent(player) then return nil, nil end
         local called, loaded = pcall(loadLegacy, player, options)
         if not called or type(loaded) ~= "table" or rawget(loaded, "ok") ~= true
@@ -480,7 +518,7 @@ function ServerPlayerRecordStore.create(dependencies)
             persistenceRevision = safeRevision(rawget(loaded.state, "revision"))
                 and rawget(loaded.state, "revision") or 0,
         }
-        local written = writeRoot(root)
+        local written = writeRoot(root, scope)
         if not written.ok then return nil, written end
         return encoded.state, nil
     end
@@ -490,7 +528,7 @@ function ServerPlayerRecordStore.create(dependencies)
     function stateStore.load(player, options)
         local owner, ownerFailure = resolve(player)
         if owner == nil then return ownerFailure end
-        local root, rootFailure = readRoot(owner)
+        local root, rootFailure, scope = readRoot(owner)
         if root == nil then return rootFailure end
         local profiles, profileIndex = locate(root, owner, false)
         local record = profiles and profiles[profileIndex] or nil
@@ -499,7 +537,7 @@ function ServerPlayerRecordStore.create(dependencies)
             if state == nil then return stateFailure end
             return { ok = true, state = state }
         end
-        local adopted, adoptionFailure = adoptLegacy(player, owner, root, options)
+        local adopted, adoptionFailure = adoptLegacy(player, owner, root, scope, options)
         if adoptionFailure ~= nil then return adoptionFailure end
         if adopted ~= nil then
             local state, stateFailure = decodeRecord({ state = adopted }, options)
@@ -525,7 +563,7 @@ function ServerPlayerRecordStore.create(dependencies)
             or type(rawget(encoded, "state")) ~= "table" then
             return failure("codec_encode_failed", "codec.encode")
         end
-        local root, rootFailure = readRoot(owner)
+        local root, rootFailure, scope = readRoot(owner)
         if root == nil then return rootFailure end
         local profiles, profileIndex = locate(root, owner, false)
         local current = profiles and profiles[profileIndex] or nil
@@ -570,8 +608,28 @@ function ServerPlayerRecordStore.create(dependencies)
             incarnationId = incarnationId, persistenceRevision = persistenceRevision + 1,
             mailbox = nextMailbox,
         }
-        local written = writeRoot(root)
+        local written = writeRoot(root, scope)
         if not written.ok then return written end
+        if replacing then clearCompleted(owner, player) end
+        return { ok = true }
+    end
+
+    function stateStore.clearPlayer(player)
+        if player == nil then return failure("invalid_player", "player object required") end
+        local owner = completedOwnerByPlayer[player]
+        if owner == nil then owner = resolve(player) end
+        if owner ~= nil then
+            local bucket = completedByOwner[owner.primaryLoginUsername]
+            if bucket ~= nil and bucket[owner.profileIndex] == player then
+                clearCompleted(owner, player)
+            else
+                completedPlayers[player] = nil
+                completedOwnerByPlayer[player] = nil
+            end
+        else
+            completedPlayers[player] = nil
+            completedOwnerByPlayer[player] = nil
+        end
         return { ok = true }
     end
 
@@ -621,7 +679,7 @@ function ServerPlayerRecordStore.create(dependencies)
     local function updateMetadata(player, initialized, deathRecorded)
         local owner, ownerFailure = resolve(player)
         if owner == nil then return ownerFailure end
-        local root, rootFailure = readRoot(owner)
+        local root, rootFailure, scope = readRoot(owner)
         if root == nil then return rootFailure end
         local profiles, profileIndex = locate(root, owner, false)
         local record = profiles and profiles[profileIndex] or nil
@@ -633,7 +691,7 @@ function ServerPlayerRecordStore.create(dependencies)
         end
         record.initialized, record.deathRecorded = initialized, deathRecorded
         record.persistenceRevision = record.persistenceRevision + 1
-        local written = writeRoot(root)
+        local written = writeRoot(root, scope)
         if not written.ok then return written end
         return { ok = true }
     end
@@ -654,7 +712,10 @@ function ServerPlayerRecordStore.create(dependencies)
                 if not adopted.ok then return adopted end
                 updated = updateMetadata(player, true, false)
             end
-            if updated.ok then completedPlayers[player] = nil end
+            if updated.ok then
+                local owner = resolve(player)
+                if owner ~= nil then clearCompleted(owner, player) end
+            end
             return updated
         end
         local updated = updateMetadata(player, true, false)
@@ -665,7 +726,7 @@ function ServerPlayerRecordStore.create(dependencies)
     function characterStore.markDeathRecorded(player)
         local owner, ownerFailure = resolve(player)
         if owner == nil then return ownerFailure end
-        local root, rootFailure = readRoot(owner)
+        local root, rootFailure, scope = readRoot(owner)
         if root == nil then return rootFailure end
         local profiles, profileIndex = locate(root, owner, false)
         local record = profiles and profiles[profileIndex] or nil
@@ -685,10 +746,14 @@ function ServerPlayerRecordStore.create(dependencies)
             }
         end
         record.persistenceRevision = record.persistenceRevision + 1
-        local written = writeRoot(root)
+        local written = writeRoot(root, scope)
         if not written.ok then return written end
-        completedPlayers[player] = true
+        recordCompleted(owner, player)
         return { ok = true }
+    end
+
+    function characterStore.clearPlayer(player)
+        return stateStore.clearPlayer(player)
     end
 
     local offlineStore = {}
@@ -733,7 +798,7 @@ function ServerPlayerRecordStore.create(dependencies)
 
     function offlineStore.inspect(selector, options)
         if not validSelector(selector) then return failure("invalid_selector", "offline profile") end
-        local root, rootFailure = readRoot(selector.username)
+        local root, rootFailure, scope = readRoot(selector.username)
         if root == nil then return rootFailure end
         local profiles = root.players[selector.username]
         local record = profiles and profiles[selector.profileIndex] or nil
@@ -758,7 +823,7 @@ function ServerPlayerRecordStore.create(dependencies)
             or type(rawget(encoded, "state")) ~= "table" then
             return failure("codec_encode_failed", "offline profile")
         end
-        local root, rootFailure = readRoot(selector.username)
+        local root, rootFailure, scope = readRoot(selector.username)
         if root == nil then return rootFailure end
         local profiles = root.players[selector.username]
         local record = profiles and profiles[selector.profileIndex] or nil
@@ -781,7 +846,7 @@ function ServerPlayerRecordStore.create(dependencies)
         end
         record.state, record.mailbox = encoded.state, copiedMailbox
         record.persistenceRevision = expectedRevision + 1
-        local written = writeRoot(root)
+        local written = writeRoot(root, scope)
         if not written.ok then return written end
         local saved, savedFailure = copyOfflineRecord(selector.username, selector.profileIndex, record)
         if saved == nil then return savedFailure end

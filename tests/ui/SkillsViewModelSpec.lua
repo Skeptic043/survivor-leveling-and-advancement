@@ -188,8 +188,8 @@ expectEqual(#cooking.activeTargets, 0, "absent record has no target overlays")
 expectEqual(cooking.naturalPosition, nil, "absent record has no natural position")
 expectEqual(cooking.highWaterPosition, nil, "absent record has no high-water position")
 
-expectEqual(view.rows.Woodwork.enabled, false, "red recovery disables")
-expectEqual(view.rows.Woodwork.reasonCode, "red_recovery", "red reason")
+expectEqual(view.rows.Woodwork.enabled, true, "legacy loss does not disable advancement")
+expectEqual(view.rows.Woodwork.reasonCode, nil, "legacy loss has no hidden restriction")
 expectEqual(view.rows.Tailoring.enabled, false, "maximum mismatch disables row")
 expectEqual(view.rows.Tailoring.reasonCode, "maximum_mismatch", "mismatch reason")
 expectEqual(view.rows.Tailoring.naturalPosition, 0, "mismatch still detaches overlay position")
@@ -288,7 +288,7 @@ local fullPerSkill = build(model, snapshot(), {
     { perkId = "Woodwork", currentLevel = 3, effectiveMaximum = 10 },
 })
 expectEqual(fullPerSkill.ok, true, "per-skill full build succeeds")
-expectEqual(fullPerSkill.view.rows.Woodwork.reasonCode, "red_recovery", "red takes precedence over capacity")
+expectEqual(fullPerSkill.view.rows.Woodwork.reasonCode, "allotment_capacity", "capacity remains the only slot restriction")
 
 local alignedSnapshot = snapshot()
 alignedSnapshot.perks.Woodwork.naturalPosition = 70
@@ -592,7 +592,6 @@ local reasonAllowlist = {
     pending = true,
     maximum_mismatch = true,
     at_maximum = true,
-    red_recovery = true,
     insufficient_ap = true,
     allotment_disabled = true,
     allotment_capacity = true,

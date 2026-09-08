@@ -74,6 +74,10 @@ local function fixture(overrides)
             saves[#saves + 1] = { player = actualPlayer, state = actualState }
             return { ok = true }
         end,
+        clearPlayer = function(actualPlayer)
+            calls[#calls + 1] = "clear:store"
+            return { ok = true }
+        end,
     }
     local recovery = {
         recoverLoadedState = function(actualPlayer, actualState)
@@ -108,6 +112,10 @@ local function fixture(overrides)
     function accountingMode.transitionGeneration()
         return { ok = true, generation = accountingMode.generation or 0 }
     end
+    function accountingMode.clearPlayer()
+        calls[#calls + 1] = "clear:accounting"
+        return { ok = true }
+    end
     local catalog = {
         resolver = { loadOptions = options },
         positionReader = {
@@ -130,6 +138,10 @@ local function fixture(overrides)
             expectEqual(actualPerks, perks, "catalog perk-list identity")
             return { ok = true, detail = { initialized = 1, skipped = 1, private = "private source" } }
         end,
+        clearPlayer = function()
+            calls[#calls + 1] = "clear:xp"
+            return { ok = true }
+        end,
     }
     local ownerSnapshot = {
         project = function(actualState, sequence, ready)
@@ -141,11 +153,19 @@ local function fixture(overrides)
         initialize = function()
             return { ok = true, outcome = "existing", survivorLevel = 0, consumed = false }
         end,
+        clearPlayer = function()
+            calls[#calls + 1] = "clear:inheritance"
+            return { ok = true }
+        end,
     }
     local actualObservation = {
         set = function(actualPlayer, perkId, position)
             calls[#calls + 1] = "observe:" .. tostring(perkId)
             observations[perkId] = position
+            return { ok = true }
+        end,
+        clearPlayer = function()
+            calls[#calls + 1] = "clear:observation"
             return { ok = true }
         end,
     }
@@ -161,10 +181,14 @@ failure(OwnerSession.create(nil), "invalid_dependencies", "dependencies must be 
 failure(OwnerSession.create({}), "invalid_dependencies", "store.load is required")
 failure(OwnerSession.create({ store = { load = function() end } }), "invalid_dependencies", "store.save is required")
 local creationDependencies = { store = { load = function() end, save = function() end }, recoveryService = { recoverLoadedState = function() end } }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "store.clearPlayer is required")
+creationDependencies.store.clearPlayer = function() end
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingMode.synchronizeLoaded is required")
 creationDependencies.accountingMode = { synchronizeLoaded = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingMode.transitionGeneration is required")
 creationDependencies.accountingMode.transitionGeneration = function() end
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingMode.clearPlayer is required")
+creationDependencies.accountingMode.clearPlayer = function() end
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "accountingSettings.resolve is required")
 creationDependencies.accountingSettings = { resolve = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "catalog capabilities are required")
@@ -173,11 +197,18 @@ failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "Natu
 creationDependencies.NaturalLedger = { reconcileExternal = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "ActualObservation.set is required")
 creationDependencies.ActualObservation = { set = function() end }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "ActualObservation.clearPlayer is required")
+creationDependencies.ActualObservation.clearPlayer = function() end
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "xpSource.initializePlayer is required")
 creationDependencies.xpSource = { initializePlayer = function() end }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "xpSource.clearPlayer is required")
+creationDependencies.xpSource.clearPlayer = function() end
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "ownerSnapshot.project is required")
 creationDependencies.ownerSnapshot = { project = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "inheritanceSession.initialize is required")
+creationDependencies.inheritanceSession = { initialize = function() end }
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "inheritanceSession.clearPlayer is required")
+creationDependencies.inheritanceSession.clearPlayer = function() end
 
 do
     local session, _, values = fixture(function(dependencies, fixtureValues)
@@ -343,7 +374,7 @@ do
     expectEqual(ready.ok, true, "negative mod-off reconciliation succeeds")
     local record = values.saves[1].state.perks.Axe
     expectEqual(record.naturalPosition, 10, "negative mod-off delta lowers natural position")
-    expectEqual(record.highWaterPosition, 20, "negative mod-off delta preserves high water")
+    expectEqual(record.highWaterPosition, 10, "negative mod-off delta retires historical high water")
     expectEqual(record.observedPosition, 10, "negative mod-off delta persists observation")
     expectEqual(#record.activeTargets, 1, "negative mod-off delta clears no target")
     expectEqual(ready.completion, nil, "negative mod-off delta emits no completion")
@@ -405,8 +436,17 @@ do
     expectEqual(first.snapshot.sequence, 1, "first ready sequence")
     expectEqual(replay.snapshot.sequence, 2, "replay rebase gets new sequence")
     sequenceEquals(values.calls, { "load", "recover", "settings", "synchronize", "catalog", "initialize", "project", "load", "recover", "settings", "synchronize", "catalog", "initialize", "project" }, "replay repeats safe rebase")
+    local callsBeforeClear = #values.calls
     local cleared = session.clearPlayer(values.player)
     expectEqual(cleared.ok, true, "clear reports success")
+    local cleanupCalls = {}
+    for index = callsBeforeClear + 1, #values.calls do
+        cleanupCalls[#cleanupCalls + 1] = values.calls[index]
+    end
+    sequenceEquals(cleanupCalls, {
+        "clear:xp", "clear:observation", "clear:accounting",
+        "clear:inheritance", "clear:store",
+    }, "clear cascades through every player-owned runtime store")
     expectEqual(cleared.snapshot, nil, "clear has no snapshot")
     expectEqual(session.isReady(values.player), false, "clear forgets readiness")
     failure(session.snapshot(values.player), "not_ready", "ready has not succeeded")
@@ -677,7 +717,7 @@ do
     failure(session.ready(nil), "invalid_player", "player is required")
     failure(session.snapshot(nil), "invalid_player", "player is required")
     expectEqual(session.isReady(nil), false, "nil player is never ready")
-    expectEqual(session.clearPlayer(nil).ok, true, "nil clear reports success")
+    failure(session.clearPlayer(nil), "invalid_player", "player is required")
     local playerTwo = {}
     expectEqual(session.ready(values.player).snapshot.sequence, 1, "first player sequence")
     values.recovery.recoverLoadedState = function(_, actualState)

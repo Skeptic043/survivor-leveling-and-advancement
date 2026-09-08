@@ -21,7 +21,7 @@ function Field([string]$body, [string]$name) {
     return $m.Groups[1].Value.Trim()
 }
 
-$ids = @('Fitness','Strength','Sprinting','Lightfoot','Nimble','Sneak','Axe','Blunt','SmallBlunt','LongBlade','SmallBlade','Spear','Maintenance','Farming','Husbandry','Woodwork','Carving','Cooking','Electricity','Doctor','FlintKnapping','Masonry','Mechanics','Blacksmith','Pottery','Tailoring','MetalWelding','Aiming','Reloading','Fishing','PlantScavenging','Tracking','Trapping','Butchering','Glassmaking')
+$ids = @('Aiming','Reloading','Axe','LongBlade','Blunt','Maintenance','SmallBlade','SmallBlunt','Spear','Blacksmith','Woodwork','Carving','Cooking','Electricity','Glassmaking','FlintKnapping','Masonry','Mechanics','Pottery','Tailoring','MetalWelding','Farming','Husbandry','Butchering','Fitness','Lightfoot','Nimble','Sprinting','Sneak','Strength','Doctor','Fishing','PlantScavenging','Tracking','Trapping')
 $text = Get-Content -Raw $optionsPath
 Assert ($text -match '(?m)^VERSION\s*=\s*1,\s*$') 'VERSION must be 1'
 $blocks = @([regex]::Matches($text, '(?ms)^option\s+([^\s{]+)\s*\{(.*?)^\}'))
@@ -140,7 +140,7 @@ Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance -eq 'Enable Sur
 Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance_tooltip -eq "Allows an eligible new character to inherit part of the previous character's Survivor Level for the same player profile.") 'inheritance enabled tooltip'
 Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent -eq 'Percentage of Survivor Level Retained') 'inheritance percentage label'
 Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent_tooltip -eq "Percentage of the previous character's Survivor Level inherited by an eligible new character.") 'inheritance percentage tooltip'
-Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes advancement slot, catch-up, and recovery restrictions. Existing tracked progress is preserved. Natural skill XP still grants Survivor XP.') 'allotment tooltip wording'
+Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes advancement slot and catch-up restrictions. Existing tracked progress is preserved. Natural skill XP still grants Survivor XP.') 'allotment tooltip wording'
 Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
 Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value. Vanilla skills can override it below.') 'default limit tooltip wording'
 $sandboxTooltips = @($translations.PSObject.Properties | Where-Object Name -like '*_tooltip')
@@ -193,15 +193,13 @@ $requiredUi = [ordered]@{
     'IGUI_SLA_StatusSurvivorXp' = 'Survivor XP: %1 / %2'
     'IGUI_SLA_Advance' = 'Advance to level %1 for %2 AP.'
     'IGUI_SLA_Master' = 'Master skill for %1 AP.'
+    'IGUI_SLA_MasterClearsSlots' = 'Clears this skill''s occupied advancement slots.'
     'IGUI_SLA_PerSkillActive' = 'Advancement Slots: %1/%2.'
     'IGUI_SLA_TargetXpLeft' = '%1 natural skill XP left'
     'IGUI_SLA_TargetCatchUp' = 'Catch up to free this advancement slot.'
-    'IGUI_SLA_RecoveryXpLeft' = '%1 lost skill XP left'
-    'IGUI_SLA_RecoveryNoSurvivorXp' = 'No Survivor XP during recovery.'
     'IGUI_SLA_Reason_Pending' = 'An advancement request is pending.'
     'IGUI_SLA_Reason_MaximumMismatch' = "This skill's progression curve changed."
     'IGUI_SLA_Reason_AtMaximum' = 'This skill is already at its maximum.'
-    'IGUI_SLA_Reason_RedRecovery' = 'Recover natural XP before advancing again.'
     'IGUI_SLA_Reason_InsufficientAp' = 'Not enough AP.'
     'IGUI_SLA_Reason_RequiredAp' = 'Requires %1 AP.'
     'IGUI_SLA_Reason_AllotmentDisabled' = 'Advancement spending is disabled for this skill.'

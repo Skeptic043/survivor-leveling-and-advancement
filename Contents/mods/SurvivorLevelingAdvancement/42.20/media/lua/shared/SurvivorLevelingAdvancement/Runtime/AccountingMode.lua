@@ -47,7 +47,7 @@ function AccountingMode.create(dependencies)
 
     local save = store.save
     local clearPlayer = observation.clearPlayer
-    local transitionGenerations = setmetatable({}, { __mode = "k" })
+    local transitionGenerations = {}
 
     local function transitionGeneration(player)
         local generation = player ~= nil and transitionGenerations[player] or nil
@@ -91,9 +91,16 @@ function AccountingMode.create(dependencies)
         return { ok = true, state = candidate, transitioned = true, fromMode = fromMode, toMode = desiredMode }
     end
 
+    local function releasePlayer(player)
+        if player == nil then return failed("invalid_player", "player is required") end
+        transitionGenerations[player] = nil
+        return { ok = true }
+    end
+
     return { ok = true, service = {
         synchronizeLoaded = synchronizeLoaded,
         transitionGeneration = transitionGeneration,
+        clearPlayer = releasePlayer,
     } }
 end
 

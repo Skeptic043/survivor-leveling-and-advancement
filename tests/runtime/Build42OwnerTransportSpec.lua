@@ -960,4 +960,59 @@ for _, fault in ipairs({ "not_ready", "ready_throw", "dropped_reply", "send_thro
     equal(readyCalls, initializedCount + 2, "replacement player receives initialization")
 end
 
+do
+    local now, sends = 0, {}
+    local client = Build42OwnerTransport.createClient({
+        ClientOwnerState = ClientOwnerState,
+        completionValidator = LevelGainCompletion,
+        nowMilliseconds = function() return now end,
+        sendClientCommand = function(player, module, command, args)
+            sends[#sends + 1] = { player = player, module = module, command = command, args = args }
+        end,
+    }).client
+    local player = {}
+    local initial = client.ready(0, player)
+    expect(client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1, correlationId = initial.correlationId, ok = true, snapshot = snapshot(1, 1, 1),
+    }).accepted, "retry fixture accepts initial owner snapshot")
+    expect(client.refresh(0, player).ok, "first refresh starts")
+    failed(client.refresh(0, player), "refresh_pending", "localSlot")
+    now = 15000
+    local retried = client.refresh(0, player)
+    expect(same(retried, { ok = true }), "unanswered refresh preserves refresh result shape")
+    local retriedCorrelation = sends[#sends].args.correlationId
+    expect(retriedCorrelation ~= initial.correlationId, "unanswered refresh rebinds with a distinct correlation")
+    equal(sends[#sends].command, "ownerReady", "refresh retry uses read-only ready rebind")
+    failed(client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1, correlationId = initial.correlationId, ok = true, snapshot = snapshot(2, 2, 2),
+    }), "unknown_correlation", "correlationId")
+    expect(client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1, correlationId = retriedCorrelation, ok = true, snapshot = snapshot(3, 3, 3),
+    }).accepted, "current retry snapshot is accepted")
+end
+
+do
+    local now, sends = nil, {}
+    local client = Build42OwnerTransport.createClient({
+        ClientOwnerState = ClientOwnerState,
+        completionValidator = LevelGainCompletion,
+        nowMilliseconds = function() return now end,
+        sendClientCommand = function(player, module, command, args)
+            sends[#sends + 1] = { player = player, module = module, command = command, args = args }
+        end,
+    }).client
+    local player = {}
+    local initial = client.ready(0, player)
+    expect(client.handle("SurvivorLevelingAdvancement", "ownerSnapshot", {
+        protocolVersion = 1, correlationId = initial.correlationId, ok = true, snapshot = snapshot(1, 1, 1),
+    }).accepted, "invalid-clock fixture accepts initial owner snapshot")
+    expect(client.refresh(0, player).ok, "refresh can start before a clock sample")
+    now = 0
+    failed(client.refresh(0, player), "refresh_pending", "localSlot")
+    now = 15000
+    expect(same(client.refresh(0, player), { ok = true }), "valid clock recovers unanswered refresh")
+    expect(sends[#sends].args.correlationId ~= initial.correlationId,
+        "clock recovery still replaces the unanswered correlation")
+end
+
 return assertions

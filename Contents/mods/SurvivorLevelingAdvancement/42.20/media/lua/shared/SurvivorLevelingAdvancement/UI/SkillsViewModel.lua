@@ -322,11 +322,10 @@ local function evaluateAllotment(evaluate, config, perkId, addsTarget, requiredS
     return validateAllotmentResult(result, config, perkId, requiredSlots, activeByPerk, globalActive)
 end
 
-local function disabledReason(pending, mismatch, atMaximum, red, availableAp, apCost, allotment, mastery, addsTarget)
+local function disabledReason(pending, mismatch, atMaximum, availableAp, apCost, allotment, mastery, addsTarget)
     if pending then return "pending" end
     if mismatch then return "maximum_mismatch" end
     if atMaximum then return "at_maximum" end
-    if red then return "red_recovery" end
     if availableAp < apCost then return "insufficient_ap" end
     if mastery and not allotment.spendingEnabled then return "allotment_disabled" end
     if (addsTarget or mastery) and not allotment.allowed then
@@ -466,13 +465,11 @@ function SkillsViewModel.create(dependencies)
             if evaluated == nil then return failure("invalid_allotment", "Allotment.evaluate") end
 
             local mismatch = published and rawget(record, "effectiveMaximum") ~= source.effectiveMaximum
-            local red = published and rawget(record, "naturalPosition") < rawget(record, "highWaterPosition")
             local apCost = nextTargetLevel ~= nil and (mastery and 2 or 1) or nil
             local reason = disabledReason(
                 rawget(input, "pending"),
                 mismatch,
                 atMaximum,
-                red,
                 header.survivor.availableAp,
                 apCost or 0,
                 evaluated,

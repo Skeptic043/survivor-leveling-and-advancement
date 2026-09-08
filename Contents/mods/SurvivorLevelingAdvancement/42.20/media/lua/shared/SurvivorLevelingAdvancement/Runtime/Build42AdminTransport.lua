@@ -9,6 +9,7 @@ local MAX_REQUEST_ID_LENGTH = 64
 local MAX_USERNAME_LENGTH = 64
 local MAX_CODE_LENGTH = 64
 local MAX_DETAIL_LENGTH = 160
+local RESPONSE_TIMEOUT_MILLISECONDS = 15000
 
 local nextRequestNumber = 0
 
@@ -392,6 +393,10 @@ local function validateRequestEnvelope(value)
     elseif operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
         or operation == "cancelMailbox" or operation == "acknowledgeMailbox" then
         fields = CLEAR_REQUEST_FIELDS
+        if operation == "clearAdvancementSlots" and rawget(value, "perkId") ~= nil then
+            fields = { protocolVersion = true, requestId = true, operation = true,
+                target = true, expectedRevision = true, perkId = true }
+        end
     else
         return nil
     end
@@ -408,6 +413,8 @@ local function validateRequestEnvelope(value)
         target = copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target"))
     end
     if target == nil then return nil end
+    if rawget(value, "perkId") ~= nil
+        and (target.onlineId == nil or not safeId(rawget(value, "perkId"), 128)) then return nil end
     if operation == "awardSurvivorXp" then
         if not safeInteger(rawget(value, "expectedRevision"))
             or not finitePositive(rawget(value, "amount")) then
@@ -428,6 +435,7 @@ local function validateRequestEnvelope(value)
         operation = operation,
         target = target,
         expectedRevision = rawget(value, "expectedRevision"),
+        perkId = rawget(value, "perkId"),
         amount = rawget(value, "amount"),
         count = rawget(value, "count"),
     }
@@ -709,6 +717,7 @@ function Build42AdminTransport.createServer(dependencies)
         local sessionRequest = {
             kind = request.operation,
             expectedRevision = request.expectedRevision,
+            perkId = request.perkId,
         }
         if request.operation == "awardSurvivorXp" then
             sessionRequest.amount = request.amount
@@ -824,6 +833,9 @@ local function validateLogicalRequest(value)
     elseif operation == "clearAdvancementSlots" or operation == "queueClearAdvancementSlots"
         or operation == "cancelMailbox" or operation == "acknowledgeMailbox" then
         fields = CLEAR_LOGICAL_REQUEST_FIELDS
+        if operation == "clearAdvancementSlots" and rawget(value, "perkId") ~= nil then
+            fields = { operation = true, target = true, expectedRevision = true, perkId = true }
+        end
     else
         return nil
     end
@@ -839,6 +851,8 @@ local function validateLogicalRequest(value)
         target = copyTarget(rawget(value, "target")) or copyProfileTarget(rawget(value, "target"))
     end
     if target == nil then return nil end
+    if rawget(value, "perkId") ~= nil
+        and (target.onlineId == nil or not safeId(rawget(value, "perkId"), 128)) then return nil end
     if operation == "awardSurvivorXp" then
         if not safeInteger(rawget(value, "expectedRevision"))
             or not finitePositive(rawget(value, "amount")) then
@@ -858,6 +872,7 @@ local function validateLogicalRequest(value)
         operation = operation,
         target = target,
         expectedRevision = rawget(value, "expectedRevision"),
+        perkId = rawget(value, "perkId"),
         amount = rawget(value, "amount"),
         count = rawget(value, "count"),
     }
@@ -1066,16 +1081,46 @@ local function copyTerminal(value)
 end
 
 function Build42AdminTransport.createClient(dependencies)
-    if not exactPlainTable(dependencies, { sendClientCommand = true }) then
+    if not exactPlainTable(dependencies, { sendClientCommand = true, nowMilliseconds = true }) then
         return failure("invalid_dependencies", "dependencies")
     end
 
     local sender = rawget(dependencies, "sendClientCommand")
-    if type(sender) ~= "function" then return failure("invalid_dependencies", "dependencies") end
+    local nowMilliseconds = rawget(dependencies, "nowMilliseconds")
+    if type(sender) ~= "function" or type(nowMilliseconds) ~= "function" then
+        return failure("invalid_dependencies", "dependencies")
+    end
 
     local pendingBySlot = {}
     local terminalBySlot = {}
     local client = {}
+
+    local function readTime()
+        local called, value = pcall(nowMilliseconds)
+        return called and safeInteger(value) and value or nil
+    end
+
+    local function expirePending(localSlot)
+        local route = pendingBySlot[localSlot]
+        if route == nil then return false end
+        local now = readTime()
+        if now == nil then return false end
+        if now < route.startedAt then route.startedAt = now; return false end
+        if now - route.startedAt < RESPONSE_TIMEOUT_MILLISECONDS then return false end
+        pendingBySlot[localSlot] = nil
+        terminalBySlot[localSlot] = {
+            ok = false,
+            requestId = route.requestId,
+            operation = route.operation,
+            target = copyResponseTarget(route.target),
+            code = "response_timeout",
+            detail = "server response",
+            committed = route.operation ~= "inspect"
+                and route.operation ~= "enumerateOfflineProfiles"
+                and route.operation ~= "inspectOfflineProfile",
+        }
+        return true
+    end
 
     local function findPending(requestId)
         for localSlot = 0, 3 do
@@ -1096,6 +1141,8 @@ function Build42AdminTransport.createClient(dependencies)
             return failure("request_id_exhausted", "counter")
         end
 
+        local startedAt = readTime()
+        if startedAt == nil then return failure("clock_unavailable", "nowMilliseconds") end
         nextRequestNumber = nextRequestNumber + 1
         local requestId = "admin:" .. tostring(nextRequestNumber)
         local envelope = {
@@ -1122,6 +1169,7 @@ function Build42AdminTransport.createClient(dependencies)
             or logical.operation == "cancelMailbox"
             or logical.operation == "acknowledgeMailbox" then
             envelope.expectedRevision = logical.expectedRevision
+            envelope.perkId = logical.perkId
         end
         pendingBySlot[localSlot] = {
             requestId = requestId,
@@ -1129,6 +1177,7 @@ function Build42AdminTransport.createClient(dependencies)
             target = logical.target,
             expectedRevision = logical.expectedRevision,
             count = logical.count,
+            startedAt = startedAt,
         }
         terminalBySlot[localSlot] = nil
 
@@ -1183,6 +1232,7 @@ function Build42AdminTransport.createClient(dependencies)
 
     function client.status(localSlot)
         if not validSlot(localSlot) then return failure("invalid_slot", "slot") end
+        expirePending(localSlot)
         local route = pendingBySlot[localSlot]
         if route ~= nil then
             local result = {
@@ -1206,6 +1256,11 @@ function Build42AdminTransport.createClient(dependencies)
         local terminal = copyTerminal(terminalBySlot[localSlot])
         if terminal == nil then return { ok = true, pending = false } end
         return { ok = true, pending = false, result = terminal }
+    end
+
+    function client.expire()
+        for localSlot = 0, 3 do expirePending(localSlot) end
+        return { ok = true }
     end
 
     function client.resetSlot(localSlot)

@@ -164,6 +164,29 @@ elseif evidence.phase == 1 then
     check(evidence.providerDependencies.readSandboxOption("GlobalAdvancementLimit") == 3
         and evidence.sandboxOptionName == "SurvivorLevelingAdvancement.GlobalAdvancementLimit",
         "settings provider reads the current engine sandbox option")
+    local savedOption = evidence.sandboxOption.getValue
+    evidence.sandboxOption.getValue = function() return false end
+    check(evidence.providerDependencies.readSandboxOption("AutomaticCurveNormalization") == false,
+        "client bootstrap preserves live false")
+    evidence.sandboxVars.SurvivorLevelingAdvancement = {
+        SurvivorXpMultiplier = 1, FitnessStrengthContributionPercent = 25,
+        AutomaticCurveNormalization = true, SkillSurvivorXp_Axe = true, AllotmentMode = 1,
+    }
+    evidence.sandboxOptions.getOptionByName = function(_, name)
+        if name == "SurvivorLevelingAdvancement.AutomaticCurveNormalization"
+            or name == "SurvivorLevelingAdvancement.SkillSurvivorXp_Axe" then
+            return evidence.sandboxOption
+        end
+        return nil
+    end
+    local actualProvider = ActualWorldSettingsProvider.create(evidence.providerDependencies).provider
+    local actualAward = actualProvider.readAward("Axe")
+    check(actualAward.automaticCurveNormalization == false and actualAward.survivorXpEnabled == false,
+        "composed client provider uses live false over stale fallback true")
+    evidence.sandboxOption.getValue = function() return 0 end
+    check(evidence.providerDependencies.readSandboxOption("AutomaticCurveNormalization") == 0,
+        "client bootstrap preserves live zero")
+    evidence.sandboxOption.getValue = savedOption
     check(rawget(evidence.dependencies, "Events") == nil
         and rawget(evidence.dependencies, "players") == nil, "no event or player surface")
     evidence.phase = 2
