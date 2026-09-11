@@ -101,7 +101,7 @@ if evidence == nil then
     ISUsersList = evidence.usersList
     Capability = evidence.capability
     UIFont = { Small = evidence.smallFont }
-    Joypad = { AButton = evidence.aButton }
+    Joypad = { AButton = evidence.aButton, BButton = "B" }
     SandboxVars = evidence.sandboxVars
     getSandboxOptions = function() return evidence.sandboxOptions end
     getTimestampMs = function() return 4321 end
@@ -116,7 +116,8 @@ if evidence == nil then
     getPlayerScreenHeight = function(slot) evidence.viewportSlot = slot; return 500 end
     getText = function(name) return name end
     getTextManager = function()
-        return { MeasureStringX = function(_, _, text) return #text end }
+        return { MeasureStringX = function(_, _, text) return #text end,
+            getFontHeight = function() return 16 end }
     end
     rawset(_G, key, nil)
 elseif evidence.phase == 1 then
@@ -144,8 +145,11 @@ elseif evidence.phase == 1 then
         and evidence.adminDependencies.ISUsersList == evidence.usersList
         and evidence.adminDependencies.ISCollapsableWindowJoypad == evidence.window
         and evidence.adminDependencies.ISTextEntryBox == evidence.entry
-        and evidence.adminDependencies.ISButton == evidence.button,
+        and evidence.adminDependencies.ISButton == evidence.button
+        and evidence.adminDependencies.ISPanel == evidence.panel,
         "admin adapter receives exact owner and UI classes")
+    check(evidence.adminDependencies.measureText("abcd") == 4
+        and evidence.adminDependencies.fontHeight() == 16, "admin layout receives native measurement and font capabilities")
     check(evidence.adminDependencies.canSeePlayersStats == evidence.capability.CanSeePlayersStats
         and evidence.adminDependencies.getPlayerContextMenu(2).slot == 2
         and evidence.adminDependencies.getSpecificPlayer(2).slot == 2

@@ -48,10 +48,22 @@ $jar = $installation.Jar
 $java = $installation.Java
 if (Test-Path $build) { Remove-Item -Recurse -Force -LiteralPath $build }
 New-Item -ItemType Directory -Path $build | Out-Null
+$nativeUiSource = Get-Content -Raw -LiteralPath (Join-Path $installation.Root 'media\lua\client\ISUI\ISUIElement.lua')
+$nativeUiFixture = @'
+return function(UIElement)
+local require = function() end
+local ISBaseObject = { derive = function() return {} end }
+local ISUIElement
+'@ + "`n" + $nativeUiSource + "`nreturn ISUIElement`nend`n"
+[IO.File]::WriteAllText((Join-Path $build 'vanilla-ui-element.lua'), $nativeUiFixture, [Text.UTF8Encoding]::new($false))
+$nativeJoypadSource = Get-Content -Raw -LiteralPath (Join-Path $installation.Root 'media\lua\client\ISUI\ISPanelJoypad.lua')
+$nativeBoundsSource = Get-Content -Raw -LiteralPath (Join-Path $installation.Root 'media\lua\client\ISUI\Layout\ISBounds.lua')
+$nativeJoypadFixture = "return function(ISUIElement, Joypad)`nlocal require = function() end`nlocal DebugType = { ISUI = { trace = function() end } }`nlocal ISPanelJoypad, ISBounds`n" + $nativeBoundsSource + "`n" + $nativeJoypadSource + "`nreturn ISPanelJoypad, ISBounds`nend`n"
+[IO.File]::WriteAllText((Join-Path $build 'vanilla-panel-joypad.lua'), $nativeJoypadFixture, [Text.UTF8Encoding]::new($false))
 foreach ($luaRoot in @((Join-Path $root 'Contents\mods\SurvivorLevelingAdvancement\42.20\media\lua\shared\SurvivorLevelingAdvancement\State'), (Join-Path $root 'Contents\mods\SurvivorLevelingAdvancement\42.20\media\lua\shared\SurvivorLevelingAdvancement\Core'))) {
     if (Test-Path $luaRoot) { Get-ChildItem -LiteralPath $luaRoot -Filter '*.lua' -File -Recurse | ForEach-Object { if ((Get-Content -Raw -LiteralPath $_.FullName) -match '(?i)\b(Events|ModData|sendClientCommand|sendServerCommand|IsoPlayer|Diagnostics)\b') { throw "Static guard failed: prohibited game or diagnostic API in $($_.FullName)." } } }
 }
-& javac -d $build (Join-Path $PSScriptRoot 'support\KahluaRunner.java')
+& javac -d $build (Join-Path $PSScriptRoot 'support\KahluaRunner.java') (Join-Path $PSScriptRoot 'support\TranslationValidator.java')
 if ($LASTEXITCODE -ne 0) { throw 'Kahlua test runner compilation failed.' }
 $descriptors = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'suites') -Filter '*.ps1' -File | Sort-Object Name)
 if ($descriptors.Count -eq 0) { throw 'No suite descriptors found.' }
@@ -65,6 +77,8 @@ function Resolve-RepoPath([string] $relativePath) {
 $gameRoot = Split-Path -Parent $jar
 Push-Location $gameRoot
 try {
+    & $java -cp "$build;$jar" TranslationValidator $root $gameRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Translation validation failed.' }
     foreach ($descriptor in $descriptors) {
         $result = @(& $descriptor.FullName)
         if ($result.Count -ne 1) { throw "Suite descriptor must return exactly one object: $($descriptor.Name)" }

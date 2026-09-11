@@ -90,6 +90,39 @@ local function offlineSummary(username, profileIndex, incarnationId, revision)
 end
 
 local function makeEnvironment(processMode)
+    local nativeElement = VanillaUiLifecycle({ new = function(luaElement)
+        local javaElement = { luaElement = luaElement, children = {} }
+        for _, name in ipairs({ "setX", "setY", "setHeight", "setWidth", "setAnchorLeft",
+            "setAnchorRight", "setAnchorTop", "setAnchorBottom", "setWantKeyEvents",
+            "setConsumeMouseEvents", "setWantExtraMouseEvents", "setForceCursorVisible" }) do
+            javaElement[name] = function() end
+        end
+        function javaElement:AddChild(child) self.children[#self.children + 1] = child end
+        return javaElement
+    end })
+    function nativeElement:derive() return setmetatable({}, { __index = self }) end
+    local nativeJoypad, nativeBounds = VanillaPanelJoypad(nativeElement, { AButton = "A", BButton = "B", XButton = "X" })
+    math.clamp = math.clamp or function(value, low, high) return math.max(low, math.min(high, value)) end
+    local function geometry(control)
+        nativeElement.initialise(control)
+        control.instantiate = nativeElement.instantiate
+        control.createChildren = function() end
+        control.getParent = nativeElement.getParent
+        control.addChild = nativeElement.addChild
+        function control:isReallyVisible() return self.visible ~= false and self.removed ~= true end
+        function control:setJoypadFocused(value) self.joypadFocused = value end
+        function control:getX() return self.x end
+        function control:getY() return self.y end
+        function control:getWidth() return self.width end
+        function control:getHeight() return self.height end
+        function control:getAbsoluteBounds() return nativeBounds:new(self.x, self.y, self.width, self.height) end
+        function control:toDebugString() return "test control" end
+        function control:setX(value) self.x = value end
+        function control:setY(value) self.y = value end
+        function control:setWidth(value) self.width = value end
+        function control:setHeight(value) self.height = value end
+        return control
+    end
     local evidence = {
         mode = processMode,
         serverReads = 0,
@@ -117,11 +150,16 @@ local function makeEnvironment(processMode)
         viewportTop = 100,
         viewportSlot = nil,
         requestSequence = 0,
+        joypads = {},
+        focusChanges = {},
     }
 
     local Scoreboard = {}
     local UsersList = {}
     local Window = {}
+    Window.onGainJoypadFocus = nativeElement.onGainJoypadFocus
+    Window.onLoseJoypadFocus = nativeElement.onLoseJoypadFocus
+    Window.onJoypadDown = nativeJoypad.onJoypadDown
     local Entry = {}
     local Button = {}
     local Capability = { CanSeePlayersStats = {} }
@@ -175,19 +213,21 @@ local function makeEnvironment(processMode)
         evidence.windowChildren = evidence.windowChildren + 1
         if evidence.childConstructionThrows then error("child construction boom") end
         self.baseCloseControls = (self.baseCloseControls or 0) + 1
-        self:addChild({ baseCloseControl = true })
+        self:addChild(geometry({ baseCloseControl = true }))
     end
 
     function Window.prerender(self)
         self.priorPrerenders = self.priorPrerenders + 1
         if self.prerenderThrows then error("vanilla window boom") end
+        local state = rawget(self, "__slaAdminState")
+        if state and state.pane then state.pane:prerender() end
     end
 
     function Window.instantiate(self)
         self.phaseOrder[#self.phaseOrder + 1] = "instantiate"
         self.instantiates = (self.instantiates or 0) + 1
         if evidence.instantiateThrows then error("instantiate boom") end
-        self:createChildren()
+        nativeElement.instantiate(self)
         self.instantiated = true
     end
 
@@ -220,13 +260,14 @@ local function makeEnvironment(processMode)
         end
         function window:removeFromUIManager() self.removed = true end
         function window:bringToTop() self.broughtToTop = (self.broughtToTop or 0) + 1 end
-        function window:addChild(child)
-            self.children[#self.children + 1] = child
-            child.parent = self
-        end
         function window:drawText(text, drawX, drawY)
             self.draws[#self.draws + 1] = { text = text, x = drawX, y = drawY }
         end
+        geometry(window)
+        window.instantiate = Window.instantiate
+        window.joypadButtonsY, window.joypadButtons, window.allJoypadButtons = {}, {}, {}
+        window.joypadIndex, window.joypadIndexY = 0, 0
+        setmetatable(window, { __index = nativeJoypad })
         evidence.windows[#evidence.windows + 1] = window
         return window
     end
@@ -245,7 +286,8 @@ local function makeEnvironment(processMode)
         function entry:setText(value) self.text = value end
         function entry:setEditable(value) self.editable = value end
         function entry:setVisible(value) self.visible = value end
-        return entry
+        function entry:focus() self.focused = true; return "focused" end
+        return geometry(entry)
     end
 
     function Button.new(_, x, y, width, height, title, target, onclick)
@@ -267,7 +309,9 @@ local function makeEnvironment(processMode)
         function button:click()
             if self.enabled and self.onclick ~= nil then self.onclick(self.target, self) end
         end
-        return button
+        button.isButton = true
+        button.forceClick = button.click
+        return geometry(button)
     end
 
     local owner = {
@@ -300,6 +344,20 @@ local function makeEnvironment(processMode)
         ISCollapsableWindowJoypad = Window,
         ISTextEntryBox = Entry,
         ISButton = Button,
+        ISPanel = { new = function(_, x, y, width, height)
+            local panel = geometry({ x = x, y = y, width = width, height = height, children = {}, scroll = 0 })
+            function panel:initialise() end
+            function panel:setScrollChildren(value) self.scrollChildren = value end
+            function panel:addScrollBars() self.scrollBars = true end
+            function panel:setScrollHeight(value) self.scrollHeight = value end
+            function panel:getYScroll() return self.scroll end
+            function panel:setYScroll(value) self.scroll = math.max(-math.max(0, (self.scrollHeight or 0) - self.height), math.min(0, value)) end
+            function panel:setStencilRect() end
+            function panel:clearStencilRect() end
+            function panel:repaintStencilRect() self.repainted = true end
+            function panel:drawText(text, x, y) self.parent:drawText(text, x, y + self.y + self.scroll) end
+            return panel
+        end },
         canSeePlayersStats = Capability.CanSeePlayersStats,
         getPlayerContextMenu = function(slot)
             evidence.existingMenuGets = evidence.existingMenuGets + 1
@@ -326,12 +384,24 @@ local function makeEnvironment(processMode)
             return evidence.debug
         end,
         getText = getText,
+        measureText = function(text)
+            evidence.measureCalls = (evidence.measureCalls or 0) + 1
+            return #text * (evidence.charWidth or 5)
+        end,
+        fontHeight = function() return evidence.fontHeight or 12 end,
         viewport = function(slot)
             evidence.viewportSlot = slot
             return evidence.viewportLeft, evidence.viewportTop,
                 evidence.viewportWidth, evidence.viewportHeight
         end,
         smallFont = "small-font",
+        joypadBButton = "B",
+        getJoypadData = function(slot) return evidence.joypads[slot] end,
+        setJoypadFocus = function(slot, control)
+            evidence.focusChanges[#evidence.focusChanges + 1] = { slot = slot, control = control }
+            local data = evidence.joypads[slot]
+            if data then data.focus = control end
+        end,
     }
 
     local created = Build42AdminUi.create(dependencies)
@@ -420,10 +490,12 @@ local function findButton(state, internal)
 end
 
 local function containsDraw(window, text)
+    local rendered = {}
     for index = 1, #window.draws do
         if string.find(window.draws[index].text, text, 1, true) ~= nil then return true end
+        rendered[#rendered + 1] = window.draws[index].text
     end
-    return false
+    return string.find(table.concat(rendered):gsub("%s", ""), text:gsub("%s", ""), 1, true) ~= nil
 end
 
 expect(type(Build42AdminUi) == "table", "module loads")
@@ -729,28 +801,39 @@ local window = mp.windows[1]
 local state = rawget(window, "__slaAdminState")
 expect(state ~= nil, "panel owns bounded controller state")
 equal(mp.viewportSlot, 2, "viewport capability preserves exact local slot")
-equal(window.x, 450, "panel centers inside nonzero split-screen X origin")
-equal(window.y, 141, "panel centers inside nonzero split-screen Y origin")
-equal(window.width, 400, "panel uses compact width inside local viewport")
-equal(window.height, 318, "panel uses compact height inside local viewport")
+expect(window.x >= mp.viewportLeft and window.x + window.width <= mp.viewportLeft + mp.viewportWidth,
+    "content-sized panel stays inside nonzero split-screen X bounds")
+expect(window.y >= mp.viewportTop and window.y + window.height <= mp.viewportTop + mp.viewportHeight,
+    "content-sized panel stays inside nonzero split-screen Y bounds")
+expect(window.width < 400 and window.width <= mp.viewportWidth, "short copy produces a compact measured window")
+expect(window.height <= mp.viewportHeight, "content-sized panel respects local viewport height")
 equal(window.instantiates, 1, "window instantiates exactly once before UI-manager add")
 equal(table.concat(window.phaseOrder, ","), "initialise,instantiate,manager,visible",
     "window lifecycle orders child construction before manager add and visibility")
 equal(mp.windowChildren, 1, "window child phase runs exactly once")
 equal(window.baseCloseControls, 1, "base close controls are created exactly once")
-equal(#window.children, 7, "base close control and six SLA controls are created once")
+equal(#window.childrenInOrder, 2, "base close control and content pane are created once")
+equal(#state.pane.childrenInOrder, 6, "six SLA controls belong to the scrollable content pane")
+equal(window.javaObject.children[2], state.pane.javaObject,
+    "native window retains the same content pane Java object used for drawing and controls")
+equal(#window.javaObject.children[2].children, 6,
+    "all six controls are attached to the native content pane in the window tree")
+for index, child in ipairs(state.pane.childrenInOrder) do
+    equal(window.javaObject.children[2].children[index], child.javaObject,
+        "native window tree reaches live control " .. tostring(index))
+end
 expect(state.xpEntry.initialised and state.levelsEntry.initialised
     and state.awardXpButton.initialised and state.awardLevelsButton.initialised
     and state.clearSlotsButton.initialised and state.refreshButton.initialised,
     "all SLA entries and buttons initialise exactly once")
 equal(state.xpEntry.x, 16, "XP entry aligns to the left panel margin")
 equal(state.levelsEntry.x, 16, "levels entry aligns to the left panel margin")
-equal(state.awardXpButton.x, 210, "XP award aligns to the right grid column")
-equal(state.awardLevelsButton.x, 210, "levels award aligns to the right grid column")
+equal(state.awardXpButton.x, state.refreshButton.x, "XP award aligns to the right grid column")
+equal(state.awardLevelsButton.x, state.refreshButton.x, "levels award aligns to the right grid column")
 equal(state.clearSlotsButton.x, 16, "clear button stays inside the left panel margin")
-equal(state.clearSlotsButton.width, 174, "clear button uses the shared grid width")
-equal(state.refreshButton.x, 210, "refresh button starts at the right grid column")
-equal(state.refreshButton.width, 174, "refresh button matches the shared grid width")
+equal(state.clearSlotsButton.width, state.xpEntry.width, "clear button uses the shared grid width")
+equal(state.refreshButton.x, state.awardXpButton.x, "refresh button starts at the right grid column")
+equal(state.refreshButton.width, state.clearSlotsButton.width, "refresh button matches the shared grid width")
 equal(state.xpEntry.width, state.awardXpButton.width,
     "first award row uses equal grid columns")
 equal(state.levelsEntry.width, state.awardLevelsButton.width,
@@ -761,7 +844,7 @@ equal(state.awardLevelsButton.x - (state.levelsEntry.x + state.levelsEntry.width
     "second award row keeps the shared grid gap")
 equal(state.refreshButton.x - (state.clearSlotsButton.x + state.clearSlotsButton.width), 20,
     "bottom buttons keep a twenty-pixel visible gap")
-equal(state.refreshButton.x + state.refreshButton.width, window.width - 16,
+equal(state.refreshButton.x + state.refreshButton.width, window.width - 32,
     "refresh button stays inside the right panel margin")
 expect(not state.awardXpButton.enabled and not state.awardLevelsButton.enabled,
     "mutations disable while inspection waits")
@@ -800,7 +883,7 @@ mp.status = {
 window:prerender()
 for repeatRender = 1, 20 do window:prerender() end
 equal(state.clearSlotsButton.x, 16, "repeated panel renders keep clear button position")
-equal(state.refreshButton.x, 210, "repeated panel renders keep refresh button position")
+equal(state.refreshButton.x, state.awardXpButton.x, "repeated panel renders keep refresh aligned")
 equal(state.clearSlotsButton.width, state.refreshButton.width,
     "repeated panel renders keep bottom button widths equal")
 equal(state.refreshButton.x - (state.clearSlotsButton.x + state.clearSlotsButton.width), 20,
@@ -1445,6 +1528,164 @@ for index = 1, #malformedClearGainCases do
         gainCase.label .. " adopts no malformed replacement summary")
     equal(immediateState.message, "The request failed. Refresh and try again.",
         gainCase.label .. " active terminal fails closed")
+end
+
+local layout = makeEnvironment("singleplayer")
+layout.viewportWidth, layout.viewportHeight = 1000, 900
+layout.requestHandler = function()
+    return { ok = true, operation = "inspect", outcome = "inspected", summary = summary(3, 5, 0) }
+end
+expect(layout.integration.install().ok and layout.integration.open(0).ok, "layout regression panel opens")
+local layoutWindow = layout.windows[1]
+local layoutState = rawget(layoutWindow, "__slaAdminState")
+layoutWindow:prerender()
+local shortWidth, shortHeight = layoutWindow.width, layoutWindow.height
+layoutState.message = "Borrado de avances pendiente. Se aplicará cuando este perfil vuelva a conectarse."
+layoutWindow:prerender()
+expect(layoutWindow.width > shortWidth, "long translated status widens the outer window")
+expect(layoutWindow.width <= layout.viewportWidth, "natural width respects viewport cap")
+local naturalWidth = layoutWindow.width
+local measuredCalls = layout.measureCalls
+for frame = 1, 25 do layoutWindow:prerender() end
+equal(layout.measureCalls, measuredCalls + 25, "unchanged frames only measure the font sentinel, without repeating layout")
+layout.viewportWidth = 260
+layout.viewportHeight = 190
+layoutWindow:prerender()
+equal(layoutWindow.width, 260, "outer width clamps to a narrow viewport")
+expect(layoutState.pane.scrollHeight > layoutState.pane.height, "long content remains scrollable below viewport")
+equal(layoutWindow.height, 190, "outer height clamps to viewport")
+expect(layoutWindow.x >= layout.viewportLeft and layoutWindow.x + layoutWindow.width <= layout.viewportLeft + 260,
+    "resizing preserves split-screen horizontal bounds")
+local rebuilt = {}
+for index = 1, #layoutState.drawLines do
+    local line = layoutState.drawLines[index]
+    expect(layout.dependencies.measureText(line.text) <= layoutWindow.width - 48, "wrapped text fits its measured box")
+    if index > 1 then expect(line.y > layoutState.drawLines[index - 1].y, "wrapped lines do not overlap") end
+    rebuilt[#rebuilt + 1] = line.text
+end
+expect(string.find(table.concat(rebuilt):gsub(" ", ""), layoutState.message:gsub(" ", ""), 1, true) ~= nil,
+    "wrapping preserves the complete translated message")
+expect(layoutState.awardXpButton.y >= layoutState.xpEntry.y + layoutState.xpEntry.height,
+    "narrow viewport stacks an action below its entry")
+expect(layoutState.levelsEntry.y > layoutState.awardXpButton.y + layoutState.awardXpButton.height,
+    "later controls follow the measured preceding row")
+layoutState.pane:onMouseWheel(1)
+expect(layoutState.pane:getYScroll() < 0, "mouse wheel reaches overflow content")
+layoutState.pane:setYScroll(0)
+equal(layoutState.levelsEntry:focus(), "focused", "entry focus preserves native return")
+expect(layoutState.levelsEntry.focused and layoutState.pane:getYScroll() < 0, "keyboard focus scrolls the entry into view")
+layoutWindow.joyfocus, layoutWindow.joypadIndexY, layoutWindow.joypadIndex = {}, 3, 2
+layoutState.pane:setYScroll(0)
+layoutWindow:ensureVisible()
+expect(layoutState.refreshButton.y + layoutState.refreshButton.height <= -layoutState.pane:getYScroll() + layoutState.pane.height,
+    "controller selection scrolls the focused action into view")
+equal(layoutState.refreshButton.internal, "REFRESH", "scrolling preserves action identity")
+local oldContentHeight = layoutState.pane.scrollHeight
+layout.fontHeight, layout.charWidth = 26, 9
+layoutWindow:prerender()
+expect(layoutState.pane.scrollHeight > oldContentHeight, "larger font reflows and grows content height")
+expect(layoutState.refreshButton.height >= 36, "button height follows the larger font")
+equal(layoutWindow.titleFontHgt, 26, "title bar height follows the actual Small font")
+layoutState.pane:render()
+expect(layoutState.pane.repainted, "nested content stencil repaints its parent mask after clearing")
+layoutState.message = "玩家檔案重新整理後再次連線並清除所有已占用的晉升欄位玩家檔案重新整理後再次連線"
+layoutWindow:prerender()
+local cjk = {}
+for _, line in ipairs(layoutState.drawLines) do
+    expect(layout.dependencies.measureText(line.text) <= layoutWindow.width - 48, "no-space CJK stays within the measured box")
+    cjk[#cjk + 1] = line.text
+end
+expect(string.find(table.concat(cjk), layoutState.message, 1, true) ~= nil, "CJK wrapping preserves full Unicode text")
+layoutState.message = "ExtremelyLongUnbrokenPlayerUsernameABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+layoutWindow:prerender()
+local username = {}
+for _, line in ipairs(layoutState.drawLines) do
+    expect(layout.dependencies.measureText(line.text) <= layoutWindow.width - 48, "long username stays within the measured box")
+    username[#username + 1] = line.text
+end
+expect(string.find(table.concat(username), layoutState.message, 1, true) ~= nil, "username wrapping preserves every character without injected hyphens")
+layout.viewportWidth, layout.viewportHeight = 1000, 900
+layoutState.message = "Ready"
+layout.fontHeight, layout.charWidth = 12, 5
+layoutWindow.joyfocus = nil
+layoutWindow:prerender()
+expect(layoutWindow.width < naturalWidth, "outer width shrinks when long content is replaced")
+expect(layoutWindow.height < 900 and layoutState.pane.scrollHeight <= layoutState.pane.height,
+    "outer height fits content when the viewport has room")
+layout.viewportWidth, layout.viewportHeight = 70, 70
+layoutWindow:prerender()
+expect(layoutState.closed and layoutWindow.removed, "viewport smaller than supported chrome closes existing UI cleanly")
+local tiny = makeEnvironment("singleplayer")
+tiny.viewportWidth, tiny.viewportHeight = 70, 70
+expect(tiny.integration.install().ok, "tiny viewport environment installs")
+local tinyOpen = tiny.integration.open(0)
+expect(not tinyOpen.ok and tinyOpen.code == "viewport_failed" and #tiny.windows == 0,
+    "viewport below 120 by 100 fails before making a blank overflowing window")
+
+do
+    local env = makeEnvironment("singleplayer")
+    env.viewportWidth, env.viewportHeight = 1000, 900
+    env.requestHandler = function()
+        return { ok = true, operation = "inspect", outcome = "inspected", summary = summary(3, 5, 0) }
+    end
+    local previous = { isReallyVisible = function() return true end }
+    local otherFocus = {}
+    local otherPlayer = { isActive = true, focus = otherFocus }
+    env.joypads[0] = otherPlayer
+    env.joypads[2] = { isActive = true, focus = previous }
+    expect(env.integration.install().ok and env.integration.open(2).ok, "active controller admin opens")
+    local window, data = env.windows[1], env.joypads[2]
+    local state = rawget(window, "__slaAdminState")
+    equal(data.focus, window, "opening transfers controller focus to admin")
+    equal(state.previousFocus, previous, "opening retains previous focus")
+    equal(env.focusChanges[1].slot, 2, "focus transfer addresses exact local player")
+    equal(otherPlayer.focus, otherFocus, "other local player remains untouched")
+    window:onGainJoypadFocus(data)
+    equal(window:getJoypadFocus(), state.xpEntry, "native initial focus selects first visible input")
+    expect(state.xpEntry.joypadFocused, "initial input is highlighted")
+    window:onJoypadDirRight(data)
+    equal(window:getJoypadFocus(), state.awardXpButton, "native Right selects the action beside input")
+    window:onJoypadDirDown(data)
+    equal(window:getJoypadFocus(), state.awardLevelsButton, "native Down selects corresponding next-row action")
+    window:onJoypadDirLeft(data)
+    equal(window:getJoypadFocus(), state.levelsEntry, "native Left reaches levels input")
+    state.levelsEntry.Type = "ISTextEntryBox"
+    local keyboard = {}
+    state.levelsEntry.onJoypadDown = function(_, button, joypadData)
+        equal(button, "A", "native panel delegates A to text entry")
+        keyboard.prevFocus = joypadData.focus
+        joypadData.focus = keyboard
+    end
+    window:onJoypadDown("A", data)
+    equal(data.focus, keyboard, "native text-entry delegation permits keyboard focus")
+    window:onLoseJoypadFocus(data)
+    expect(not state.levelsEntry.joypadFocused, "losing window focus clears control highlight")
+    data.focus = keyboard.prevFocus
+    window:onGainJoypadFocus(data)
+    equal(window:getJoypadFocus(), state.levelsEntry, "return from keyboard preserves input selection")
+    env.integration.open(2)
+    equal(state.previousFocus, previous, "reopen while focused does not overwrite return target with itself")
+    window:onJoypadDown("B", data)
+    expect(window.removed and state.closed, "B closes admin")
+    equal(data.focus, previous, "B restores previous visible focus")
+    expect(env.integration.open(2).ok, "admin opens again after close")
+    window = env.windows[2]
+    window:close()
+    equal(data.focus, previous, "mouse close also restores controller focus")
+    expect(env.integration.open(2).ok, "admin opens before foreign focus test")
+    window = env.windows[3]
+    local foreign = {}
+    data.focus = foreign
+    window:close()
+    equal(data.focus, foreign, "closing unfocused admin does not steal another window's focus")
+    data.focus = { isReallyVisible = function() return false end }
+    expect(env.integration.open(2).ok, "admin opens from subsequently unavailable return surface")
+    env.windows[4]:close()
+    equal(data.focus, nil, "invisible previous focus is not restored")
+    data.isActive = false
+    local changes = #env.focusChanges
+    expect(env.integration.open(2).ok, "mouse-only admin still opens")
+    equal(#env.focusChanges, changes, "inactive controller does not receive focus")
 end
 
 return assertions

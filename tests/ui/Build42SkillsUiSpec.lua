@@ -268,7 +268,7 @@ local function makeEnvironment(options)
 
     function ProgressBar.updateTooltip(self)
         evidence.priorTooltip = evidence.priorTooltip + 1
-        self.message = "Vanilla tooltip"
+        self.message = evidence.tooltipMessage or "Vanilla tooltip"
     end
 
     function ProgressBar.removeTooltip(self)
@@ -316,6 +316,7 @@ local function makeEnvironment(options)
         function button:initialise() self.initialised = true end
         function button:setEnable(value) self.enabled = value end
         function button:setVisible(value) self.visible = value end
+        function button:isVisible() return self.visible end
         function button:setTooltip(value) self.tooltip = value end
         function button:isMouseOver()
             evidence.buttonHoverReads = (evidence.buttonHoverReads or 0) + 1
@@ -324,6 +325,7 @@ local function makeEnvironment(options)
         function button:setBorderRGBA(r, g, b, a) self.border = { r, g, b, a } end
         function button:getWidth() return self.width end
         function button:getHeight() return self.height end
+        function button:setHeight(value) self.height = value end
         function button:setX(value) self.x = value end
         function button:setY(value) self.y = value end
         function button:click()
@@ -598,6 +600,7 @@ local function makeEnvironment(options)
             return evidence.now
         end,
         getText = formatText,
+        getTextOrNull = options.getTextOrNull,
         measureText = function(text)
             evidence.measurements = (evidence.measurements or 0) + 1
             return #text * (evidence.measureScale or 1)
@@ -897,7 +900,7 @@ end
 
 expect(type(Build42SkillsUi) == "table", "module loads")
 expect(type(Build42SkillsUi.create) == "function", "module exposes create")
-equal(SkillsUiBootstrapHarness, 28, "bootstrap harness checks")
+equal(SkillsUiBootstrapHarness, 29, "bootstrap harness checks")
 expect(C11CBootstrapFirst == rawget(_G, "__C11C_BOOTSTRAP_EVIDENCE").integration,
     "bootstrap returns integration")
 expect(C11CBootstrapReload == C11CBootstrapFirst, "reload returns exact integration")
@@ -2463,6 +2466,29 @@ local invalidLauncher = Build42SkillsUi.create(invalidLauncherDependencies)
 equal(invalidLauncher.ok, false, "incomplete admin launcher fails closed")
 equal(invalidLauncher.code, "invalid_dependencies", "incomplete admin launcher failure code")
 
+for _, textHeight in ipairs({ 12, 19, 28 }) do
+    local env = makeEnvironment({ headerTooltip = true, adminLauncher = true })
+    env.fontHeight = textHeight
+    expect(env.integration.install().ok, "font-sized Admin integration installs")
+    local panel = makeView(env, 0, { makeBar(env, "Axe") })
+    panel.buttonList[1].getHeight = function() return textHeight + 10 end
+    panel:prerender()
+    panel:render()
+    local button, wheel = panel.parent.children[1], panel.parent.children[2]
+    local ap = lastDrawText(panel.statusDraws, "AP: 3")
+    local xp = lastDrawText(panel.statusDraws, "Survivor XP: 10 / 100")
+    -- Native ISButton centers MeasureStringY inside its height with a zero yoffset.
+    local padding = (button.height - textHeight) / 2
+    expect(padding >= 4, "Admin text has clearance above and below at font height " .. textHeight)
+    equal(button.y + padding, ap.y, "Admin text remains aligned with first-row AP")
+    expect(button.y + button.height < xp.y, "Admin border stays above the next header row")
+    equal(panel.parent.height, 308, "font-sized Admin retains containing panel height")
+    equal(panel.outer.height, 328, "font-sized Admin retains outer window height")
+    equal(wheel.y, button.y + button.height, "wheel forwarding begins below resized Admin")
+    equal(wheel.y + wheel.height, panel.parent.height, "wheel forwarding still reaches panel bottom")
+    expect(button:onMouseWheel(1), "font-sized Admin still forwards mouse wheel")
+end
+
 local adminEnvironment = makeEnvironment({ adminLauncher = true })
 equal(adminEnvironment.adminInstalls, 0, "admin launcher creation is inert")
 expect(adminEnvironment.integration.install().ok, "composite Skills and admin integration installs")
@@ -2497,7 +2523,7 @@ expect(adminView.parent.width <= adminView.outer.width,
     "outboard Admin remains inside the propagated window hierarchy")
 expect(adminView.parent:canRouteMouseTo(adminButton),
     "expanded parent routes mouse input to the visible outboard Admin")
-equal(adminButton.y, 18, "Admin uses the first native-height row")
+equal(adminButton.y, 14, "Admin padding surrounds the first native-height text row")
 expect(adminWheelSurface.visible and adminWheelSurface.javaConsumeMouseEvents == false,
     "transparent outboard gutter forwards wheel without consuming other mouse events")
 equal(rawget(adminWheelSurface, "setConsumeMouseEvents"), nil,
@@ -3311,6 +3337,85 @@ do
     equal(plain.adminAvailabilityReads, 0, "no-admin panel never queries admin authority")
     end
     stableUiCases()
+end
+
+do
+    local function c86UiCases()
+    do
+    local env = makeEnvironment({ adminLauncher = true })
+    expect(env.integration.install().ok, "controller admin navigation installs")
+    local view = makeView(env, 2, { makeBar(env, "Axe"), makeBar(env, "Aiming") })
+    view:prerender(); view:render(); view:onGainJoypadFocus(); view:onJoypadDirDown()
+    local button = view.parent.children[1]
+    view:onJoypadDirUp()
+    expect(button.joypadFocused and view.joypadIndex == 0, "Up from first skill selects Admin")
+    view:onJoypadDirRight()
+    expect(button.joypadFocused, "Right leaves Admin selected")
+    view:onJoypadDown("A")
+    equal(#env.adminOpens, 1, "controller A activates the existing Admin action")
+    equal(env.adminOpens[1], 2, "controller Admin launch keeps the local player slot")
+    view:onJoypadDirDown()
+    expect(not button.joypadFocused and view.joypadIndex == 1, "Down from Admin returns to first skill")
+    view:onJoypadDirUp(); view:onJoypadDirUp()
+    equal(view.joypadIndex, 2, "Up from Admin reaches last skill")
+    view:onJoypadDirDown()
+    expect(button.joypadFocused, "Down from last skill selects Admin")
+    env.adminAvailable = false
+    view:setVisible(false); view:setVisible(true); view:prerender(); view:render()
+    expect(not button.joypadFocused, "losing Admin availability clears its selection")
+    view:onJoypadDirDown(); view:onJoypadDirUp()
+    equal(view.joypadIndex, 2, "unavailable Admin preserves vanilla skill wrap")
+end
+
+do
+    for _, locale in ipairs({ "ES", "UA", "EN", "CN" }) do
+        local texts = VanillaSkillTranslations[locale]
+        local function lookup(key) return texts[key] or VanillaSkillTranslations.EN[key] end
+        local env = makeEnvironment({ getTextOrNull = lookup })
+        expect(env.integration.install().ok, locale .. " description fallback installs")
+        for id, canonical in pairs({ Aiming = "Aiming", Blunt = "Long Blunt", Woodwork = "Carpentry", Sprinting = "Running", Nimble = "Nimble", Strength = "Strength" }) do
+            local bar = makeBar(env, id)
+            local name = texts["IGUI_perks_" .. id]
+            function bar.perk:getName() return name end
+            function bar.perk:isCustom() return false end
+            local badKey = "IGUI_perks_" .. name .. "_Description"
+            local description = lookup("IGUI_perks_" .. canonical .. "_Description")
+            expect(type(description) == "string", locale .. " installed canonical description exists: " .. id)
+            env.tooltipMessage = "XP header <LINE><LINE> " .. (texts[badKey] or badKey) .. " <LINE> XP boost"
+            bar:updateTooltip(1)
+            equal(bar.message, "XP header <LINE><LINE> " .. description .. " <LINE> XP boost",
+                locale .. " repairs only missing description and preserves surrounding text: " .. id)
+            env.tooltipMessage = "Other mod's valid description"
+            bar:updateTooltip(1)
+            equal(bar.message, env.tooltipMessage, "valid third-party tooltip remains unchanged")
+            function bar.perk:isCustom() return true end
+            env.tooltipMessage = "XP header <LINE><LINE> " .. badKey
+            bar:updateTooltip(1)
+            equal(bar.message, env.tooltipMessage, "custom perk descriptions remain unchanged")
+        end
+    end
+    local texts = { IGUI_perks_Carpentry_Description = "Base", IGUI_perks_Carpentry_Description2 = "Level two" }
+    local env = makeEnvironment({ getTextOrNull = function(key) return texts[key] end })
+    expect(env.integration.install().ok, "per-level description fallback installs")
+    local bar = makeBar(env, "Woodwork")
+    function bar.perk:getName() return "Carpintería" end
+    function bar.perk:isCustom() return false end
+    env.tooltipMessage = "Header <LINE><LINE> IGUI_perks_Carpintería_Description <LINE> boost"
+    bar:updateTooltip(1)
+    equal(bar.message, "Header <LINE><LINE> Base <LINE><LINE> Level two <LINE> boost", "missing level description joins its repaired base")
+    texts["IGUI_perks_Carpintería_Description2"] = ""
+    bar:updateTooltip(1)
+    equal(bar.message, "Header <LINE><LINE> Base <LINE><LINE> Level two <LINE> boost", "empty localized level description also uses fallback")
+    texts["IGUI_perks_Carpintería_Description2"] = "Existing level description"
+    env.tooltipMessage = "Header <LINE><LINE> IGUI_perks_Carpintería_Description <LINE><LINE> Existing level description <LINE> boost"
+    bar:updateTooltip(1)
+    equal(bar.message, "Header <LINE><LINE> Base <LINE><LINE> Existing level description <LINE> boost", "valid localized level description is preserved without duplication")
+    texts.IGUI_perks_Carpentry_Description = nil
+    bar:updateTooltip(1)
+    equal(bar.message, env.tooltipMessage, "unknown canonical description fails back to original tooltip")
+end
+    end
+    c86UiCases()
 end
 
 return assertions

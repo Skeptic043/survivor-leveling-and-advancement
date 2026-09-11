@@ -1,8 +1,6 @@
 local Build42AdminUi = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
-local PANEL_WIDTH = 400
-local PANEL_HEIGHT = 318
 local PANEL_MARGIN = 16
 local PANEL_GAP = 20
 
@@ -251,6 +249,7 @@ function Build42AdminUi.create(dependencies)
         ISCollapsableWindowJoypad = true,
         ISTextEntryBox = true,
         ISButton = true,
+        ISPanel = true,
         canSeePlayersStats = true,
         getPlayerContextMenu = true,
         getSpecificPlayer = true,
@@ -258,8 +257,13 @@ function Build42AdminUi.create(dependencies)
         isClient = true,
         isDebugEnabled = true,
         getText = true,
+        measureText = true,
+        fontHeight = true,
         viewport = true,
         smallFont = true,
+        getJoypadData = true,
+        setJoypadFocus = true,
+        joypadBButton = true,
     }
     if not exactPlainTable(dependencies, dependencyFields) then
         return failure("invalid_dependencies", "dependencies")
@@ -271,6 +275,7 @@ function Build42AdminUi.create(dependencies)
     local windowClass = rawget(dependencies, "ISCollapsableWindowJoypad")
     local entryClass = rawget(dependencies, "ISTextEntryBox")
     local buttonClass = rawget(dependencies, "ISButton")
+    local panelClass = rawget(dependencies, "ISPanel")
     local seePlayerStats = rawget(dependencies, "canSeePlayersStats")
     local getPlayerContextMenu = rawget(dependencies, "getPlayerContextMenu")
     local getSpecificPlayer = rawget(dependencies, "getSpecificPlayer")
@@ -278,8 +283,16 @@ function Build42AdminUi.create(dependencies)
     local isClient = rawget(dependencies, "isClient")
     local isDebugEnabled = rawget(dependencies, "isDebugEnabled")
     local getText = rawget(dependencies, "getText")
+    local measureText = rawget(dependencies, "measureText")
+    local fontHeight = rawget(dependencies, "fontHeight")
     local viewport = rawget(dependencies, "viewport")
     local smallFont = rawget(dependencies, "smallFont")
+    local getJoypadData = rawget(dependencies, "getJoypadData")
+    local setJoypadFocus = rawget(dependencies, "setJoypadFocus")
+    local joypadBButton = rawget(dependencies, "joypadBButton")
+    local priorGainFocus = protectedMember(windowClass, "onGainJoypadFocus")
+    local priorLoseFocus = protectedMember(windowClass, "onLoseJoypadFocus")
+    local priorJoypadDown = protectedMember(windowClass, "onJoypadDown")
 
     local priorScoreboardMenu = method(scoreboardClass, "doPlayerListContextMenu")
     local priorUsersListMenu = method(usersListClass, "doContextMenu")
@@ -293,14 +306,19 @@ function Build42AdminUi.create(dependencies)
     local adminStatus = validOwner(owner) and rawget(owner, "adminStatus") or nil
     if type(scoreboardClass) ~= "table" or type(usersListClass) ~= "table"
         or type(windowClass) ~= "table"
-        or type(entryClass) ~= "table" or type(buttonClass) ~= "table"
+        or type(entryClass) ~= "table" or type(buttonClass) ~= "table" or type(panelClass) ~= "table"
         or not priorScoreboardMenu or not priorUsersListMenu
         or not windowNew or not windowCreateChildren
         or not priorWindowPrerender or not callable(windowInstantiate) or not entryNew or not buttonNew
         or not requestAdmin or not adminStatus or seePlayerStats == nil
         or not callable(getPlayerContextMenu) or not callable(getSpecificPlayer) or not callable(isServer)
         or not callable(isClient) or not callable(isDebugEnabled)
-        or not callable(getText) or not callable(viewport) or smallFont == nil then
+        or not callable(getText) or not callable(measureText)
+        or not callable(fontHeight) or not callable(panelClass.new)
+        or not callable(viewport) or smallFont == nil
+        or not callable(getJoypadData) or not callable(setJoypadFocus) or joypadBButton == nil
+        or not callable(priorGainFocus) or not callable(priorLoseFocus)
+        or not callable(priorJoypadDown) then
         return failure("invalid_dependencies", "callables")
     end
 
@@ -521,6 +539,8 @@ function Build42AdminUi.create(dependencies)
     local function setControlTitle(control, title)
         local setter = type(control) == "table" and control.setTitle or nil
         if type(control) ~= "table" or title == nil then return false end
+        if rawget(control, "__slaTitle") == title then return true end
+        rawset(control, "__slaTitle", title)
         if callable(setter) then return pcall(setter, control, title) end
         rawset(control, "title", title)
         return true
@@ -538,7 +558,6 @@ function Build42AdminUi.create(dependencies)
         rawset(state.refreshButton, "internal", "REFRESH")
         setControlTitle(state.awardXpButton, localized("IGUI_SLA_Admin_AwardXp"))
         setControlTitle(state.awardLevelsButton, localized("IGUI_SLA_Admin_AwardLevels"))
-        setControlTitle(state.clearSlotsButton, localized("IGUI_SLA_Admin_ClearSlots"))
         setControlTitle(state.refreshButton, localized("IGUI_SLA_Admin_Refresh"))
         setVisible(state.xpEntry, true)
         setVisible(state.levelsEntry, true)
@@ -596,6 +615,8 @@ function Build42AdminUi.create(dependencies)
                     or mailbox.status == "pending" and "IGUI_SLA_Admin_CancelPending"
                     or "IGUI_SLA_Admin_Acknowledge"
             ))
+        else
+            setControlTitle(state.clearSlotsButton, localized("IGUI_SLA_Admin_ClearSlots"))
         end
         setEnabled(state.refreshButton, refreshEnabled)
         setEditable(state.xpEntry, mutationEnabled)
@@ -828,32 +849,28 @@ function Build42AdminUi.create(dependencies)
         end
     end
 
-    local function drawPanel(state)
-        local window = state.window
-        local draw = type(window) == "table" and window.drawText or nil
-        if not callable(draw) then return end
-        local function drawLine(text, x, y)
-            if text ~= nil then pcall(draw, window, text, x, y, 1, 1, 1, 1, smallFont) end
-        end
+    local function panelText(state)
+        local lines = {}
+        local function append(text) if text ~= nil then lines[#lines + 1] = text end end
         if mode == "multiplayer" then
             local username = state.target and state.target.username or state.selectedUsername
-            drawLine(localized("IGUI_SLA_Admin_Target", username), 16, 34)
+            append(localized("IGUI_SLA_Admin_Target", username))
         end
         local summary = state.summary
         local readOnly = false
         if summary ~= nil then
-            drawLine(localized("IGUI_SLA_Admin_Level", summary.level), 16, 58)
+            append(localized("IGUI_SLA_Admin_Level", summary.level))
             local current = formatSurvivorXp(summary.xpIntoLevel)
             local required = formatSurvivorXp(summary.xpForNextLevel)
             if current ~= nil and required ~= nil then
-                drawLine(localized("IGUI_SLA_Admin_Xp", current, required), 16, 78)
+                append(localized("IGUI_SLA_Admin_Xp", current, required))
             end
-            drawLine(localized("IGUI_SLA_Admin_Ap", summary.availableAp), 16, 98)
+            append(localized("IGUI_SLA_Admin_Ap", summary.availableAp))
             if summary.dead == true then
-                drawLine(localized("IGUI_SLA_Admin_ProfileDead"), 16, 118)
+                append(localized("IGUI_SLA_Admin_ProfileDead"))
                 readOnly = true
             elseif summary.initialized == false then
-                drawLine(localized("IGUI_SLA_Admin_ProfileUninitialized"), 16, 118)
+                append(localized("IGUI_SLA_Admin_ProfileUninitialized"))
                 readOnly = true
             end
             if summary.mailbox ~= nil then
@@ -861,35 +878,182 @@ function Build42AdminUi.create(dependencies)
                     or summary.mailbox.status == "applied" and "IGUI_SLA_Admin_MailboxApplied"
                     or summary.mailbox.status == "failed" and "IGUI_SLA_Admin_MailboxFailed"
                     or "IGUI_SLA_Admin_MailboxCancelled"
-                drawLine(localized(key), 16, readOnly and 138 or 118)
+                append(localized(key))
             end
         end
         if not (readOnly and summary.mailbox ~= nil) then
-            drawLine(state.message, 16, state.summary ~= nil and 138 or 58)
+            append(state.message)
+        end
+        return lines
+    end
+
+    local function wrapMeasured(text, width)
+        -- Native WrapText can exceed its width cap. Kahlua indexes Java characters, not UTF-8 bytes.
+        local lines = {}
+        for paragraph in (text .. "\n"):gmatch("(.-)\n") do
+            local first, cursor, space = 1, 1, nil
+            while cursor <= #paragraph do
+                local candidate = paragraph:sub(first, cursor)
+                if measureText(candidate) > width and cursor > first then
+                    local last = space and space >= first and space - 1 or cursor - 1
+                    lines[#lines + 1] = paragraph:sub(first, last)
+                    first = space and space >= first and space + 1 or cursor
+                    cursor, space = first, nil
+                else
+                    if paragraph:sub(cursor, cursor) == " " then space = cursor end
+                    cursor = cursor + 1
+                end
+            end
+            lines[#lines + 1] = paragraph:sub(first)
+        end
+        return table.concat(lines, "\n")
+    end
+
+    local function layoutPanel(state)
+        local window, pane = state.window, state.pane
+        local left, top, availableWidth, availableHeight = viewport(state.slot)
+        local lineHeight = fontHeight()
+        if not finite(lineHeight) or lineHeight <= 0 or not finite(left) or not finite(top)
+            or not finite(availableWidth) or not finite(availableHeight)
+            or availableWidth < 120 or availableHeight < 100 then
+            window:close()
+            return
+        end
+        local lines = panelText(state)
+        local controls = { state.awardXpButton, state.awardLevelsButton, state.clearSlotsButton, state.refreshButton }
+        local labels = { localized("IGUI_SLA_Admin_XpInput"), localized("IGUI_SLA_Admin_LevelsInput") }
+        local signature = table.concat(lines, "\n") .. "\n" .. table.concat(labels, "\n")
+        for index = 1, #controls do signature = signature .. "\n" .. controls[index].__slaTitle end
+        signature = signature .. tostring(state.profileChoices ~= nil) .. ":" .. tostring(availableWidth)
+            .. ":" .. tostring(availableHeight) .. ":" .. tostring(left) .. ":" .. tostring(top)
+            .. ":" .. tostring(lineHeight) .. ":" .. tostring(measureText("MW汉語"))
+        if state.layoutSignature == signature then return end
+        local widest, widestButton = measureText(window.title) + 64, 0
+        for index = 1, #lines do widest = math.max(widest, measureText(lines[index]) + 48) end
+        for index = 1, #controls do widestButton = math.max(widestButton, measureText(controls[index].__slaTitle) + 24) end
+        for index = 1, #labels do widest = math.max(widest, measureText(labels[index]) + 48) end
+        local width = math.min(availableWidth, math.max(widest, widestButton * 2 + 68))
+        local textWidth = width - 48
+        local column = (textWidth - PANEL_GAP) / 2
+        local stacked = widestButton > column
+        window.titleFont, window.titleBarFont, window.titleFontHgt = smallFont, smallFont, lineHeight
+        local topInset = callable(window.titleBarHeight) and window:titleBarHeight() + 8 or lineHeight + 18
+        window:setWidth(width)
+        pane:setWidth(width)
+        pane:setY(topInset)
+        local y = 0
+        state.drawLines = {}
+        local function textBlock(text)
+            local wrapped = wrapMeasured(text, textWidth)
+            for line in (wrapped .. "\n"):gmatch("(.-)\n") do
+                state.drawLines[#state.drawLines + 1] = { text = line, y = y }
+                y = y + lineHeight
+            end
+            y = y + 6
+        end
+        for index = 1, #lines do textBlock(lines[index]) end
+        y = y + 8
+        local function place(control, x, rowY, controlWidth, height)
+            control:setX(x)
+            control:setY(rowY)
+            control:setWidth(controlWidth)
+            control:setHeight(height)
+        end
+        local function buttonHeight(button, controlWidth)
+            local title = wrapMeasured(button.__slaTitle, math.max(1, controlWidth - 24))
+            local _, breaks = title:gsub("\n", "")
+            button:setTitle(title)
+            return math.max(24, (breaks + 1) * lineHeight + 10)
+        end
+        local function row(first, second, entry)
+            if stacked then
+                local firstHeight = entry and math.max(24, lineHeight + 10) or buttonHeight(first, textWidth)
+                place(first, PANEL_MARGIN, y, textWidth, firstHeight)
+                y = y + firstHeight + 8
+                local height = buttonHeight(second, textWidth)
+                place(second, PANEL_MARGIN, y, textWidth, height)
+                y = y + height + 14
+            else
+                local height = math.max(entry and math.max(24, lineHeight + 10) or buttonHeight(first, column), buttonHeight(second, column))
+                place(first, PANEL_MARGIN, y, column, height)
+                place(second, PANEL_MARGIN + column + PANEL_GAP, y, column, height)
+                y = y + height + 14
+            end
         end
         if state.profileChoices == nil then
-            drawLine(localized("IGUI_SLA_Admin_XpInput"), 16, 151)
-            drawLine(localized("IGUI_SLA_Admin_LevelsInput"), 16, 211)
+            textBlock(labels[1])
+            row(state.xpEntry, state.awardXpButton, true)
+            textBlock(labels[2])
+            row(state.levelsEntry, state.awardLevelsButton, true)
+            row(state.clearSlotsButton, state.refreshButton, false)
+        else
+            row(state.awardXpButton, state.awardLevelsButton, false)
+            row(state.clearSlotsButton, state.refreshButton, false)
         end
+        local height = math.min(availableHeight, topInset + y + 8)
+        window:setHeight(height)
+        window:setX(math.max(left, math.min(window.x, left + availableWidth - width)))
+        window:setY(math.max(top, math.min(window.y, top + availableHeight - height)))
+        pane:setHeight(height - topInset - 8)
+        pane:setScrollHeight(y)
+        pane:setYScroll(pane:getYScroll())
+        if callable(window.ensureVisible) then window:ensureVisible() end
+        state.layoutSignature = signature
     end
 
     local function closePanel(state)
         if panels[state.slot] ~= state.window then return end
         panels[state.slot] = nil
         state.closed = true
+        local data = getJoypadData(state.slot)
+        if data and data.focus == state.window then
+            local previous = state.previousFocus
+            local visible = protectedMember(previous, "isReallyVisible")
+            local called, shown = pcall(function() return callable(visible) and visible(previous) end)
+            setJoypadFocus(state.slot, called and shown and previous or nil)
+        end
         local remove = state.window.removeFromUIManager
         if callable(remove) then pcall(remove, state.window) end
+    end
+
+    local function focusPanel(state)
+        local data = getJoypadData(state.slot)
+        if not data or data.isActive ~= true or state.closed then return end
+        if data.focus ~= state.window then state.previousFocus = data.focus end
+        setJoypadFocus(state.slot, state.window)
     end
 
     local function makeButton(state, x, y, width, title, action)
         local button = makeControl(buttonClass, buttonNew, x, y, width, 24, title, state, onPanelButton)
         if button == nil then return nil end
         rawset(button, "internal", action)
+        rawset(button, "__slaTitle", title)
         return button
     end
 
     local function buildChildren(state)
         windowCreateChildren(state.window)
+        local pane = makeControl(panelClass, panelClass.new, 0, 32, state.window.width, state.window.height - 40)
+        if pane == nil or not addChild(state.window, pane) then return false end
+        state.pane = pane
+        pane.background = false
+        pane:setScrollChildren(true)
+        pane:addScrollBars()
+        pane.onMouseWheel = function(self, delta)
+            self:setYScroll(self:getYScroll() - delta * fontHeight() * 3)
+            return true
+        end
+        pane.prerender = function(self)
+            self:setStencilRect(0, 0, self.width, self.height)
+            for index = 1, #(state.drawLines or {}) do
+                local line = state.drawLines[index]
+                self:drawText(line.text, PANEL_MARGIN, line.y, 1, 1, 1, 1, smallFont)
+            end
+        end
+        pane.render = function(self)
+            self:clearStencilRect()
+            self:repaintStencilRect(0, 0, self.width, self.height)
+        end
         local grid = state.grid
         if type(grid) ~= "table" then return false end
         local xpEntry = makeControl(entryClass, entryNew, "", grid.left, 170, grid.width, 24)
@@ -911,10 +1075,36 @@ function Build42AdminUi.create(dependencies)
         state.awardLevelsButton = awardLevels
         state.clearSlotsButton = clearSlots
         state.refreshButton = refresh
-        return addChild(state.window, xpEntry) and addChild(state.window, awardXp)
-            and addChild(state.window, levelsEntry) and addChild(state.window, awardLevels)
-            and addChild(state.window, clearSlots)
-            and addChild(state.window, refresh)
+        if not (addChild(pane, xpEntry) and addChild(pane, awardXp)
+            and addChild(pane, levelsEntry) and addChild(pane, awardLevels)
+            and addChild(pane, clearSlots) and addChild(pane, refresh)) then return false end
+        local window = state.window
+        if callable(window.insertNewLineOfButtons) then
+            window:insertNewLineOfButtons(xpEntry, awardXp)
+            window:insertNewLineOfButtons(levelsEntry, awardLevels)
+            window:insertNewLineOfButtons(clearSlots, refresh)
+            window.ensureVisible = function(self)
+                if not self.joyfocus then return end
+                local children = self:getVisibleChildren(self.joypadIndexY)
+                local child = children[self.joypadIndex]
+                if child == nil then return end
+                local scroll = -pane:getYScroll()
+                if child.y < scroll then pane:setYScroll(-child.y)
+                elseif child.y + child.height > scroll + pane.height then
+                    pane:setYScroll(-(child.y + child.height - pane.height))
+                end
+            end
+        end
+        for _, entry in ipairs({ xpEntry, levelsEntry }) do
+            local priorFocus = entry.focus
+            if callable(priorFocus) then
+                entry.focus = function(self, ...)
+                    pane:setYScroll(-math.max(0, self.y - 8))
+                    return priorFocus(self, ...)
+                end
+            end
+        end
+        return true
     end
 
     local function poll(state)
@@ -952,11 +1142,11 @@ function Build42AdminUi.create(dependencies)
         local viewportCalled, viewportLeft, viewportTop, viewportWidth, viewportHeight = pcall(viewport, slot)
         if not viewportCalled or not finite(viewportLeft) or not finite(viewportTop)
             or not finite(viewportWidth) or not finite(viewportHeight)
-            or viewportWidth <= 0 or viewportHeight <= 0 then
+            or viewportWidth < 120 or viewportHeight < 100 then
             return nil, failure("viewport_failed", "viewport")
         end
-        local width = math.min(PANEL_WIDTH, viewportWidth)
-        local height = math.min(PANEL_HEIGHT, viewportHeight)
+        local width = math.min(measureText(localized("IGUI_SLA_Admin_Title")) + 96, viewportWidth)
+        local height = math.min(fontHeight() * 10 + 64, viewportHeight)
         local x = viewportLeft + math.max(0, math.min(viewportWidth - width,
             math.floor((viewportWidth - width) / 2)))
         local y = viewportTop + math.max(0, math.min(viewportHeight - height,
@@ -991,15 +1181,29 @@ function Build42AdminUi.create(dependencies)
             if not buildChildren(state) then error("admin child construction") end
         end
         window.prerender = function(self, ...)
-            local ok, a, b, c = pcall(priorWindowPrerender, self, ...)
-            if not ok then error(a, 0) end
             if not state.closed then
                 poll(state)
-                drawPanel(state)
+                layoutPanel(state)
             end
+            local ok, a, b, c = pcall(priorWindowPrerender, self, ...)
+            if not ok then error(a, 0) end
             return a, b, c
         end
         window.close = function() closePanel(state) end
+        window.onGainJoypadFocus = function(self, data)
+            priorGainFocus(self, data)
+            if self:getJoypadFocus() then self:restoreJoypadFocus(data)
+            else self:setJoypadFocusTopLeft(data) end
+            self:ensureVisible()
+        end
+        window.onLoseJoypadFocus = function(self, data)
+            self:clearJoypadFocus(data)
+            return priorLoseFocus(self, data)
+        end
+        window.onJoypadDown = function(self, button, data)
+            if button == joypadBButton then closePanel(state); return end
+            return priorJoypadDown(self, button, data)
+        end
         local setTitle = window.setTitle
         local title = localized("IGUI_SLA_Admin_Title")
         if not callable(setTitle) or title == nil or not pcall(setTitle, window, title) then
@@ -1023,6 +1227,7 @@ function Build42AdminUi.create(dependencies)
         end
         panels[slot] = window
         updateControls(state)
+        layoutPanel(state)
         return state, nil
     end
 
@@ -1080,6 +1285,7 @@ function Build42AdminUi.create(dependencies)
                 local bring = existing.bringToTop
                 if callable(bring) then pcall(bring, existing) end
                 if not state.waiting then attachOrInspect(state) end
+                focusPanel(state)
                 return { ok = true }
             end
             if type(state) == "table" then closePanel(state) end
@@ -1089,6 +1295,7 @@ function Build42AdminUi.create(dependencies)
         if state == nil then return createFailure end
         rawset(state.window, "__slaAdminState", state)
         attachOrInspect(state)
+        focusPanel(state)
         return { ok = true }
     end
 
