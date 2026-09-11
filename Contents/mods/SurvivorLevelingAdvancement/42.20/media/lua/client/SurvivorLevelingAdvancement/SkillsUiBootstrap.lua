@@ -77,6 +77,7 @@ local adminCalled, adminCreated = pcall(Build42AdminUi.create, {
     ISMiniScoreboardUI = ISMiniScoreboardUI,
     ISUsersList = ISUsersList,
     ISCollapsableWindowJoypad = ISCollapsableWindowJoypad,
+    ISPanel = ISPanel,
     ISTextEntryBox = ISTextEntryBox,
     ISButton = ISButton,
     canSeePlayersStats = Capability.CanSeePlayersStats,
@@ -86,11 +87,16 @@ local adminCalled, adminCreated = pcall(Build42AdminUi.create, {
     isClient = function() return isClient() end,
     isDebugEnabled = function() return isDebugEnabled() end,
     getText = function(key, ...) return getText(key, ...) end,
+    measureText = function(text) return getTextManager():MeasureStringX(UIFont.Small, text) end,
+    fontHeight = function() return getTextManager():getFontHeight(UIFont.Small) end,
     viewport = function(playerNum)
         return getPlayerScreenLeft(playerNum), getPlayerScreenTop(playerNum),
             getPlayerScreenWidth(playerNum), getPlayerScreenHeight(playerNum)
     end,
     smallFont = UIFont.Small,
+    getJoypadData = function(playerNum) return getJoypadData(playerNum) end,
+    setJoypadFocus = function(playerNum, control) return setJoypadFocus(playerNum, control) end,
+    joypadBButton = Joypad.BButton,
 })
 if not adminCalled or type(adminCreated) ~= "table" or rawget(adminCreated, "ok") ~= true
     or type(rawget(adminCreated, "integration")) ~= "table" then
@@ -138,6 +144,7 @@ local createCalled, created = pcall(Build42SkillsUi.create, {
     end,
     smallFont = UIFont.Small,
     joypadAButton = Joypad.AButton,
+    getTextOrNull = function(key) return getTextOrNull(key) end,
     adminLauncher = adminCreated.integration,
 })
 if not createCalled or type(created) ~= "table" or rawget(created, "ok") ~= true

@@ -55,7 +55,7 @@
     "IGUI_SLA_Admin_QueueClear": "Queue Clear Advancements",
     "IGUI_SLA_Admin_CancelPending": "Cancel Pending",
     "IGUI_SLA_Admin_Acknowledge": "Acknowledge",
-    "IGUI_SLA_Admin_MailboxPending": "Pending: Clear Advancements — applies when this profile next connects",
+    "IGUI_SLA_Admin_MailboxPending": "Clear Advancements pending. Applies when this profile next connects.",
     "IGUI_SLA_Admin_MailboxApplied": "Applied: Clear Advancements",
     "IGUI_SLA_Admin_MailboxFailed": "Failed: Clear Advancements",
     "IGUI_SLA_Admin_MailboxCancelled": "Cancelled: Clear Advancements",

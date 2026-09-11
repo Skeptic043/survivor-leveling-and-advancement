@@ -2,6 +2,7 @@
     Label = 'C11-C Build42 Skills UI'
     Spec = 'tests/ui/Build42SkillsUiSpec.lua'
     Sources = @(
+        [pscustomobject]@{ Global = 'VanillaSkillTranslations'; Path = 'tests/.build/vanilla-skill-translations.lua' }
         [pscustomobject]@{ Global = 'ActualWorldSettingsProvider'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider.lua' }
         [pscustomobject]@{ Global = 'Build42SkillsUi'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/UI/Build42SkillsUi.lua' }
         [pscustomobject]@{ Global = 'C11CHarnessInit'; Path = 'tests/ui/SkillsUiBootstrapHarness.lua' }

@@ -483,7 +483,7 @@ function Build42SkillsUi.create(dependencies)
         smallFont = true,
         joypadAButton = true,
     }
-    for _, key in ipairs({ "ISToolTip", "fontHeight", "highContrastEnabled" }) do
+    for _, key in ipairs({ "ISToolTip", "fontHeight", "highContrastEnabled", "getTextOrNull" }) do
         if type(dependencies) == "table" and rawget(dependencies, key) ~= nil then
             dependencyFields[key] = true
         end
@@ -508,6 +508,7 @@ function Build42SkillsUi.create(dependencies)
     local progression = rawget(dependencies, "progressionAdapter")
     local clockMillis = rawget(dependencies, "clockMillis")
     local getText = rawget(dependencies, "getText")
+    local getTextOrNull = rawget(dependencies, "getTextOrNull")
     local measureText = rawget(dependencies, "measureText")
     local smallFont = rawget(dependencies, "smallFont")
     local joypadAButton = rawget(dependencies, "joypadAButton")
@@ -1226,6 +1227,10 @@ function Build42SkillsUi.create(dependencies)
     local function setAdminButtonState(state, visible, expandImmediately)
         state.adminVisible = visible
         if not visible then
+            if state.adminButton ~= nil and state.joypadButton == state.adminButton then
+                clearJoypadButton(state)
+                rawset(state.view, "joypadIndex", nil)
+            end
             state.adminGeometryPrimed = false
             state.adminWheelReady = false
             local hidden = applyAdminButtonVisibility(state, false)
@@ -1920,13 +1925,13 @@ function Build42SkillsUi.create(dependencies)
                 local parent = rawget(view, "parent")
                 if state.adminButton ~= nil and state.adminButtonParent == parent then
                     local buttonWidth = readNumber(state.adminButton, "getWidth")
-                    local buttonHeight = readNumber(state.adminButton, "getHeight")
-                    if buttonWidth == nil or buttonWidth <= 0
-                        or buttonHeight == nil or buttonHeight <= 0 then return false end
+                    local buttonHeight = math.max(20, textHeight + 8)
+                    if buttonWidth == nil or buttonWidth <= 0 then return false end
                     local buttonX = viewX + desiredWidth + ADMIN_OUTBOARD_GAP
-                    local buttonY = state.baseY + state.statusFirstY
+                    local buttonY = state.baseY + state.statusFirstY - (buttonHeight - textHeight) / 2
                     if not writeNumber(state.adminButton, "setX", buttonX)
-                        or not writeNumber(state.adminButton, "setY", buttonY) then return false end
+                        or not writeNumber(state.adminButton, "setY", buttonY)
+                        or not writeNumber(state.adminButton, "setHeight", buttonHeight) then return false end
                     state.adminOutboardRight = buttonX + buttonWidth + STATUS_LEFT_MARGIN
                     local wheelSurface = state.adminWheelSurface
                     local parentHeight = readNumber(parent, "getHeight")
@@ -2079,7 +2084,43 @@ function Build42SkillsUi.create(dependencies)
         return true
     end
 
-    local function onTooltip(bar)
+    local descriptionNames = {
+        Blunt = "Long Blunt", SmallBlunt = "Short Blunt", LongBlade = "Long Blade",
+        SmallBlade = "Short Blade", Woodwork = "Carpentry", Farming = "Agriculture",
+        Sprinting = "Running", Lightfoot = "Lightfooted", Sneak = "Sneaking",
+        PlantScavenging = "Foraging", Doctor = "First Aid", Electricity = "Electrical",
+        Husbandry = "Animal Care", FlintKnapping = "Knapping", Blacksmith = "Blacksmithing",
+        MetalWelding = "Welding",
+    }
+
+    local function repairDescription(bar, selectedLevel)
+        if not callable(getTextOrNull) then return end
+        local perk, message = rawget(bar, "perk"), rawget(bar, "message")
+        if perk == nil or type(message) ~= "string" or not callable(perk.isCustom)
+            or perk:isCustom() ~= false or not callable(perk.getId) or not callable(perk.getName) then return end
+        local id, name = perk:getId(), perk:getName()
+        if type(id) ~= "string" or type(name) ~= "string" then return end
+        local unresolved = "IGUI_perks_" .. name .. "_Description"
+        local marker = " <LINE><LINE> " .. unresolved
+        local first, last = string.find(message, marker, 1, true)
+        if not first or string.match(string.sub(message, last + 1, last + 1), "%d") then return end
+        local canonical = "IGUI_perks_" .. (descriptionNames[id] or id) .. "_Description"
+        local description = getTextOrNull(canonical)
+        if type(description) ~= "string" or description == "" or description == canonical then return end
+        if nonnegativeInteger(selectedLevel) then
+            local suffix = tostring(selectedLevel + 1)
+            local levelText = getTextOrNull(canonical .. suffix)
+            local priorLevelText = getTextOrNull(unresolved .. suffix)
+            if (priorLevelText == nil or priorLevelText == "") and type(levelText) == "string" and levelText ~= "" then
+                description = description .. " <LINE><LINE> " .. levelText
+            end
+        end
+        rawset(bar, "message", string.sub(message, 1, first - 1) .. " <LINE><LINE> "
+            .. description .. string.sub(message, last + 1))
+    end
+
+    local function onTooltip(bar, selectedLevel)
+        repairDescription(bar, selectedLevel)
         local barState = barStateFor(bar)
         if barState == nil or barState.row == nil or not barState.tracked then return end
         local mouseX = readNumber(bar, "getMouseX")
@@ -2107,7 +2148,7 @@ function Build42SkillsUi.create(dependencies)
         if state.controllerBar ~= nil and state.controllerBar ~= bar then clearControllerTooltip(state) end
         if state.controllerRow ~= barState.row or rawget(bar, "message") == nil then
             priorUpdateTooltip(bar, rawget(bar, "level"))
-            onTooltip(bar)
+            onTooltip(bar, rawget(bar, "level"))
         end
         local tooltip = state.controllerBar == bar and rawget(bar, "tooltip") or nil
         if tooltip == nil or state.controllerTooltip == tooltip then return end
@@ -2170,6 +2211,30 @@ function Build42SkillsUi.create(dependencies)
         if ok and keepButtonFocus and not focusCurrentButton(view, state) then clearJoypadButton(state) end
         if not ok then error(a, 0) end
         return a, b, c
+    end
+
+    local function navigateAdmin(view, direction)
+        local state = viewFor(view)
+        if state == nil or state.adminButton == nil then return false end
+        local bars = rawget(view, "progressBars")
+        if type(bars) ~= "table" or #bars == 0 then return false end
+        if state.joypadButton == state.adminButton then
+            clearJoypadButton(state)
+            rawset(view, "joypadIndex", direction < 0 and 1 or #bars)
+            return false
+        end
+        local index = rawget(view, "joypadIndex")
+        if state.adminVisible ~= true or not isVisible(state.adminButton)
+            or not ((direction < 0 and index == 1) or (direction > 0 and index == #bars)) then
+            return false
+        end
+        clearJoypadButton(state)
+        clearControllerTooltip(state)
+        state.adminButton:setJoypadFocused(true)
+        state.joypadButton = state.adminButton
+        rawset(view, "joypadIndex", 0)
+        writeNumber(view, "setYScroll", 0)
+        return true
     end
 
     local function preserveScrollInsideVanillaRender(view, scroll, appliedHeight, appliedScrollHeight)
@@ -2305,9 +2370,9 @@ function Build42SkillsUi.create(dependencies)
         if not ok then error(a, 0) end
         return a, b, c
     end
-    wrappers.updateTooltip = function(bar, ...)
-        local ok, a, b, c = pcall(priorUpdateTooltip, bar, ...)
-        local addonOk = pcall(onTooltip, bar)
+    wrappers.updateTooltip = function(bar, selectedLevel, ...)
+        local ok, a, b, c = pcall(priorUpdateTooltip, bar, selectedLevel, ...)
+        local addonOk = pcall(onTooltip, bar, selectedLevel)
         if not addonOk and barStateFor(bar) ~= nil then
             barStateFor(bar).row = nil
             setButton(barStateFor(bar), false, nil)
@@ -2342,14 +2407,17 @@ function Build42SkillsUi.create(dependencies)
         return a, b, c
     end
     wrappers.onJoypadDirUp = function(view, ...)
+        if navigateAdmin(view, -1) then return end
         return moveJoypadSelection(view, priorOnJoypadDirUp, ...)
     end
     wrappers.onJoypadDirDown = function(view, ...)
+        if navigateAdmin(view, 1) then return end
         return moveJoypadSelection(view, priorOnJoypadDirDown, ...)
     end
     wrappers.onJoypadDirLeft = function(view, ...)
         local state = viewFor(view)
         if state ~= nil and state.joypadButton ~= nil then
+            if state.joypadButton == state.adminButton then rawset(view, "joypadIndex", 1) end
             clearJoypadButton(state)
             if not pcall(updateControllerTooltip, state) then disableView(state) end
             return
@@ -2360,6 +2428,7 @@ function Build42SkillsUi.create(dependencies)
     end
     wrappers.onJoypadDirRight = function(view, ...)
         local state = viewFor(view)
+        if state ~= nil and state.joypadButton == state.adminButton and state.adminButton ~= nil then return end
         if state ~= nil and focusCurrentButton(view, state) then return end
         local ok, a, b, c = pcall(priorOnJoypadDirRight, view, ...)
         if not ok then error(a, 0) end

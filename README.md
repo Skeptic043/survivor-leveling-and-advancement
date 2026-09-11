@@ -26,6 +26,7 @@ SLA gives each character a Survivor Level separate from their normal skills. By 
 - Optionally inherit part of a dead character's Survivor Level.
 - Use the vanilla Skills panel with controller and split-screen support.
 - Optionally show Player 1 Survivor XP on the digital watch through Mod Options.
+- Supports every standard language in Project Zomboid's language settings. All translations were done entirely by AI. If you notice incorrect or confusing text, please report it.
 
 ## Multiplayer administration and saving
 
@@ -55,7 +56,6 @@ Survivor Level inheritance is configured through sandbox settings. The host can 
 - Compatible trainable custom skills need a usable XP curve and supported XP events.
 - A skill at its effective maximum does not generate additional Survivor XP.
 - Direct skill setters or unsupported progression routes do not generate Survivor XP.
-- Only English text is currently included.
 
 ## Technical context
 
