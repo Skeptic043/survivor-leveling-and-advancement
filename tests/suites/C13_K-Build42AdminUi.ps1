@@ -2,6 +2,8 @@
     Label = 'C13-K Build42 Admin UI'
     Spec = 'tests/ui/Build42AdminUiSpec.lua'
     Sources = @(
+        [pscustomobject]@{ Global = 'LocaleText'; Path = 'tests/.build/locale-ui-fixture.lua' }
+        [pscustomobject]@{ Global = 'Build42AdminTransport'; Path = 'Contents/mods/SurvivorLevelingAdvancement/42.20/media/lua/shared/SurvivorLevelingAdvancement/Runtime/Build42AdminTransport.lua' }
         [pscustomobject]@{
             Global = 'VanillaUiLifecycle'
             Path = 'tests/.build/vanilla-ui-element.lua'

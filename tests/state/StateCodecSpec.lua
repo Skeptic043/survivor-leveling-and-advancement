@@ -116,4 +116,103 @@ local freeFinalWrongSpent = withReservation(10, 10, 2); freeFinalWrongSpent.acco
 local noCostField = withReservation(10, 10, 1); noCostField.inFlightAdvancement.apCost = 2; bad(noCostField, "invalid_in_flight_advancement")
 expect(C.SCHEMA_VERSION == 3, "mod-off reconciliation publishes schema v3")
 
+do
+    local source=validState()
+    source.perks.Carving=source.perks.Axe
+    local result=C.decode(source)
+    expect(result.ok and result.state.perks.Axe~=result.state.perks.Carving, "shared sibling records detach independently")
+    expect(result.state.perks.Axe.activeTargets~=result.state.perks.Carving.activeTargets
+        and result.state.perks.Axe.activeTargets[1]~=result.state.perks.Carving.activeTargets[1], "shared nested targets detach independently")
+    result.state.perks.Axe.activeTargets[1].targetId="changed"
+    expect(source.perks.Axe.activeTargets[1].targetId=="target-1"
+        and result.state.perks.Carving.activeTargets[1].targetId=="target-1", "nested mutation reaches neither input nor sibling")
+    source=validState()
+    source.perks={}
+    source.orphanedPerks=source.perks
+    result=C.decode(source)
+    expect(result.ok and result.state.perks~=result.state.orphanedPerks, "shared root maps independently detached")
+end
+
+do
+    local source=validState()
+    source.extra=source
+    local result=C.decode(source)
+    expect(not result.ok and result.code=="invalid_raw" and result.detail=="cycle" and result.raw==nil,
+        "cycle rejected before unknown field validation")
+    for _, value in ipairs({math.huge, function() end}) do
+        source=validState()
+        source.extra=value
+        result=C.decode(source)
+        expect(not result.ok and result.code=="invalid_raw" and result.raw==nil, "raw unsafe values rejected first")
+        local encoded=C.encode(source)
+        expect(not encoded.ok and encoded.code=="invalid_state", "encode retains shape-first failure")
+    end
+    source=validState()
+    source.schemaVersion=4
+    result=C.decode(source)
+    expect(not result.ok and result.code=="newer_schema" and result.raw==source, "newer schema retains original raw identity")
+end
+
+do
+    local inherited=validState()
+    local source=setmetatable({}, {__index=inherited})
+    local encoded=C.encode(source)
+    expect(encoded.ok and getmetatable(encoded.state)==nil and encoded.state.survivor~=inherited.survivor,
+        "encode reconstructs inherited required fields without leaking metatables")
+    local decoded=C.decode(source)
+    expect(not decoded.ok and decoded.code=="unversioned_state", "decode strips metatable before schema validation")
+    source=validState()
+    local inheritedTarget=source.perks.Axe.activeTargets[1]
+    source.perks.Axe.activeTargets[1]=setmetatable({}, {__index=inheritedTarget})
+    encoded=C.encode(source)
+    expect(encoded.ok and getmetatable(encoded.state.perks.Axe.activeTargets[1])==nil,
+        "encode nested inherited fields retain prior behavior")
+    decoded=C.decode(source)
+    expect(not decoded.ok and decoded.code=="invalid_target", "decode strips nested metatables before validation")
+    source=setmetatable({}, {__index=function() error("hostile inherited field") end})
+    local called=pcall(C.encode,source)
+    expect(not called, "encode retains throwing metatable behavior")
+    decoded=C.decode(source)
+    expect(not decoded.ok and decoded.code=="unversioned_state", "decode does not invoke hostile metatable")
+end
+
+do
+    local external=validState()
+    external.schemaVersion=1
+    external.accountingMode=nil
+    local source=validState()
+    source.schemaVersion=0
+    local result=C.decode(source,{schemaMigrations={[0]=function(value)
+        value.survivor.level=10
+        return external
+    end}})
+    expect(result.ok and source.survivor.level==2 and external.schemaVersion==1,
+        "schema callbacks receive detached input and returned records are recloned")
+    external.perks.Axe.activeTargets[1].targetId="outside"
+    expect(result.state.perks.Axe.activeTargets[1].targetId=="target-1", "schema result never aliases callback-owned state")
+
+    source=validState()
+    local changedSpec={adapterId="adapter",adapterVersion=2,curveFingerprint="curve-a",effectiveMaximum=10}
+    local returned=validPerk("a")
+    returned.adapterVersion=2
+    local callbackInput,callbackSpec
+    result=C.decode(source,{loadedPerks={Axe=changedSpec},perkMigrator=function(_,record,spec)
+        callbackInput=record
+        callbackSpec=spec
+        record.naturalPosition=1
+        spec.adapterVersion=99
+        return returned
+    end})
+    expect(result.ok and source.perks.Axe.naturalPosition==4.5 and changedSpec.adapterVersion==2,
+        "compatibility callback inputs are detached")
+    expect(result.state.perks.Axe~=returned and result.state.perks.Axe~=callbackInput
+        and callbackSpec~=changedSpec, "compatibility result detaches external return")
+    returned.activeTargets[1].targetId="outside"
+    expect(result.state.perks.Axe.activeTargets[1].targetId=="target-1", "compatibility target result remains detached")
+    local reserved=withReservation(10,10,1)
+    local reservedResult=C.decode(reserved)
+    expect(reservedResult.ok and reservedResult.state.inFlightAdvancement~=reserved.inFlightAdvancement,
+        "reservation remains detached on decode")
+end
+
 return assertions

@@ -276,7 +276,6 @@ function WorldSettings.create(dependencies)
                 accountingMode = raw.allotmentMode == "Free" and "Free" or "Tracked",
                 normalization = normalization,
                 survivorMultiplier = raw.survivorMultiplier,
-                postMax = { enabled = false },
             },
         }
     end

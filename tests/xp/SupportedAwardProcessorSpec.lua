@@ -72,16 +72,11 @@ local function perkRecord(natural, highWater, targets, postMaxUsed, overrides)
     return record
 end
 
-local function settings(normalization, multiplier, enabled, allowance, diminished)
+local function settings(normalization, multiplier)
     return {
         accountingMode = "Tracked",
         normalization = normalization or 1,
         survivorMultiplier = multiplier or 1,
-        postMax = {
-            enabled = enabled == true,
-            fullRateAllowance = allowance or 0,
-            diminishedRate = diminished or 0,
-        },
     }
 end
 
@@ -91,7 +86,7 @@ local function freeSettings(normalization, multiplier)
     return value
 end
 
-local function award(base, applied, before, after, effective)
+local function award(base, applied, before, after)
     local value = {
         perkId = "Aiming",
         survivorCreditBase = base,
@@ -99,7 +94,6 @@ local function award(base, applied, before, after, effective)
         actualPositionBefore = before,
         actualPositionAfter = after,
     }
-    if effective ~= nil then value.effectiveDelta = effective end
     return value
 end
 
@@ -260,7 +254,7 @@ local function makeEnvironment(config)
     local created = SupportedAwardProcessor.create({
         NaturalLedger = config.naturalLedger or NaturalLedger,
         SurvivorEconomy = SurvivorEconomy,
-        PostMax = config.postMaxService or PostMax,
+
         MutationScope = config.mutationScope or MutationScope,
         PlayerStateStore = store,
         ActualObservation = observation,
@@ -318,8 +312,9 @@ do
     local badSettings = settings()
     badSettings.normalization = -1
     equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "invalid normalization")
-    badSettings = settings(1, 1, true, 1, 2)
-    equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "invalid postmax rate")
+    badSettings = settings()
+    badSettings.postMax = { enabled = true }
+    equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "retired postmax settings rejected")
     badSettings = settings()
     badSettings.accountingMode = "Bogus"
     equal(env.service.process(env.player, award(0, 0, 0, 0), badSettings).code, "invalid_settings", "accounting mode must be exact")
@@ -375,8 +370,8 @@ do
             inspect = forbidden,
             applySupported = forbidden,
             reconcileExternal = forbidden,
+            master = forbidden,
         },
-        postMaxService = { apply = forbidden },
         observation = { get = forbidden, set = forbidden },
     })
     local result = env.service.process(env.player, award(10, 10, 0, 10), freeSettings(2, 3))
@@ -825,123 +820,6 @@ end
 
 do
     local state = freshState()
-    state.perks.Aiming = perkRecord(90, 90)
-    local landing = makeEnvironment({ state = state, observed = 90, position = 100, level = 10 })
-    local landingResult = landing.service.process(landing.player, award(10, 10, 90, 100), settings(1, 1, true, 100, 0.5))
-    expect(landingResult.ok, "award landing on maximum succeeds")
-    equal(landingResult.naturalEligibleBase, 10, "landing award remains ordinary natural accounting")
-    equal(landingResult.postMaxBase, 0, "landing award is not reclassified postmax")
-    equal(landing.store.state.perks.Aiming.postMaxFullRateUsed, 0, "landing award consumes no postmax allowance")
-
-    state = freshState()
-    state.perks.Aiming = perkRecord(100, 100)
-    local disabled = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local disabledResult = disabled.service.process(disabled.player, award(10, 0, 100, 100), settings(2, 3, false, 100, 0.5))
-    expect(disabledResult.ok, "disabled no-debt max succeeds without evaluator")
-    equal(disabledResult.postMaxBase, 10, "disabled max reports routed base")
-    equal(disabledResult.postMaxXp, 0, "disabled max grants no XP")
-    equal(disabledResult.stateWritten, false, "disabled max consumes nothing")
-
-    state = freshState()
-    state.perks.Aiming = perkRecord(100, 100)
-    local enabled = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local enabledResult = enabled.service.process(enabled.player, award(10, 0, 100, 100), settings(2, 3, true, 100, 0.5))
-    expect(enabledResult.ok, "enabled no-debt max succeeds without evaluator")
-    equal(enabledResult.postMaxBase, 10, "enabled max base")
-    equal(enabledResult.postMaxXp, 60, "enabled max normalization and multiplier")
-    equal(enabled.store.state.perks.Aiming.postMaxFullRateUsed, 20, "enabled max consumes normalized base")
-    equal(enabled.store.state.revision, 0, "postmax award does not increment revision")
-end
-
-do
-    local state = freshState()
-    state.perks.Aiming = perkRecord(100, 100)
-    local maxLoss = makeEnvironment({ state = state, observed = 100, position = 90, level = 10 })
-    local maxLossResult = maxLoss.service.process(
-        maxLoss.player,
-        award(0, -10, 100, 90),
-        settings(1, 1, true, 100, 0.5)
-    )
-    expect(maxLossResult.ok, "signed max loss remains ordinary")
-    equal(maxLossResult.survivorXp, 0, "signed max loss grants no Survivor XP")
-    equal(maxLoss.store.state.perks.Aiming.naturalPosition, 90, "signed max loss lowers natural position")
-    equal(maxLoss.store.state.perks.Aiming.highWaterPosition, 90, "signed max loss tracks natural position")
-    equal(maxLoss.store.state.perks.Aiming.postMaxFullRateUsed, 0, "signed max loss consumes no postmax allowance")
-
-    state = freshState()
-    state.perks.Aiming = perkRecord(50, 70, { target("max-boost", 10, 100) })
-    local missing = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local missingResult = missing.service.process(missing.player, award(80, 0, 100, 100), settings(1, 1, true, 100, 0.5))
-    equal(missingResult.code, "invalid_award", "max debt requires evaluator")
-    equal(missing.store.saveCount, 0, "missing evaluator writes nothing")
-
-    state = freshState()
-    state.perks.Aiming = perkRecord(50, 70, { target("max-boost", 10, 100) })
-    local zero = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local zeroResult = zero.service.process(zero.player, award(80, 0, 100, 100, 0), settings(1, 1, true, 100, 0.5))
-    expect(zeroResult.ok, "zero evaluator succeeds inertly")
-    equal(zeroResult.survivorXp, 0, "zero evaluator grants nothing")
-    equal(zeroResult.stateWritten, false, "zero evaluator changes no state")
-
-    state = freshState()
-    state.perks.Aiming = perkRecord(50, 70)
-    local zeroBaseDebt = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local zeroBaseDebtResult = zeroBaseDebt.service.process(
-        zeroBaseDebt.player,
-        award(0, 0, 100, 100, 10),
-        settings(1, 1, true, 100, 0.5)
-    )
-    expect(zeroBaseDebtResult.ok, "zero-base max legacy debt needs no accounting movement")
-    equal(zeroBaseDebtResult.survivorXp, 0, "zero-base max debt grants no Survivor XP")
-    equal(zeroBaseDebtResult.postMaxBase, 0, "zero-base max debt has no postmax base")
-    equal(zeroBaseDebt.store.state.perks.Aiming.naturalPosition, 50, "zero-base max legacy debt leaves natural position unchanged")
-    equal(zeroBaseDebt.store.state.perks.Aiming.postMaxFullRateUsed, 0, "zero-base max debt consumes no postmax allowance")
-
-    state = freshState()
-    state.perks.Aiming = perkRecord(50, 70)
-    local redOnly = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local redOnlyResult = redOnly.service.process(redOnly.player, award(10, 0, 100, 100, 10), settings(1, 1, true, 100, 0.5))
-    expect(redOnlyResult.ok, "legacy no-target max succeeds")
-    equal(redOnlyResult.survivorXp, 10, "legacy no-target max uses enabled post-max policy")
-    equal(redOnly.store.state.perks.Aiming.naturalPosition, 50, "legacy no-target max leaves natural position unchanged")
-    equal(redOnly.store.state.perks.Aiming.highWaterPosition, 70, "inert historical field remains compatible")
-
-    state = freshState()
-    state.perks.Aiming = perkRecord(50, 70, { target("max-boost", 10, 100) })
-    local split = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local splitResult = split.service.process(split.player, award(80, 0, 100, 100, 80), settings(1, 1, true, 100, 0.5))
-    expect(splitResult.ok, "legacy blue overflow max split succeeds")
-    equal(splitResult.naturalEligibleBase, 50, "max split natural base")
-    equal(splitResult.postMaxBase, 30, "max split overflow base")
-    equal(splitResult.postMaxXp, 30, "max split postmax XP")
-    equal(splitResult.survivorXp, 80, "max split total Survivor XP")
-    equal(splitResult.clearedTargetIds[1], "max-boost", "max split clears target")
-    equal(split.store.state.perks.Aiming.naturalPosition, 100, "max split natural synchronization")
-    equal(split.store.state.perks.Aiming.highWaterPosition, 100, "max split high-water synchronization")
-    equal(split.store.state.perks.Aiming.postMaxFullRateUsed, 30, "max split consumes only overflow")
-end
-
-do
-    local state = freshState()
-    state.perks.Aiming = perkRecord(100, 100)
-    local env = makeEnvironment({ state = state, observed = 100, position = 100, level = 10 })
-    local first = env.service.process(env.player, award(8, 0, 100, 100), settings(1, 1, true, 10, 0.5))
-    expect(first.ok, "first allowance award")
-    equal(first.postMaxXp, 8, "first allowance full rate")
-    equal(env.store.state.perks.Aiming.postMaxFullRateUsed, 8, "first usage")
-    local second = env.service.process(env.player, award(8, 0, 100, 100), settings(1, 1, true, 10, 0.5))
-    expect(second.ok, "allowance crossing award")
-    equal(second.postMaxXp, 5, "allowance split and diminished rate")
-    equal(env.store.state.perks.Aiming.postMaxFullRateUsed, 16, "crossing usage")
-    local third = env.service.process(env.player, award(8, 0, 100, 100), settings(1, 1, true, 20, 0.25))
-    expect(third.ok, "changed settings award")
-    equal(third.postMaxXp, 5, "changed allowance uses persisted usage")
-    equal(env.store.state.perks.Aiming.postMaxFullRateUsed, 24, "settings change does not reset usage")
-    equal(env.store.state.revision, 0, "allowance awards do not increment revision")
-end
-
-do
-    local state = freshState()
     state.perks.Aiming = perkRecord(0, 0)
     local originalState = deepCopy(state)
     local inputAward = award(10, 10, 0, 10)
@@ -1001,13 +879,7 @@ do
         expect(reearned.ok, "re-earned loss succeeds")
         equal(reearned.survivorXp, 5, "re-earned XP earns full credit")
     end
-    local state = freshState()
-    state.perks.Aiming = perkRecord(50, 70)
-    local capped = makeEnvironment({ state = roundTrip(state), observed = 100, position = 100, level = 10 })
-    local result = capped.service.process(capped.player, award(10, 0, 100, 100), settings())
-    expect(result.ok, "legacy no-target max needs no debt evaluator")
-    equal(result.survivorXp, 0, "disabled post-max still grants nothing")
-    equal(capped.store.state.perks.Aiming.postMaxFullRateUsed, 0, "disabled post-max consumes no allowance")
+
 end
 
 return assertions

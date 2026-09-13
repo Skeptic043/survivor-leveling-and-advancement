@@ -131,7 +131,7 @@ local function environment(options)
     local awardCreated = SupportedAwardProcessor.create({
         NaturalLedger = NaturalLedger,
         SurvivorEconomy = SurvivorEconomy,
-        PostMax = PostMax,
+
         MutationScope = MutationScope,
         PlayerStateStore = store,
         ActualObservation = ActualObservation,
@@ -223,7 +223,7 @@ do
         accountingMode = "Free",
         normalization = 1,
         survivorMultiplier = 1,
-        postMax = { enabled = false },
+
     })
     expect(freeProgress.ok, "supported Free progress is processed during hidden round trip")
     equal(env.store.state.perks.Axe.naturalPosition, 30, "Free event reconciles its matching preserved perk")
@@ -292,7 +292,7 @@ do
         accountingMode = "Tracked",
         normalization = 1,
         survivorMultiplier = 1,
-        postMax = { enabled = false },
+
     })
     expect(processed.ok, "award-triggered transition succeeds")
     equal(processed.survivorXp, 10, "transition award credits only the current tracked event")

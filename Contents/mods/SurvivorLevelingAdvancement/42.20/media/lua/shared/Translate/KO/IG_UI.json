@@ -64,5 +64,7 @@
     "IGUI_SLA_LevelGain_AP": "AP +%1",
     "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
     "IGUI_SLA_WatchOption": "전자시계에 다음 레벨까지의 XP 비율(%%) 표시",
-    "IGUI_SLA_WatchOption_Tooltip": "다음 생존자 레벨까지의 XP 진행도를 전자시계 오른쪽 아래에 작은 백분율로 표시합니다. 플레이어 1의 XP 비율(%%)만 표시합니다."
+    "IGUI_SLA_WatchOption_Tooltip": "다음 생존자 레벨까지의 XP 진행도를 전자시계 오른쪽 아래에 작은 백분율로 표시합니다. 플레이어 1의 XP 비율(%%)만 표시합니다.",
+    "IGUI_SLA_Admin_CharacterName": "캐릭터: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "이름을 확인할 수 없음"
 }

@@ -71,6 +71,23 @@ public final class TranslationValidator {
     private static String lua(String value) {
         return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\"";
     }
+    private static String luaString(String value) {
+        // LuaCompiler narrows literal characters to bytes. StringLib.char preserves Java UTF-16 units.
+        if (value.chars().anyMatch(c -> c > 127)) {
+            StringBuilder expression = new StringBuilder();
+            for (int start = 0; start < value.length(); start += 40) {
+                if (start > 0) expression.append(" .. ");
+                expression.append("string.char(");
+                for (int index = start; index < Math.min(value.length(), start + 40); index++) {
+                    if (index > start) expression.append(',');
+                    expression.append((int) value.charAt(index));
+                }
+                expression.append(')');
+            }
+            return expression.toString();
+        }
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\"";
+    }
     private static void verifyPerkLuaAccess() throws Exception {
         Class<?> platformType = Class.forName("se.krka.kahlua.vm.Platform");
         Class<?> tableType = Class.forName("se.krka.kahlua.vm.KahluaTable");
@@ -200,16 +217,16 @@ public final class TranslationValidator {
         Path fixture = root.resolve("tests/.build/locale-ui-fixture.lua");
         StringBuilder data = new StringBuilder("return {\n");
         for (String locale : LOCALES) {
-            data.append('[').append(lua(locale)).append("] = {\n");
-            for (Map.Entry<String, Object> entry : uiByLocale.get(locale).entrySet()) data.append('[').append(lua(entry.getKey())).append("] = ").append(lua((String) entry.getValue())).append(",\n");
+            data.append('[').append(luaString(locale)).append("] = {\n");
+            for (Map.Entry<String, Object> entry : uiByLocale.get(locale).entrySet()) data.append('[').append(luaString(entry.getKey())).append("] = ").append(luaString((String) entry.getValue())).append(",\n");
             data.append("},\n");
         }
         Files.writeString(fixture, data.append("}\n"));
         StringBuilder skills = new StringBuilder("return {\n");
         for (String locale : Arrays.asList("EN", "ES", "UA", "CN")) {
-            skills.append('[').append(lua(locale)).append("] = {\n");
+            skills.append('[').append(luaString(locale)).append("] = {\n");
             for (Map.Entry<String, Object> entry : read(game.resolve("media/lua/shared/Translate/" + locale + "/IG_UI.json")).entrySet()) {
-                if (entry.getKey().startsWith("IGUI_perks_")) skills.append('[').append(lua(entry.getKey())).append("] = ").append(lua((String) entry.getValue())).append(",\n");
+                if (entry.getKey().startsWith("IGUI_perks_")) skills.append('[').append(luaString(entry.getKey())).append("] = ").append(luaString((String) entry.getValue())).append(",\n");
             }
             skills.append("},\n");
         }

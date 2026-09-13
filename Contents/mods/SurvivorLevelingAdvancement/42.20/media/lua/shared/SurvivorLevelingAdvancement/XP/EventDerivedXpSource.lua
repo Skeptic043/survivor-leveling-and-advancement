@@ -551,11 +551,11 @@ function EventDerivedXpSource.create(dependencies)
         end
     end
 
-    local function callPrior(prior, route, ...)
+    local function callRouted(prior, player, perk, route, ...)
         local args = pack(...)
         routeFrames[#routeFrames + 1] = {
-            player = args[1],
-            perk = args[2],
+            player = player,
+            perk = perk,
             route = route,
         }
         local called = pack(pcall(prior, unpack(args, 1, args.n)))
@@ -566,6 +566,17 @@ function EventDerivedXpSource.create(dependencies)
         end
 
         return unpack(called, 2, called.n)
+    end
+
+    local function callPrior(prior, route, ...)
+        return callRouted(prior, select(1, ...), select(2, ...), route, ...)
+    end
+
+    function instance.invokeWithRoute(player, perk, useMultipliers, callback, ...)
+        if not instance.verifyOwnership().ok or type(useMultipliers) ~= "boolean" then
+            return callback(...)
+        end
+        return callRouted(callback, player, perk, useMultipliers and "sandbox" or "no_multiplier", ...)
     end
 
     local function ownershipDetail()

@@ -64,5 +64,7 @@
     "IGUI_SLA_LevelGain_AP": "AP +%1",
     "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
     "IGUI_SLA_WatchOption": "Afficher le %% d'XP vers le prochain niveau sur la montre numérique",
-    "IGUI_SLA_WatchOption_Tooltip": "Affiche la progression d'XP vers le prochain niveau de survivant sous forme d'un petit pourcentage en bas à droite de la montre numérique. Affiche uniquement le %% d'XP du joueur 1."
+    "IGUI_SLA_WatchOption_Tooltip": "Affiche la progression d'XP vers le prochain niveau de survivant sous forme d'un petit pourcentage en bas à droite de la montre numérique. Affiche uniquement le %% d'XP du joueur 1.",
+    "IGUI_SLA_Admin_CharacterName": "Personnage : %1",
+    "IGUI_SLA_Admin_NameUnavailable": "Nom indisponible"
 }

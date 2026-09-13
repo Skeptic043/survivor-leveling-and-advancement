@@ -12,6 +12,7 @@ local OWNER_METHODS = {
     advancementStatus = true,
     requestAdmin = true,
     adminStatus = true,
+    invokeWithRoute = true,
 }
 
 local function failure(code, detail)
@@ -86,7 +87,7 @@ local modules = {
     NaturalLedger = require "SurvivorLevelingAdvancement/Core/NaturalLedger",
     SurvivorEconomy = require "SurvivorLevelingAdvancement/Core/SurvivorEconomy",
     Allotment = require "SurvivorLevelingAdvancement/Core/Allotment",
-    PostMax = require "SurvivorLevelingAdvancement/Core/PostMax",
+
     MutationScope = require "SurvivorLevelingAdvancement/State/MutationScope",
     ActualObservation = require "SurvivorLevelingAdvancement/State/ActualObservation",
     AccountingMode = require "SurvivorLevelingAdvancement/Runtime/AccountingMode",
@@ -417,6 +418,10 @@ local function createFacade()
     function facade.requestAdmin(localSlot, request)
         if concreteOwner ~= nil then return concreteOwner.requestAdmin(localSlot, request) end
         return unavailable("requestAdmin")
+    end
+    function facade.invokeWithRoute(player, perk, useMultipliers, callback, ...)
+        if concreteOwner ~= nil then return concreteOwner.invokeWithRoute(player, perk, useMultipliers, callback, ...) end
+        return callback(...)
     end
     function facade.adminStatus(localSlot)
         if concreteOwner ~= nil then return concreteOwner.adminStatus(localSlot) end

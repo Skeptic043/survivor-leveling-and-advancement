@@ -4,6 +4,11 @@ local MODULE = "SurvivorLevelingAdvancement"
 local MAX_SAFE_INTEGER = 9007199254740991
 local nextLocalRequest = 0
 
+local function validCharacterName(value)
+    return type(value) == "string" and #value > 0 and #value <= 128
+        and value:find("%S") ~= nil and value:find("[%c]") == nil
+end
+
 local function failure(code, detail, committed)
     local result = { ok = false, code = code, detail = detail }
     if committed ~= nil then result.committed = committed end
@@ -207,6 +212,11 @@ local function detachAdminSummary(value)
         fields.initialized, fields.dead = true, true
         if rawget(value, "mailbox") ~= nil then fields.mailbox = true end
     end
+    local name = type(value) == "table" and rawget(value, "characterName") or nil
+    if name ~= nil then
+        if not validCharacterName(name) then return nil end
+        fields.characterName = true
+    end
     if not exactTable(value, fields) then return nil end
     local accountingMode = rawget(value, "accountingMode")
     local revision, level = rawget(value, "revision"), rawget(value, "level")
@@ -223,6 +233,7 @@ local function detachAdminSummary(value)
         return nil
     end
     local result = {
+        characterName = name,
         accountingMode = accountingMode,
         revision = revision,
         level = level,
@@ -716,7 +727,7 @@ function Build42Lifecycle.create(dependencies)
     local retainedFailure, ownerServerHandle, advancementServerHandle, adminServerHandle
     local ownerPublisher
     local ownerSessionReady, ownerSessionSnapshot, ownerSessionClear, advancementRequest
-    local xpSourceVerifyOwnership, xpSourceOwnershipFailure
+    local xpSourceVerifyOwnership, xpSourceOwnershipFailure, xpSourceInvokeWithRoute
     local tokenNewCharacter, recordDeath
     local adminSessionInspect, adminSessionRequest, adminDeliverPending, adminResolveProfile
     local readyPlayers, observedPlayers, observedSlots = {}, {}, {}
@@ -915,6 +926,7 @@ function Build42Lifecycle.create(dependencies)
         local inheritanceSession = rawget(services, "inheritanceSession")
         local advancementSession, adminSession = rawget(services, "advancementSession"), rawget(services, "adminSession")
         if type(xpSource) ~= "table" or not callable(rawget(xpSource, "install"))
+            or not callable(rawget(xpSource, "invokeWithRoute"))
             or type(ownerSession) ~= "table" or not callable(rawget(ownerSession, "ready"))
             or not callable(rawget(ownerSession, "snapshot")) or not callable(rawget(ownerSession, "isReady"))
             or not callable(rawget(ownerSession, "clearPlayer"))
@@ -937,6 +949,7 @@ function Build42Lifecycle.create(dependencies)
         end
         local sourceVerifier = rawget(xpSource, "verifyOwnership")
         if callable(sourceVerifier) then xpSourceVerifyOwnership = sourceVerifier end
+        xpSourceInvokeWithRoute = rawget(xpSource, "invokeWithRoute")
         if mode == "server" then
             local ownerCalled, ownerCreated = pcall(createOwnerServer, {
                 ownerSession = ownerSession, snapshotValidator = { validate = validateSnapshot },
@@ -1694,6 +1707,13 @@ function Build42Lifecycle.create(dependencies)
             return failure(rawget(result, "code"), rawget(result, "detail"), rawget(result, "committed"))
         end
         return retain(result, "admin_request_invalid", "adminClient.request")
+    end
+
+    function owner.invokeWithRoute(player, perk, useMultipliers, callback, ...)
+        if mode == "single_player" and xpSourceInvokeWithRoute ~= nil then
+            return xpSourceInvokeWithRoute(player, perk, useMultipliers, callback, ...)
+        end
+        return callback(...)
     end
 
     function owner.adminStatus(localSlot)

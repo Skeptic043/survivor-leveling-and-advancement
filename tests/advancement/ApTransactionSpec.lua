@@ -1279,6 +1279,26 @@ end
 
 -- Recovery identity mismatch, target conflict, downward state, and save failure quarantine the reservation.
 do
+    local state = reservationState({ committed = true, targets = {
+        { targetId = "recover_one", targetLevel = 1, targetPosition = 100 },
+        { targetId = "recover_one:revision:0", targetLevel = 2, targetPosition = 250 },
+    } })
+    local before = clone(state)
+    local store = makeStore(state)
+    local adapter, resolver = makeRuntime()
+    local service = createService(store, adapter, resolver)
+    local player = newPlayer("Axe", 1, 100)
+    local result = service.recover(player)
+    assertCode(result, "recovery_quarantined")
+    assertEqual(string.find(result.detail, "target_TARGET_CONFLICT:", 1, true), 1,
+        "canonical target-ID collision is not hidden by a legacy target")
+    assertEqual(adapter.ensureCalls, 0, "conflicting recovery invokes no engine write")
+    assertEqual(store.saves, 0, "conflicting recovery saves nothing")
+    assertSame(store.current, before, "conflicting recovery preserves reservation and progression")
+    assertEqual(player.skills.Axe.level, 1, "conflicting recovery preserves engine level")
+    assertEqual(player.skills.Axe.position, 100, "conflicting recovery preserves engine XP")
+end
+do
     local store = makeStore(reservationState({ fingerprint = "old_curve" }))
     local adapter, resolver = makeRuntime()
     local service = createService(store, adapter, resolver)

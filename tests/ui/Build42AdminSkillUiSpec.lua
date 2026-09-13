@@ -17,6 +17,7 @@ local function environment(multiplayer, localSlot)
     function player:getOnlineID() return 17 end
     local actor = multiplayer and {} or player
     local stats = {}
+    function stats.onAddXP() end
     function stats.onOptionMouseDown(view, button, extra)
         env.calls = env.calls + 1
         env.lastExtra = extra
@@ -44,6 +45,7 @@ local function environment(multiplayer, localSlot)
         { __index = stats })
     function view:isVisible() return self.visible end
     local owner = {}
+    function owner.invokeWithRoute(_, _, _, callback, ...) return callback(...) end
     function owner.setAdminResultListener(listener) env.listener = listener; return { ok = true } end
     function owner.requestAdmin(slot, request)
         equal(slot, env.slot, "exact local slot")

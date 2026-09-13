@@ -64,5 +64,7 @@
     "IGUI_SLA_LevelGain_AP": "AP +%1",
     "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
     "IGUI_SLA_WatchOption": "Vis XP %% til næste niveau på digitaluret",
-    "IGUI_SLA_WatchOption_Tooltip": "Vis XP-fremskridt mod næste overleverniveau som en lille procentværdi nederst til højre på digitaluret. Viser kun spiller 1's XP %%."
+    "IGUI_SLA_WatchOption_Tooltip": "Vis XP-fremskridt mod næste overleverniveau som en lille procentværdi nederst til højre på digitaluret. Viser kun spiller 1's XP %%.",
+    "IGUI_SLA_Admin_CharacterName": "Karakter: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "Navn ikke tilgængeligt"
 }

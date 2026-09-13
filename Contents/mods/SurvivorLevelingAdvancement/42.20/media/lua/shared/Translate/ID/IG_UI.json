@@ -64,5 +64,7 @@
   "IGUI_SLA_LevelGain_AP": "AP +%1",
   "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
   "IGUI_SLA_WatchOption": "Tampilkan XP %% menuju level berikutnya pada jam digital",
-  "IGUI_SLA_WatchOption_Tooltip": "Tampilkan kemajuan XP menuju Level Penyintas berikutnya sebagai persentase kecil di kanan bawah jam digital. Hanya menampilkan XP %% Pemain 1."
+  "IGUI_SLA_WatchOption_Tooltip": "Tampilkan kemajuan XP menuju Level Penyintas berikutnya sebagai persentase kecil di kanan bawah jam digital. Hanya menampilkan XP %% Pemain 1.",
+    "IGUI_SLA_Admin_CharacterName": "Karakter: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "Nama tidak tersedia"
 }

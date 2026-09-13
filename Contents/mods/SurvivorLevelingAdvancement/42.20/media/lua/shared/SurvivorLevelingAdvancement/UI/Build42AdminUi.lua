@@ -4,6 +4,11 @@ local MAX_SAFE_INTEGER = 9007199254740991
 local PANEL_MARGIN = 16
 local PANEL_GAP = 20
 
+local function validCharacterName(value)
+    return type(value) == "string" and #value > 0 and #value <= 128
+        and value:find("%S") ~= nil and value:find("[%c]") == nil
+end
+
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail }
 end
@@ -61,6 +66,7 @@ local function validOwner(owner)
         advancementStatus = true,
         requestAdmin = true,
         adminStatus = true,
+        invokeWithRoute = true,
     }
     if not exactPlainTable(owner, fields) then return false end
     for key in pairs(fields) do
@@ -170,6 +176,11 @@ local function validSummary(value)
         fields.dead = true
         if rawget(value, "mailbox") ~= nil then fields.mailbox = true end
     end
+    local name = type(value) == "table" and rawget(value, "characterName") or nil
+    if name ~= nil then
+        if not validCharacterName(name) then return false end
+        fields.characterName = true
+    end
     local mailbox = copyMailbox(rawget(value, "mailbox"))
     if not exactPlainTable(value, fields)
         or (rawget(value, "mailbox") ~= nil and mailbox == nil)
@@ -199,6 +210,7 @@ end
 
 local function copySummary(value)
     local result = {
+        characterName = rawget(value, "characterName"),
         accountingMode = rawget(value, "accountingMode"),
         revision = rawget(value, "revision"),
         level = rawget(value, "level"),
@@ -232,12 +244,16 @@ end
 
 local function formatSurvivorXp(value)
     if not finite(value) or value < 0 then return nil end
-    local rounded = value
-    if value <= MAX_SAFE_INTEGER / 10 then
-        rounded = math.floor(value * 10 + 0.5) / 10
+    if value > MAX_SAFE_INTEGER / 10 then
+        local whole = math.floor(value)
+        local called, formatted = pcall(string.format, "%.0f", whole)
+        if not called or type(formatted) ~= "string" then return nil end
+        local tenth = math.floor((value - whole) * 10)
+        return tenth == 0 and formatted or formatted .. "." .. tostring(tenth)
     end
+    local truncated = math.floor(value * 10) / 10
     local called, formatted = pcall(string.format,
-        rounded == math.floor(rounded) and "%.0f" or "%.1f", rounded)
+        truncated == math.floor(truncated) and "%.0f" or "%.1f", truncated)
     return called and type(formatted) == "string" and formatted or nil
 end
 
@@ -265,6 +281,9 @@ function Build42AdminUi.create(dependencies)
         setJoypadFocus = true,
         joypadBButton = true,
     }
+    if type(dependencies) == "table" and rawget(dependencies, "getLanguage") ~= nil then
+        dependencyFields.getLanguage = true
+    end
     if not exactPlainTable(dependencies, dependencyFields) then
         return failure("invalid_dependencies", "dependencies")
     end
@@ -283,6 +302,7 @@ function Build42AdminUi.create(dependencies)
     local isClient = rawget(dependencies, "isClient")
     local isDebugEnabled = rawget(dependencies, "isDebugEnabled")
     local getText = rawget(dependencies, "getText")
+    local getLanguage = rawget(dependencies, "getLanguage")
     local measureText = rawget(dependencies, "measureText")
     local fontHeight = rawget(dependencies, "fontHeight")
     local viewport = rawget(dependencies, "viewport")
@@ -350,6 +370,14 @@ function Build42AdminUi.create(dependencies)
         return value
     end
 
+    local function localizedName(value)
+        local template = localized("IGUI_SLA_Admin_CharacterName", "%1")
+        if template == nil or value == nil then return nil end
+        -- Validate our copy before inserting the player's name as literal display data.
+        local text = template:gsub("%%1", function() return value end)
+        return text
+    end
+
     local function debugAvailable(slot)
         if mode ~= "singleplayer" or not validSlot(slot) then return false end
         local called, value = pcall(isDebugEnabled)
@@ -394,20 +422,6 @@ function Build42AdminUi.create(dependencies)
         return validProfileTarget(left) and validProfileTarget(right)
             and left.username == right.username and left.profileIndex == right.profileIndex
             and left.incarnationId == right.incarnationId
-    end
-
-    local function statusRoute(value)
-        if not exactPlainTable(value, {
-            ok = true, pending = true, requestId = true, operation = true, target = true,
-        }) or rawget(value, "ok") ~= true or rawget(value, "pending") ~= true
-            or not safeId(rawget(value, "requestId"), 64) then return nil end
-        local operation = rawget(value, "operation")
-        local target = rawget(value, "target")
-        if (operation ~= "inspect" and operation ~= "enumerateOfflineProfiles")
-            or type(target) ~= "table" or getmetatable(target) ~= nil
-            or not exactPlainTable(target, { username = true })
-            or not boundedUsername(rawget(target, "username")) then return nil end
-        return { operation = operation, username = rawget(target, "username") }
     end
 
     local function terminalFromStatus(value)
@@ -588,6 +602,28 @@ function Build42AdminUi.create(dependencies)
     local function updateControls(state)
         local access = launcherAvailable(state.slot)
         state.access = access
+        local called, language = pcall(getLanguage)
+        if not called then language = nil end
+        local summary = state.summary or {}
+        local mailboxStatus = summary.mailbox and summary.mailbox.status
+        local prior = state.controlPresentation
+        if language ~= nil and prior ~= nil and prior.language == language
+            and prior.access == access and prior.waiting == state.waiting
+            and prior.summary == state.summary and prior.choices == state.profileChoices
+            and prior.mode == summary.accountingMode and prior.initialized == summary.initialized
+            and prior.dead == summary.dead and prior.mailboxStatus == mailboxStatus
+            and prior.level == summary.level and prior.xp == summary.xpIntoLevel
+            and prior.required == summary.xpForNextLevel and prior.ap == summary.availableAp
+            and prior.name == summary.characterName then return end
+        state.controlPresentation = {
+            language = language, access = access, waiting = state.waiting,
+            summary = state.summary, choices = state.profileChoices,
+            mode = summary.accountingMode, initialized = summary.initialized, dead = summary.dead,
+            mailboxStatus = mailboxStatus, level = summary.level, xp = summary.xpIntoLevel,
+            required = summary.xpForNextLevel, ap = summary.availableAp, name = summary.characterName,
+        }
+        state.presentationVersion = (state.presentationVersion or 0) + 1
+        setControlTitle(state.window, localized("IGUI_SLA_Admin_Title"))
         if state.profileChoices ~= nil then
             updateProfileSelectionControls(state)
             return
@@ -691,6 +727,7 @@ function Build42AdminUi.create(dependencies)
                     return state.message ~= nil
                 end
                 local selected = profiles[1]
+                state.characterName = selected.characterName
                 state.summary = copySummary(selected)
                 state.target = {
                     username = selected.username,
@@ -705,6 +742,9 @@ function Build42AdminUi.create(dependencies)
             end
             local summary = rawget(result, "summary")
             if not validSummary(summary) then return false end
+            if state.offline and (summary.username ~= state.target.username
+                or summary.profileIndex ~= state.target.profileIndex
+                or summary.incarnationId ~= state.target.incarnationId) then return false end
             local outcome = rawget(result, "outcome")
             if outcome == nil then
                 if expectedOperation == "inspect" then outcome = "inspected"
@@ -718,6 +758,7 @@ function Build42AdminUi.create(dependencies)
                 return false
             end
             if not validClearGains(result, expectedOperation, outcome) then return false end
+            state.characterName = summary.characterName
             state.summary = copySummary(summary)
             if mode == "multiplayer" and expectedOperation == "inspect" then
                 state.target = copyTarget(rawget(result, "target"))
@@ -738,7 +779,8 @@ function Build42AdminUi.create(dependencies)
         if type(rawget(result, "committed")) ~= "boolean" then return false end
         if rawget(result, "committed") and rawget(result, "code") == "response_timeout" then
             state.summary = nil
-            state.target = nil
+            -- Keep the inspected incarnation so Refresh cannot select its replacement.
+            if not state.offline then state.target = nil end
         end
         state.message = localized(rawget(result, "committed")
             and "IGUI_SLA_Admin_CommittedFailure" or "IGUI_SLA_Admin_Failure")
@@ -756,7 +798,9 @@ function Build42AdminUi.create(dependencies)
 
     local function beginRequest(state, operation, operandName, operand)
         if state.waiting or not state.access then return false end
-        if operation ~= "inspect" and operation ~= "enumerateOfflineProfiles"
+        if operation == "inspectOfflineProfile" then
+            if not validProfileTarget(state.target) then return false end
+        elseif operation ~= "inspect" and operation ~= "enumerateOfflineProfiles"
             and state.summary == nil then return false end
         local request = requestShape(state, operation, operandName, operand)
         local called, result = pcall(requestAdmin, state.slot, request)
@@ -803,6 +847,7 @@ function Build42AdminUi.create(dependencies)
                 local selected = choices[index]
                 if selected.profileIndex == selectedIndex then
                     state.profileChoices = nil
+                    state.characterName = selected.characterName
                     state.summary = copySummary(selected)
                     state.target = {
                         username = selected.username,
@@ -818,7 +863,10 @@ function Build42AdminUi.create(dependencies)
             return
         end
         if action == "REFRESH" then
-            beginRequest(state, state.offline and "inspectOfflineProfile" or "inspect")
+            local operation = not state.offline and "inspect"
+                or validProfileTarget(state.target) and "inspectOfflineProfile"
+                or "enumerateOfflineProfiles"
+            beginRequest(state, operation)
             return
         end
         if state.summary == nil then return end
@@ -856,6 +904,12 @@ function Build42AdminUi.create(dependencies)
             local username = state.target and state.target.username or state.selectedUsername
             append(localized("IGUI_SLA_Admin_Target", username))
         end
+        append(localizedName(
+            state.summary and state.summary.characterName or state.characterName
+                or localized("IGUI_SLA_Admin_NameUnavailable")))
+        local profileText = state.offline and validProfileTarget(state.target)
+            and localized("IGUI_SLA_Admin_ProfileSelected", profileLabel(state.target.profileIndex)) or nil
+        append(profileText)
         local summary = state.summary
         local readOnly = false
         if summary ~= nil then
@@ -881,7 +935,7 @@ function Build42AdminUi.create(dependencies)
                 append(localized(key))
             end
         end
-        if not (readOnly and summary.mailbox ~= nil) then
+        if not (readOnly and summary.mailbox ~= nil) and state.message ~= profileText then
             append(state.message)
         end
         return lines
@@ -919,15 +973,16 @@ function Build42AdminUi.create(dependencies)
             window:close()
             return
         end
+        local fontWidth = measureText("MW汉語")
+        local prior = state.layoutPresentation
+        if prior ~= nil and prior.version == state.presentationVersion
+            and prior.message == state.message and prior.target == state.target
+            and prior.left == left and prior.top == top and prior.width == availableWidth
+            and prior.height == availableHeight and prior.lineHeight == lineHeight
+            and prior.fontWidth == fontWidth then return end
         local lines = panelText(state)
         local controls = { state.awardXpButton, state.awardLevelsButton, state.clearSlotsButton, state.refreshButton }
         local labels = { localized("IGUI_SLA_Admin_XpInput"), localized("IGUI_SLA_Admin_LevelsInput") }
-        local signature = table.concat(lines, "\n") .. "\n" .. table.concat(labels, "\n")
-        for index = 1, #controls do signature = signature .. "\n" .. controls[index].__slaTitle end
-        signature = signature .. tostring(state.profileChoices ~= nil) .. ":" .. tostring(availableWidth)
-            .. ":" .. tostring(availableHeight) .. ":" .. tostring(left) .. ":" .. tostring(top)
-            .. ":" .. tostring(lineHeight) .. ":" .. tostring(measureText("MW汉語"))
-        if state.layoutSignature == signature then return end
         local widest, widestButton = measureText(window.title) + 64, 0
         for index = 1, #lines do widest = math.max(widest, measureText(lines[index]) + 48) end
         for index = 1, #controls do widestButton = math.max(widestButton, measureText(controls[index].__slaTitle) + 24) end
@@ -998,7 +1053,11 @@ function Build42AdminUi.create(dependencies)
         pane:setScrollHeight(y)
         pane:setYScroll(pane:getYScroll())
         if callable(window.ensureVisible) then window:ensureVisible() end
-        state.layoutSignature = signature
+        state.layoutPresentation = {
+            version = state.presentationVersion, message = state.message, target = state.target,
+            left = left, top = top, width = availableWidth, height = availableHeight,
+            lineHeight = lineHeight, fontWidth = fontWidth,
+        }
     end
 
     local function closePanel(state)
@@ -1244,10 +1303,14 @@ function Build42AdminUi.create(dependencies)
                 updateControls(state)
                 return false
             end
-            local route = statusRoute(current)
-            if route ~= nil and route.username == state.selectedUsername then
+            local target, operation = current.target, current.operation
+            local discovery = operation == "inspect" or operation == "enumerateOfflineProfiles"
+            local sameMode = state.offline and (operation == "enumerateOfflineProfiles" or validProfileTarget(target))
+                or not state.offline and (operation == "inspect" or validTarget(target))
+            if sameMode and target.username == state.selectedUsername then
+                if not discovery then state.target = copyTarget(target) end
                 state.waiting = true
-                state.pendingOperation = state.offline and "enumerateOfflineProfiles" or "inspect"
+                state.pendingOperation = operation
                 state.pendingRequestId = rawget(current, "requestId")
                 updateControls(state)
                 return true
@@ -1261,7 +1324,8 @@ function Build42AdminUi.create(dependencies)
             updateControls(state)
             return false
         end
-        return beginRequest(state, state.offline and "enumerateOfflineProfiles" or "inspect")
+        return beginRequest(state, not state.offline and "inspect"
+            or validProfileTarget(state.target) and "inspectOfflineProfile" or "enumerateOfflineProfiles")
     end
 
     local function open(slot, username, offline)

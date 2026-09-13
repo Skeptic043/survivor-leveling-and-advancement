@@ -2,6 +2,11 @@ local AdminSession = {}
 
 local MAX_SAFE_INTEGER = 9007199254740991
 
+local function validCharacterName(value)
+    return type(value) == "string" and #value > 0 and #value <= 128
+        and value:find("%S") ~= nil and value:find("[%c]") == nil
+end
+
 local function failure(code, detail)
     return { ok = false, code = code, detail = detail, committed = false }
 end
@@ -282,7 +287,18 @@ function AdminSession.create(dependencies)
         return { ok = true, state = loaded.state }
     end
 
-    local function summaryFor(state)
+    local function characterName(target)
+        if target == nil then return nil end
+        local called, name = pcall(function()
+            local descriptor = target:getDescriptor()
+            local first, last = descriptor:getForename(), descriptor:getSurname()
+            if type(first) ~= "string" or type(last) ~= "string" then return nil end
+            return (first .. " " .. last):match("^%s*(.-)%s*$")
+        end)
+        return called and validCharacterName(name) and name or nil
+    end
+
+    local function summaryFor(state, target)
         local cost, costError = protectedCall(nextLevelCost, state.survivor.level)
         if costError then return failure("economy_cost_threw", "SurvivorEconomy.nextLevelCost threw") end
         if not validateEconomyResult(cost, { ok = true, cost = true }, { "ok", "cost" })
@@ -305,6 +321,7 @@ function AdminSession.create(dependencies)
         return {
             ok = true,
             summary = {
+                characterName = characterName(target),
                 accountingMode = state.accountingMode,
                 revision = state.revision,
                 level = state.survivor.level,
@@ -559,7 +576,7 @@ function AdminSession.create(dependencies)
         if not ready.ok then return ready end
         local loaded = loadState(target)
         if not loaded.ok then return loaded end
-        local summarized = summaryFor(loaded.state)
+        local summarized = summaryFor(loaded.state, target)
         if not summarized.ok then return summarized end
         return { ok = true, summary = summarized.summary }
     end
@@ -571,7 +588,7 @@ function AdminSession.create(dependencies)
         if not ready.ok then return ready end
         local loaded = loadState(target)
         if not loaded.ok then return loaded end
-        local current = summaryFor(loaded.state)
+        local current = summaryFor(loaded.state, target)
         if not current.ok then return current end
 
         if request.expectedRevision ~= loaded.state.revision then
@@ -653,7 +670,7 @@ function AdminSession.create(dependencies)
         end
 
         candidate.revision = candidate.revision + 1
-        local summarized = summaryFor(candidate)
+        local summarized = summaryFor(candidate, target)
         if not summarized.ok then return summarized end
         local saved = saveState(target, candidate)
         if not saved.ok then return saved end

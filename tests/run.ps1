@@ -48,6 +48,7 @@ $jar = $installation.Jar
 $java = $installation.Java
 if (Test-Path $build) { Remove-Item -Recurse -Force -LiteralPath $build }
 New-Item -ItemType Directory -Path $build | Out-Null
+& (Join-Path $PSScriptRoot 'support/PlayerStatsXpFixture.ps1') -GameRoot $installation.Root -Build $build
 $nativeUiSource = Get-Content -Raw -LiteralPath (Join-Path $installation.Root 'media\lua\client\ISUI\ISUIElement.lua')
 $nativeUiFixture = @'
 return function(UIElement)

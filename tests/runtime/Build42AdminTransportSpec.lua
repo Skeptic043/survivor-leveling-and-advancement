@@ -1491,4 +1491,26 @@ do
     local uncertain = mutation.client.status(0)
     check(uncertain.result.committed == true, "expired mutation may have applied")
 end
+do
+    local h=makeClientHarness()
+    check(h.client.request(0,h.actor0,{operation="inspect",target=usernameTarget()}).ok,"named inspection requests")
+    local route=pendingRoute(h.client,0)
+    local name=string.char(26446).." "..string.char(26126)
+    local response=adminResponse(route,"inspected",{summary=summary({characterName=name})})
+    local accepted=h.client.handle("SurvivorLevelingAdvancement","adminResult",response)
+    check(accepted.ok,"Unicode name passes optional summary field")
+    equal(accepted.result.summary.characterName,name,"transport preserves exact Unicode name")
+    accepted.result.summary.characterName="changed"
+    response.summary.characterName="source changed"
+    equal(h.client.status(0).result.summary.characterName,name,"retained name detaches from both returned and source summary")
+    for _,bad in ipairs({12,"bad\nname",string.rep("x",129),{}}) do
+        check(h.client.request(0,h.actor0,{operation="inspect",target=usernameTarget()}).ok,"unsafe name case requests")
+        route=pendingRoute(h.client,0)
+        response=adminResponse(route,"inspected",{summary=summary({characterName=bad})})
+        local rejected=h.client.handle("SurvivorLevelingAdvancement","adminResult",response)
+        check(not rejected.ok,"malformed name is rejected at protocol boundary")
+        response.summary.characterName=nil
+        check(h.client.handle("SurvivorLevelingAdvancement","adminResult",response).ok,"omitted name still accepts valid summary")
+    end
+end
 return assertions
