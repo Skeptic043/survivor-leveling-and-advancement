@@ -99,7 +99,6 @@ local function validateDependencies(dependencies)
         { "NaturalLedger", { "baseline", "inspect", "reconcileExternal", "appendTarget", "master", "applySupported" } },
         { "SurvivorEconomy", { "availableAp", "nextLevelCost", "computeAward", "applyXp" } },
         { "Allotment", { "evaluate" } },
-        { "PostMax", { "apply" } },
         { "LevelGainCompletion", { "create", "validate" } },
         { "sandboxMultiplier", { "resolve" } },
         { "positionArithmetic", { "add" } },
@@ -423,7 +422,7 @@ function ServiceComposition.create(dependencies)
         {
             NaturalLedger = dependencies.NaturalLedger,
             SurvivorEconomy = dependencies.SurvivorEconomy,
-            PostMax = dependencies.PostMax,
+
             store = store,
             ActualObservation = dependencies.ActualObservation,
             MutationScope = dependencies.MutationScope,

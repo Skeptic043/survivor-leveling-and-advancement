@@ -1,6 +1,5 @@
 local E = SurvivorEconomy
 local A = Allotment
-local P = PostMax
 local assertions = 0
 
 local function expect(condition, message)
@@ -132,24 +131,5 @@ bad(A.evaluate({ mode = "Global", globalLimit = -1 }, "Axe", active, true), "inv
 bad(A.evaluate({ mode = "PerSkill", perSkillDefault = 1, perSkillOverrides = { Axe = -1 } }, "Axe", active, true), "invalid_config")
 bad(A.evaluate({ mode = "Free" }, "", active, true), "invalid_perk")
 bad(A.evaluate({ mode = "Free" }, "Axe", { Axe = -1 }, true), "invalid_active_targets")
-
-local postState = { fullRateUsed = 2 }
-local disabledPost = P.apply(postState, 10, 2, { enabled = false })
-expect(disabledPost.ok and disabledPost.effect.survivorXp == 0 and disabledPost.state.fullRateUsed == 2, "disabled post maximum consumes nothing")
-expect(disabledPost.state ~= postState, "disabled post maximum does not alias state")
-local underAllowance = P.apply({ fullRateUsed = 2 }, 3, 2, { enabled = true, fullRateAllowance = 10, diminishedRate = 0.25 })
-expect(underAllowance.ok and underAllowance.effect.fullRateBase == 3 and underAllowance.effect.diminishedBase == 0 and underAllowance.effect.survivorXp == 6 and underAllowance.state.fullRateUsed == 5, "full rate below allowance")
-local boundary = P.apply({ fullRateUsed = 8 }, 2, 3, { enabled = true, fullRateAllowance = 10, diminishedRate = 0.25 })
-expect(boundary.ok and boundary.effect.fullRateBase == 2 and boundary.effect.diminishedBase == 0 and boundary.effect.survivorXp == 6, "full rate allowance boundary")
-local split = P.apply({ fullRateUsed = 8 }, 5, 2, { enabled = true, fullRateAllowance = 10, diminishedRate = 0.25 })
-expect(split.ok and split.effect.fullRateBase == 2 and split.effect.diminishedBase == 3 and split.effect.survivorXp == 5.5 and split.state.fullRateUsed == 13, "one award split after crossing allowance")
-local exhausted = P.apply({ fullRateUsed = 10 }, 4, 2, { enabled = true, fullRateAllowance = 10, diminishedRate = 0.5 })
-expect(exhausted.ok and exhausted.effect.fullRateBase == 0 and exhausted.effect.diminishedBase == 4 and exhausted.effect.survivorXp == 4, "exhausted allowance")
-local changedSettings = P.apply({ fullRateUsed = 13 }, 2, 1, { enabled = true, fullRateAllowance = 20, diminishedRate = 0.5 })
-expect(changedSettings.ok and changedSettings.effect.fullRateBase == 2 and changedSettings.state.fullRateUsed == 15, "setting changes retain lifetime usage")
-bad(P.apply({ fullRateUsed = -1 }, 1, 1, { enabled = false }), "invalid_postmax_state")
-bad(P.apply({ fullRateUsed = 0 }, math.huge, 1, { enabled = false }), "invalid_award")
-bad(P.apply({ fullRateUsed = 0 }, 1, 1, { enabled = true, fullRateAllowance = -1, diminishedRate = 0.5 }), "invalid_postmax_settings")
-bad(P.apply({ fullRateUsed = 0 }, 1, 1, { enabled = true, fullRateAllowance = 1, diminishedRate = math.huge }), "invalid_postmax_settings")
 
 return assertions

@@ -20,6 +20,8 @@ local function exact(value, fields)
 end
 
 local translations = {
+    IGUI_SLA_Admin_CharacterName = "Character: %1",
+    IGUI_SLA_Admin_NameUnavailable = "Name unavailable",
     IGUI_SLA_Admin_Button = "Admin",
     IGUI_SLA_Admin_Menu = "Survivor progression",
     IGUI_SLA_Admin_Title = "Survivor progression",
@@ -62,7 +64,7 @@ local function getText(key, ...)
     if value == nil then return key end
     local arguments = { ... }
     for index = 1, #arguments do
-        value = string.gsub(value, "%%" .. tostring(index), tostring(arguments[index]))
+        value = string.gsub(value, "%%" .. tostring(index), function() return tostring(arguments[index]) end)
     end
     return value
 end
@@ -217,6 +219,7 @@ local function makeEnvironment(processMode)
     end
 
     function Window.prerender(self)
+        self.draws = {}
         self.priorPrerenders = self.priorPrerenders + 1
         if self.prerenderThrows then error("vanilla window boom") end
         local state = rawget(self, "__slaAdminState")
@@ -329,10 +332,12 @@ local function makeEnvironment(processMode)
             evidence.requestSequence = evidence.requestSequence + 1
             return { ok = true, requestId = "request-" .. tostring(evidence.requestSequence) }
         end,
+        invokeWithRoute = function(_, _, _, callback, ...) return callback(...) end,
         adminStatus = function(slot)
             evidence.statusReads = evidence.statusReads + 1
             evidence.lastStatusSlot = slot
             if evidence.statusThrows then error("status boom") end
+            if evidence.transportClient then return evidence.transportClient.status(slot) end
             return evidence.status
         end,
     }
@@ -383,7 +388,19 @@ local function makeEnvironment(processMode)
             if evidence.debugThrows then error("debug boom") end
             return evidence.debug
         end,
-        getText = getText,
+        getText = function(...)
+            evidence.translationCalls = (evidence.translationCalls or 0) + 1
+            if evidence.localeText then
+                local args = {...}
+                local value = evidence.localeText[args[1]] or args[1]
+                for index = 2, #args do
+                    value = value:gsub("%%" .. tostring(index - 1), function() return tostring(args[index]) end)
+                end
+                return value
+            end
+            return getText(...)
+        end,
+        getLanguage = function() return evidence.language or "EN" end,
         measureText = function(text)
             evidence.measureCalls = (evidence.measureCalls or 0) + 1
             return #text * (evidence.charWidth or 5)
@@ -911,8 +928,11 @@ equal(state.summary.xpForNextLevel, 100.04,
     "panel presentation leaves the exact required summary value unchanged")
 state.summary = summary(7, 5, 2, 25.05, "Tracked", 100.05)
 window:prerender()
-expect(containsDraw(window, "Survivor XP: 25.1 / 100.1"),
-    "panel rounds Survivor XP half-up at one decimal place")
+expect(containsDraw(window, "Survivor XP: 25 / 100"),
+    "panel floors Survivor XP at one decimal place")
+state.summary = summary(7, 5, 2, 900719925474100.875, "Tracked", 9007199254740991)
+window:prerender()
+expect(containsDraw(window, "Survivor XP: 900719925474100.8 /"), "large fractional XP floors without rounding the tenth")
 state.summary = summary(7, 5, 2, 9007199254740990, "Tracked", 9007199254740991)
 window:prerender()
 local largeXpText = nil
@@ -1688,4 +1708,227 @@ do
     equal(#env.focusChanges, changes, "inactive controller does not receive focus")
 end
 
+local function scenario(offline)
+    local env=makeEnvironment("multiplayer")
+    env.viewportWidth, env.viewportHeight=800, 700
+    local now, packets=0, {}
+    local created=Build42AdminTransport.createClient({
+        nowMilliseconds=function() return now end,
+        sendClientCommand=function(actor,module,command,args) packets[#packets+1]=args end,
+    })
+    expect(created.ok,"actual admin transport creates")
+    env.transportClient=created.client
+    env.requestHandler=function(slot,request) return created.client.request(slot,{},request) end
+    function env:advance(value) now=value end
+    function env:respond(fields)
+        local request=packets[#packets]
+        fields.protocolVersion,fields.requestId,fields.operation=1,request.requestId,request.operation
+        fields.target=fields.target or request.target
+        local result=created.client.handle("SurvivorLevelingAdvancement","adminResult",fields)
+        expect(result.ok,"actual transport accepts fixture response")
+        return result
+    end
+    env.integration.install()
+    local launcher
+    if offline then
+        local list,item=env:usersList("ReviewTarget",0,false)
+        env.UsersList.doContextMenu(list,item,0,0)
+        launcher=env.menu.options[1]
+        launcher:click()
+    else
+        launcher=env:openFromScoreboard("ReviewTarget",0)
+    end
+    env.launcher,env.packets=launcher,packets
+    return env
+end
+local function initialize(env,offline)
+    if offline then
+        env:respond({ok=true,outcome="enumerated",profiles={offlineSummary("ReviewTarget",0,"incarnation-1",4)}})
+    else
+        env:respond({ok=true,outcome="inspected",target={username="ReviewTarget",onlineId=7},summary=summary(4,5,2)})
+    end
+    env.windows[#env.windows]:prerender()
+    local state=env.windows[#env.windows].__slaAdminState
+    expect(state.summary~=nil and state.awardXpButton.enabled,"inspection enables selected target")
+    return state,env.windows[#env.windows]
+end
+
+
+for _, initialFailure in ipairs({"timeout", "rejection"}) do
+    local env = scenario(true)
+    local window = env.windows[1]
+    if initialFailure == "timeout" then env:advance(15001)
+    else env:respond({ok=false, code="session_failed", detail="unavailable", committed=false}) end
+    window:prerender()
+    local state = window.__slaAdminState
+    expect(not state.waiting and state.summary == nil, initialFailure .. " settles without a summary")
+    state.refreshButton:click()
+    equal(#env.packets, 2, initialFailure .. " Refresh sends one discovery request")
+    equal(env.packets[2].operation, "enumerateOfflineProfiles", initialFailure .. " rediscovers by username")
+    initialize(env, true)
+end
+
+for _, offline in ipairs({true, false}) do
+    local env = scenario(offline)
+    local state, window = initialize(env, offline)
+    state.xpEntry:setText("10")
+    state.awardXpButton:click()
+    env:advance(15001)
+    window:prerender()
+    expect(state.summary == nil and not state.awardXpButton.enabled, "uncertain mutation disables further mutations")
+    if offline then
+        equal(state.target.incarnationId, "incarnation-1", "offline timeout retains inspected incarnation")
+        expect(containsDraw(window, "Profile: Primary profile"), "profile identity remains visible after timeout")
+    end
+    state.refreshButton:click()
+    equal(#env.packets, 3, "Refresh sends exactly one read-only request after timeout")
+    equal(env.packets[3].operation, offline and "inspectOfflineProfile" or "inspect", "recovery uses correct read route")
+    if offline then
+        equal(env.packets[3].target.incarnationId, "incarnation-1", "Refresh cannot select a successor incarnation")
+        local request = env.packets[3]
+        for _, mismatch in ipairs({"incarnationId", "profileIndex", "username"}) do
+            local replacement = offlineSummary("ReviewTarget",0,"incarnation-1",9)
+            replacement[mismatch] = mismatch == "profileIndex" and 2 or "replacement"
+            replacement.characterName = "Wrong target name"
+            local rejected = env.transportClient.handle("SurvivorLevelingAdvancement","adminResult",{
+                protocolVersion=1,requestId=request.requestId,operation=request.operation,
+                target=request.target,ok=true,outcome="inspected",summary=replacement,
+            })
+            expect(not rejected.ok and rejected.code == "invalid_response", mismatch .. " mismatch rejects successful summary")
+            expect(env.transportClient.status(0).pending, mismatch .. " mismatch leaves original read pending")
+            window:prerender()
+            expect(state.summary == nil and not state.awardXpButton.enabled, mismatch .. " mismatch cannot enable mutation")
+            expect(not containsDraw(window,"Wrong target name"), mismatch .. " mismatch cannot leak another character name")
+        end
+        env:respond({ok=false,code="stale_target",detail="replacement",committed=false})
+        window:prerender()
+        expect(state.summary == nil and not state.awardXpButton.enabled, "replacement rejection leaves mutations disabled")
+        state.refreshButton:click()
+        equal(env.packets[4].target.incarnationId, "incarnation-1", "repeated Refresh preserves old incarnation")
+        env:respond({ok=true,outcome="inspected",summary=offlineSummary("ReviewTarget",0,"incarnation-1",6)})
+    else
+        env:respond({ok=true,outcome="inspected",target={username="ReviewTarget",onlineId=7},summary=summary(6,5,2)})
+    end
+    window:prerender()
+    expect(state.awardXpButton.enabled and state.summary.revision == 6, "authoritative inspection recovers mutations")
+end
+
+local reopen = scenario(true)
+local pendingState, pendingWindow = initialize(reopen,true)
+pendingState.xpEntry:setText("10")
+pendingState.awardXpButton:click()
+pendingWindow:close()
+reopen.launcher:click()
+local reopenedWindow = reopen.windows[#reopen.windows]
+local reopenedState = reopenedWindow.__slaAdminState
+expect(reopenedState.waiting and reopenedState.pendingOperation == "awardSurvivorXp", "reopened panel attaches exact pending operation")
+equal(reopenedState.target.incarnationId,"incarnation-1","reopened panel retains pending incarnation")
+equal(#reopen.packets,2,"reopening never resends the mutation")
+reopen:respond({ok=true,outcome="applied",summary=offlineSummary("ReviewTarget",0,"incarnation-1",5),levelsGained=0,apGained=0})
+reopenedWindow:prerender()
+expect(reopenedState.summary.revision == 5 and reopenedState.awardXpButton.enabled,"settlement restores reopened panel")
+expect(containsDraw(reopenedWindow,"Profile: Primary profile"),"profile identity survives applied feedback")
+expect(containsDraw(reopenedWindow,"Survivor progression updated."),"applied feedback remains visible")
+expect(not containsDraw(reopenedWindow,"Waiting for Survivor data."),"frame-local draws omit obsolete waiting status")
+
+local stale = scenario(true)
+local staleState, staleWindow = initialize(stale,true)
+staleState.xpEntry:setText("10")
+staleState.awardXpButton:click()
+stale:respond({ok=true,outcome="rejected",code="stale_revision",detail="revision",summary=offlineSummary("ReviewTarget",0,"incarnation-1",6)})
+staleWindow:prerender()
+equal(staleState.summary.revision,6,"stale response adopts authoritative revision")
+staleState.refreshButton:click()
+equal(stale.packets[3].operation,"inspectOfflineProfile","stale Refresh remains a read")
+equal(stale.packets[3].target.incarnationId,"incarnation-1","stale Refresh preserves incarnation")
+
+local idle = scenario(true)
+local idleState,idleWindow = initialize(idle,true)
+local setters = 0
+for _,control in ipairs({idleState.xpEntry,idleState.levelsEntry,idleState.awardXpButton,idleState.awardLevelsButton,idleState.clearSlotsButton,idleState.refreshButton}) do
+    for _,name in ipairs({"setVisible","setEnable","setEditable"}) do
+        local prior=control[name]
+        if prior then control[name]=function(self,...) setters=setters+1; return prior(self,...) end end
+    end
+end
+local calls,measures,access = idle.translationCalls,idle.measureCalls,idle.capabilityReads
+for frame=1,120 do idleWindow:prerender() end
+equal(idle.translationCalls,calls,"unchanged frames reuse translated presentation")
+equal(idle.measureCalls,measures+120,"unchanged frames retain only font-width probe")
+equal(setters,0,"unchanged frames avoid control setters")
+expect(idle.capabilityReads>access,"unchanged frames still check current permissions")
+local drawCount=0
+for _,line in ipairs(idleWindow.draws) do if line.text == "Profile: Primary profile" then drawCount=drawCount+1 end end
+equal(drawCount,1,"selected profile line is not duplicated by initial status")
+local beforeWidth=idleWindow.width
+idle.charWidth=7
+idleWindow:prerender()
+expect(idleWindow.width>beforeWidth,"same-height font width changes invalidate geometry")
+idle.canSee=false
+idleWindow:prerender()
+expect(not idleState.awardXpButton.enabled and not idleState.refreshButton.enabled,"cached controls respond to live permission revocation")
+
+local noLocale = makeEnvironment("singleplayer")
+noLocale.dependencies.getLanguage = nil
+local fallback = Build42AdminUi.create(noLocale.dependencies)
+expect(fallback.ok,"locale cache capability is optional")
+noLocale.integration=fallback.integration
+expect(noLocale.integration.open(0).ok,"missing locale token does not disable Admin")
+local fallbackWindow=noLocale.windows[1]
+fallbackWindow:prerender()
+local fallbackCalls=noLocale.translationCalls
+fallbackWindow:prerender()
+expect(noLocale.translationCalls>fallbackCalls,"missing locale token safely leaves presentation uncached")
+
+for locale,text in pairs(LocaleText) do
+    local env=makeEnvironment("singleplayer")
+    env.localeText,env.language=text,locale
+    env.viewportWidth,env.viewportHeight=1000,700
+    env.requestHandler=function() return {ok=true,operation="inspect",outcome="inspected",summary=summary(3,5,0)} end
+    expect(type(text.IGUI_SLA_Admin_XpInput) == "string" and #text.IGUI_SLA_Admin_XpInput > 0,locale .. " XP input text")
+    expect(type(text.IGUI_SLA_Admin_LevelsInput) == "string" and #text.IGUI_SLA_Admin_LevelsInput > 0,locale .. " level input text")
+    for _,key in ipairs({"IGUI_SLA_Admin_XpInput","IGUI_SLA_Admin_LevelsInput"}) do
+        local value=env.dependencies.getText(key)
+        expect(value ~= nil and string.find(value,";",1,true)==nil,locale .. " valid text " .. key .. " " .. tostring(value))
+    end
+    local opened,result=pcall(env.integration.open,0)
+    expect(opened,locale .. " open threw " .. tostring(result))
+    expect(result.ok,locale .. " shipped Admin opens")
+    local window=env.windows[1]
+    local state=window.__slaAdminState
+    window:prerender()
+    for _,button in ipairs({state.awardXpButton,state.awardLevelsButton,state.clearSlotsButton,state.refreshButton}) do
+        expect(button.x>=0 and button.x+button.width<=window.width,locale .. " action remains within panel")
+        for line in (button.title .. "\n"):gmatch("(.-)\n") do
+            expect(env.dependencies.measureText(line)<=button.width-24,locale .. " real action label fits")
+        end
+    end
+    equal(state.awardXpButton.__slaTitle,text.IGUI_SLA_Admin_AwardXp,locale .. " uses real translated XP action")
+    env.localeText,env.language=LocaleText.EN,"EN"
+    window:prerender()
+    equal(state.awardXpButton.__slaTitle,LocaleText.EN.IGUI_SLA_Admin_AwardXp,locale .. " locale change refreshes labels")
+end
+
+local names=makeEnvironment("singleplayer")
+local nameSummary=summary(3,5,0)
+nameSummary.characterName=string.char(26446).." "..string.char(26126)
+names.requestHandler=function() return {ok=true,operation="inspect",outcome="inspected",summary=nameSummary} end
+expect(names.integration.open(0).ok,"named SP panel opens")
+local nameWindow=names.windows[1]
+local nameState=nameWindow.__slaAdminState
+nameWindow:prerender()
+expect(containsDraw(nameWindow,"Character: "..nameSummary.characterName),"persistent actual Unicode character name is visible")
+nameState.message="Progression updated"
+nameWindow:prerender()
+expect(containsDraw(nameWindow,"Character: "..nameSummary.characterName),"status changes preserve character name")
+nameSummary.characterName="other name"
+expect(nameState.summary.characterName~=nameSummary.characterName,"UI name copied from authoritative summary")
+nameState.summary.characterName="Jo;an %1 50% Smith"
+nameWindow:prerender()
+expect(containsDraw(nameWindow,"Character: Jo;an %1 50% Smith"),"name punctuation and placeholder-like text remain literal display data")
+expect(nameState.awardXpButton.enabled,"name punctuation does not disable Admin actions")
+nameState.summary.characterName=string.rep("Long Name ",12)
+nameWindow:prerender()
+expect(nameWindow.width<=names.viewportWidth,"long name wraps within viewport")
+expect(containsDraw(idleWindow,"Character: Name unavailable"),"offline profile explicitly shows unavailable character name")
 return assertions

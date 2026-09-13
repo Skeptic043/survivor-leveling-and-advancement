@@ -64,5 +64,7 @@
     "IGUI_SLA_LevelGain_AP": "AP +%1",
     "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
     "IGUI_SLA_WatchOption": "在电子表上显示升至下一级所需的XP百分比（%%）",
-    "IGUI_SLA_WatchOption_Tooltip": "在电子表右下角以小型百分比显示升至下一级幸存者等级的XP进度。仅显示玩家1的XP百分比（%%）。"
+    "IGUI_SLA_WatchOption_Tooltip": "在电子表右下角以小型百分比显示升至下一级幸存者等级的XP进度。仅显示玩家1的XP百分比（%%）。",
+    "IGUI_SLA_Admin_CharacterName": "角色：%1",
+    "IGUI_SLA_Admin_NameUnavailable": "姓名不可用"
 }

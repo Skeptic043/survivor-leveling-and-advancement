@@ -64,5 +64,7 @@
   "IGUI_SLA_LevelGain_AP": "AP +%1",
   "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
   "IGUI_SLA_WatchOption": "A következő szinthez szükséges XP %%-ának megjelenítése a digitális órán",
-  "IGUI_SLA_WatchOption_Tooltip": "A digitális óra jobb alsó sarkában kis százalékértékként mutatja a következő túlélőszint felé tett XP-haladást. Csak az 1. játékos XP-arányát mutatja %%-ban."
+  "IGUI_SLA_WatchOption_Tooltip": "A digitális óra jobb alsó sarkában kis százalékértékként mutatja a következő túlélőszint felé tett XP-haladást. Csak az 1. játékos XP-arányát mutatja %%-ban.",
+    "IGUI_SLA_Admin_CharacterName": "Karakter: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "A név nem érhető el"
 }

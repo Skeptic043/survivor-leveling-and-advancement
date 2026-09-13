@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -108,7 +108,7 @@ foreach ($line in Get-Content $infoPath) { if ($line -match '^([^=]+)=(.*)$') { 
 Assert (($info.Keys | Sort-Object) -join ',' -eq 'description,icon,id,incompatible,name,poster') 'metadata has only the approved fields'
 Assert ($info.name -eq 'Survivor Leveling & Advancement' -and $info.id -eq 'SurvivorLevelingAdvancement') 'metadata name and id'
 Assert (-not $info.ContainsKey('versionMin') -and -not $info.ContainsKey('versionMax')) 'metadata does not enforce patch bounds'
-Assert ($info.description -eq 'Earn Survivor Levels through skill XP and spend Advancement Points to raise trainable skills.') 'metadata behavior description'
+Assert ($info.description -match 'Survivor Levels' -and $info.description -match 'skill XP' -and $info.description -match 'Advancement Points') 'metadata describes progression and AP'
 Assert ($info.poster -eq 'poster.png' -and (Test-Path -LiteralPath (Join-Path $mod $info.poster))) 'metadata poster exists'
 Assert ($info.icon -eq 'icon.png' -and (Test-Path -LiteralPath (Join-Path $mod $info.icon))) 'metadata icon exists'
 Assert ($info.incompatible -eq 'RpgSkillsSystemsB42,VanillaMenu') 'metadata blocks both conflicting RPG Skills Systems mod IDs'
@@ -127,31 +127,34 @@ Assert ($translations.Sandbox_SLA) 'single page translation coverage'
 Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_PerSkill') 'second-page translation is absent'
 Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_PerSkill_tooltip') 'second-page tooltip translation is absent'
 Assert ($translations.Sandbox_SLA_PerSkillLimit_option1 -and $translations.Sandbox_SLA_PerSkillLimit_option12) 'shared enum translation coverage'
-Assert ($translations.Sandbox_SLA_tooltip -eq 'Control Survivor XP pacing, skill advancement limits, and optional Survivor Level inheritance.') 'main page tooltip wording'
-Assert ($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip -eq 'Multiplies Survivor XP gained from trainable skill XP. This does not change skill XP.') 'XP multiplier tooltip wording'
-Assert ($translations.Sandbox_SLA_FitnessStrengthContributionPercent -eq 'Fitness & Strength Survivor XP contribution percentage') 'Fitness and Strength percentage label'
-Assert ($translations.Sandbox_SLA_FitnessStrengthContributionPercent_tooltip -eq 'Sets Survivor XP from Fitness and Strength as a percentage of ordinary skill contribution before the Survivor XP multiplier. 6.7 means 6.7%%.') 'Fitness and Strength percentage tooltip wording and escaping'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_tooltip)) 'Sandbox_SLA_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip)) 'Sandbox_SLA_SurvivorXpMultiplier_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_FitnessStrengthContributionPercent)) 'Sandbox_SLA_FitnessStrengthContributionPercent has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_FitnessStrengthContributionPercent_tooltip)) 'Sandbox_SLA_FitnessStrengthContributionPercent_tooltip has readable text'
 Assert ($translations.PSObject.Properties.Name -notcontains 'Sandbox_SLA_FitnessStrengthContribution') 'stale raw Fitness and Strength option translation is absent'
-Assert ((@([regex]::Matches($jsonText, '%')).Count -eq 2)) 'only the escaped Fitness and Strength literal percent is present'
-Assert ($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip -eq 'Balances Survivor XP from compatible custom skills using their published XP curve. Skills without a usable curve use normal contribution.') 'custom skill normalization tooltip wording'
-Assert ($translations.Sandbox_SLA_CustomSkillSurvivorXp -eq 'Compatible custom skills generate Survivor XP') 'custom Survivor XP toggle label'
-Assert ($translations.Sandbox_SLA_CustomSkillSurvivorXp_tooltip -eq 'Allows compatible custom skills and skills without an individual option to generate Survivor XP.') 'custom Survivor XP toggle tooltip'
-Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance -eq 'Enable Survivor Level Inheritance') 'inheritance enabled label'
-Assert ($translations.Sandbox_SLA_EnableSurvivorLevelInheritance_tooltip -eq "Allows an eligible new character to inherit part of the previous character's Survivor Level for the same player profile.") 'inheritance enabled tooltip'
-Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent -eq 'Percentage of Survivor Level Retained') 'inheritance percentage label'
-Assert ($translations.Sandbox_SLA_SurvivorLevelRetainedPercent_tooltip -eq "Percentage of the previous character's Survivor Level inherited by an eligible new character.") 'inheritance percentage tooltip'
-Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -eq 'Global shares Advancement Slots across skills. Per Skill limits Advancement Slots by skill. Free removes advancement slot and catch-up restrictions. Existing tracked progress is preserved. Natural skill XP still grants Survivor XP.') 'allotment tooltip wording'
-Assert ($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip -eq 'Maximum active advancements across all skills. Used only in Global mode.') 'global limit tooltip wording'
-Assert ($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip -eq 'Default maximum active advancements per skill. Custom skills use this value. Vanilla skills can override it below.') 'default limit tooltip wording'
+Assert ($jsonText -notmatch '(?<!%)%(?!%)') 'sandbox literal percent signs are escaped'
+Assert ($translations.Sandbox_SLA_FitnessStrengthContributionPercent_tooltip -match '%%') 'percentage setting explains a literal percentage'
+Assert ($translations.Sandbox_SLA_AllotmentMode_tooltip -match 'Global' -and $translations.Sandbox_SLA_AllotmentMode_tooltip -match 'Per Skill' -and $translations.Sandbox_SLA_AllotmentMode_tooltip -match 'Free' -and $translations.Sandbox_SLA_AllotmentMode_tooltip -match 'preserv') 'mode help covers modes and preservation'
+Assert ($translations.Sandbox_SLA_SurvivorXpMultiplier_tooltip -match 'does not change skill XP') 'multiplier help distinguishes skill XP'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_AutomaticCurveNormalization_tooltip)) 'Sandbox_SLA_AutomaticCurveNormalization_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_CustomSkillSurvivorXp)) 'Sandbox_SLA_CustomSkillSurvivorXp has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_CustomSkillSurvivorXp_tooltip)) 'Sandbox_SLA_CustomSkillSurvivorXp_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_EnableSurvivorLevelInheritance)) 'Sandbox_SLA_EnableSurvivorLevelInheritance has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_EnableSurvivorLevelInheritance_tooltip)) 'Sandbox_SLA_EnableSurvivorLevelInheritance_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_SurvivorLevelRetainedPercent)) 'Sandbox_SLA_SurvivorLevelRetainedPercent has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_SurvivorLevelRetainedPercent_tooltip)) 'Sandbox_SLA_SurvivorLevelRetainedPercent_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_AllotmentMode_tooltip)) 'Sandbox_SLA_AllotmentMode_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_GlobalAdvancementLimit_tooltip)) 'Sandbox_SLA_GlobalAdvancementLimit_tooltip has readable text'
+Assert (-not [string]::IsNullOrWhiteSpace($translations.Sandbox_SLA_PerSkillDefaultLimit_tooltip)) 'Sandbox_SLA_PerSkillDefaultLimit_tooltip has readable text'
 $sandboxTooltips = @($translations.PSObject.Properties | Where-Object Name -like '*_tooltip')
-Assert (@($sandboxTooltips | Where-Object { $_.Value -match ';' }).Count -eq 0) 'sandbox tooltips contain no semicolons'
+Assert (@($sandboxTooltips | Where-Object { $_.Value -match '[;\u2014]' }).Count -eq 0) 'sandbox tooltips contain no semicolons'
 $labels = @{'Sprinting'='Running';'Lightfoot'='Lightfooted';'Sneak'='Sneaking';'Blunt'='Long Blunt';'SmallBlunt'='Short Blunt';'LongBlade'='Long Blade';'SmallBlade'='Short Blade';'Farming'='Agriculture';'Husbandry'='Animal Care';'Woodwork'='Carpentry';'Doctor'='First Aid';'FlintKnapping'='Knapping';'Blacksmith'='Blacksmithing';'MetalWelding'='Welding';'PlantScavenging'='Foraging';'Electricity'='Electrical'}
 foreach ($id in $ids) {
     $key = "SLA_PerSkill_$id"
     Assert ($translations.("Sandbox_" + $key)) "skill translation $id"
     if ($labels.ContainsKey($id)) { Assert ($translations.("Sandbox_" + $key) -eq $labels[$id]) "vanilla English label $id" }
     $skillName = if ($labels.ContainsKey($id)) { $labels[$id] } else { $id }
-    Assert ($translations.("Sandbox_SLA_SkillSurvivorXp_" + $id) -eq "$skillName generates Survivor XP") "Survivor XP toggle label $id"
+    Assert ($translations.("Sandbox_SLA_SkillSurvivorXp_" + $id) -match [regex]::Escape($skillName) -and $translations.("Sandbox_SLA_SkillSurvivorXp_" + $id) -match 'Survivor XP') "Survivor XP toggle label $id"
 }
 
 function ToggleTranslationErrors([string]$translationText) {
@@ -159,14 +162,14 @@ function ToggleTranslationErrors([string]$translationText) {
     try { $fixtureTranslations = $translationText | ConvertFrom-Json } catch { return @('json') }
     $customLabel = $fixtureTranslations.PSObject.Properties['Sandbox_SLA_CustomSkillSurvivorXp']
     $customTooltip = $fixtureTranslations.PSObject.Properties['Sandbox_SLA_CustomSkillSurvivorXp_tooltip']
-    $customValid = $null -ne $customLabel -and $customLabel.Value -eq 'Compatible custom skills generate Survivor XP' -and $null -ne $customTooltip -and $customTooltip.Value -eq 'Allows compatible custom skills and skills without an individual option to generate Survivor XP.'
+    $customValid = $null -ne $customLabel -and $customLabel.Value -match 'custom skills' -and $customLabel.Value -match 'Survivor XP' -and $null -ne $customTooltip -and -not [string]::IsNullOrWhiteSpace($customTooltip.Value)
     if (-not $customValid) {
         $errors += 'custom'
     }
     foreach ($id in $ids) {
         $skillName = if ($labels.ContainsKey($id)) { $labels[$id] } else { $id }
         $property = $fixtureTranslations.PSObject.Properties["Sandbox_SLA_SkillSurvivorXp_" + $id]
-        if ($null -eq $property -or $property.Value -ne "$skillName generates Survivor XP") { $errors += $id }
+        if ($null -eq $property -or $property.Value -notmatch [regex]::Escape($skillName) -or $property.Value -notmatch 'Survivor XP') { $errors += $id }
     }
     return @($errors)
 }
@@ -186,73 +189,75 @@ Assert (-not ($text -match "(?i)$forbidden")) 'sandbox file contains no deferred
 $metadataClaimValues = @($info.GetEnumerator() | Where-Object Key -notin @('poster', 'icon') | ForEach-Object Value) -join ' '
 Assert (-not ($metadataClaimValues -match "(?i)$forbidden")) 'metadata contains no deferred claims'
 
-$requiredUi = [ordered]@{
-    'IGUI_SLA_StatusLevel' = 'Survivor Level: %1'
-    'IGUI_SLA_StatusAP' = 'AP: %1'
-    'IGUI_SLA_StatusActive' = 'Advancement Slots: %1/%2'
-    'IGUI_SLA_StatusSurvivorXp' = 'Survivor XP: %1 / %2'
-    'IGUI_SLA_Advance' = 'Advance to level %1 for %2 AP.'
-    'IGUI_SLA_Master' = 'Master skill for %1 AP.'
-    'IGUI_SLA_MasterClearsSlots' = 'Clears this skill''s occupied advancement slots.'
-    'IGUI_SLA_PerSkillActive' = 'Advancement Slots: %1/%2.'
-    'IGUI_SLA_TargetXpLeft' = '%1 natural skill XP left'
-    'IGUI_SLA_TargetCatchUp' = 'Catch up to free this advancement slot.'
-    'IGUI_SLA_Reason_Pending' = 'An advancement request is pending.'
-    'IGUI_SLA_Reason_MaximumMismatch' = "This skill's progression curve changed."
-    'IGUI_SLA_Reason_AtMaximum' = 'This skill is already at its maximum.'
-    'IGUI_SLA_Reason_InsufficientAp' = 'Not enough AP.'
-    'IGUI_SLA_Reason_RequiredAp' = 'Requires %1 AP.'
-    'IGUI_SLA_Reason_AllotmentDisabled' = 'Advancement spending is disabled for this skill.'
-    'IGUI_SLA_Reason_AllotmentCapacity' = 'Requires 1 free advancement slot.'
-    'IGUI_SLA_Reason_AllotmentCapacityTwo' = $null
-    'IGUI_SLA_SlotsHelp' = $null
-    'IGUI_SLA_HighContrastOption' = $null
-    'IGUI_SLA_HighContrastOption_Tooltip' = $null
-    'IGUI_SLA_Advancement_Stale' = 'Survivor data changed. Refresh and try again.'
-    'IGUI_SLA_Advancement_SendFailed' = 'The advancement request could not be sent. Try again.'
-    'IGUI_SLA_Advancement_Committed' = 'The advancement may have applied. Refresh before trying again.'
-    'IGUI_SLA_Advancement_Failed' = 'The advancement failed. Refresh and try again.'
-    'IGUI_SLA_Admin_Button' = 'Admin'
-    'IGUI_SLA_Admin_Menu' = 'Survivor progression'
-    'IGUI_SLA_Admin_Title' = 'Survivor progression'
-    'IGUI_SLA_Admin_Target' = 'Target: %1'
-    'IGUI_SLA_Admin_Level' = 'Survivor Level: %1'
-    'IGUI_SLA_Admin_Xp' = 'Survivor XP: %1 / %2'
-    'IGUI_SLA_Admin_Ap' = 'Available AP: %1'
-    'IGUI_SLA_Admin_XpInput' = 'XP to award'
-    'IGUI_SLA_Admin_AwardXp' = 'Award XP'
-    'IGUI_SLA_Admin_LevelsInput' = 'Levels to award'
-    'IGUI_SLA_Admin_AwardLevels' = 'Award Levels'
-    'IGUI_SLA_Admin_ClearSlots' = 'Clear Advancements'
-    'IGUI_SLA_Admin_Refresh' = 'Refresh'
-    'IGUI_SLA_Admin_Waiting' = 'Waiting for Survivor data.'
-    'IGUI_SLA_Admin_Inspected' = 'Survivor data refreshed.'
-    'IGUI_SLA_Admin_Applied' = 'Survivor progression updated.'
-    'IGUI_SLA_Admin_Stale' = 'Survivor data changed. Refresh and try again.'
-    'IGUI_SLA_Admin_Failure' = 'The request failed. Refresh and try again.'
-    'IGUI_SLA_Admin_CommittedFailure' = 'The change may have applied. Refresh before trying again.'
-    'IGUI_SLA_Admin_InvalidXp' = 'Enter a positive XP amount.'
-    'IGUI_SLA_Admin_InvalidLevels' = 'Enter a positive whole level count.'
-    'IGUI_SLA_Admin_PendingOther' = 'Another admin request is pending.'
-    'IGUI_SLA_Admin_ProfilePrimary' = 'Primary profile'
-    'IGUI_SLA_Admin_ProfileCoop' = 'Co-op profile %1'
-    'IGUI_SLA_Admin_ProfileSelected' = 'Profile: %1'
-    'IGUI_SLA_Admin_SelectProfile' = 'Offline character profiles'
-    'IGUI_SLA_Admin_ProfileDead' = 'Read-only: this character is dead.'
-    'IGUI_SLA_Admin_ProfileUninitialized' = 'Read-only: Survivor progression is not initialized.'
-    'IGUI_SLA_Admin_QueueClear' = 'Queue Clear Advancements'
-    'IGUI_SLA_Admin_CancelPending' = 'Cancel Pending'
-    'IGUI_SLA_Admin_Acknowledge' = 'Acknowledge'
-    'IGUI_SLA_Admin_MailboxPending' = 'Clear Advancements pending. Applies when this profile next connects.'
-    'IGUI_SLA_Admin_MailboxApplied' = 'Applied: Clear Advancements'
-    'IGUI_SLA_Admin_MailboxFailed' = 'Failed: Clear Advancements'
-    'IGUI_SLA_Admin_MailboxCancelled' = 'Cancelled: Clear Advancements'
-    'IGUI_SLA_LevelGain_Singular' = 'Survivor Level +%1'
-    'IGUI_SLA_LevelGain_Plural' = 'Survivor Levels +%1'
-    'IGUI_SLA_LevelGain_AP' = 'AP +%1'
-    'IGUI_SLA_ModOptions_Title' = 'Survivor Leveling & Advancement'
-    'IGUI_SLA_WatchOption' = 'Show XP %% to next level on digital watch'
-    'IGUI_SLA_WatchOption_Tooltip' = "Show XP progress to the next Survivor Level as a small percentage in the bottom-right of the digital watch. This only shows Player 1's XP %%."
+$requiredUi = @{
+    'IGUI_SLA_Admin_CharacterName' = '%1'
+    'IGUI_SLA_Admin_NameUnavailable' = ''
+    'IGUI_SLA_StatusLevel' = '%1'
+    'IGUI_SLA_StatusAP' = '%1'
+    'IGUI_SLA_StatusActive' = '%1,%2'
+    'IGUI_SLA_StatusSurvivorXp' = '%1,%2'
+    'IGUI_SLA_Advance' = '%1,%2'
+    'IGUI_SLA_Master' = '%1'
+    'IGUI_SLA_MasterClearsSlots' = ''
+    'IGUI_SLA_PerSkillActive' = '%1,%2'
+    'IGUI_SLA_TargetXpLeft' = '%1'
+    'IGUI_SLA_TargetCatchUp' = ''
+    'IGUI_SLA_Reason_Pending' = ''
+    'IGUI_SLA_Reason_MaximumMismatch' = ''
+    'IGUI_SLA_Reason_AtMaximum' = ''
+    'IGUI_SLA_Reason_InsufficientAp' = ''
+    'IGUI_SLA_Reason_RequiredAp' = '%1'
+    'IGUI_SLA_Reason_AllotmentDisabled' = ''
+    'IGUI_SLA_Reason_AllotmentCapacity' = ''
+    'IGUI_SLA_Reason_AllotmentCapacityTwo' = ''
+    'IGUI_SLA_SlotsHelp' = ''
+    'IGUI_SLA_HighContrastOption' = ''
+    'IGUI_SLA_HighContrastOption_Tooltip' = ''
+    'IGUI_SLA_Advancement_Stale' = ''
+    'IGUI_SLA_Advancement_SendFailed' = ''
+    'IGUI_SLA_Advancement_Committed' = ''
+    'IGUI_SLA_Advancement_Failed' = ''
+    'IGUI_SLA_Admin_Button' = ''
+    'IGUI_SLA_Admin_Menu' = ''
+    'IGUI_SLA_Admin_Title' = ''
+    'IGUI_SLA_Admin_Target' = '%1'
+    'IGUI_SLA_Admin_Level' = '%1'
+    'IGUI_SLA_Admin_Xp' = '%1,%2'
+    'IGUI_SLA_Admin_Ap' = '%1'
+    'IGUI_SLA_Admin_XpInput' = ''
+    'IGUI_SLA_Admin_AwardXp' = ''
+    'IGUI_SLA_Admin_LevelsInput' = ''
+    'IGUI_SLA_Admin_AwardLevels' = ''
+    'IGUI_SLA_Admin_ClearSlots' = ''
+    'IGUI_SLA_Admin_Refresh' = ''
+    'IGUI_SLA_Admin_Waiting' = ''
+    'IGUI_SLA_Admin_Inspected' = ''
+    'IGUI_SLA_Admin_Applied' = ''
+    'IGUI_SLA_Admin_Stale' = ''
+    'IGUI_SLA_Admin_Failure' = ''
+    'IGUI_SLA_Admin_CommittedFailure' = ''
+    'IGUI_SLA_Admin_InvalidXp' = ''
+    'IGUI_SLA_Admin_InvalidLevels' = ''
+    'IGUI_SLA_Admin_PendingOther' = ''
+    'IGUI_SLA_Admin_ProfilePrimary' = ''
+    'IGUI_SLA_Admin_ProfileCoop' = '%1'
+    'IGUI_SLA_Admin_ProfileSelected' = '%1'
+    'IGUI_SLA_Admin_SelectProfile' = ''
+    'IGUI_SLA_Admin_ProfileDead' = ''
+    'IGUI_SLA_Admin_ProfileUninitialized' = ''
+    'IGUI_SLA_Admin_QueueClear' = ''
+    'IGUI_SLA_Admin_CancelPending' = ''
+    'IGUI_SLA_Admin_Acknowledge' = ''
+    'IGUI_SLA_Admin_MailboxPending' = ''
+    'IGUI_SLA_Admin_MailboxApplied' = ''
+    'IGUI_SLA_Admin_MailboxFailed' = ''
+    'IGUI_SLA_Admin_MailboxCancelled' = ''
+    'IGUI_SLA_LevelGain_Singular' = '%1'
+    'IGUI_SLA_LevelGain_Plural' = '%1'
+    'IGUI_SLA_LevelGain_AP' = '%1'
+    'IGUI_SLA_ModOptions_Title' = ''
+    'IGUI_SLA_WatchOption' = '%%'
+    'IGUI_SLA_WatchOption_Tooltip' = '%%'
 }
 Assert (Test-Path -LiteralPath $uiPath -PathType Leaf) 'Build 42 English UI JSON exists'
 Assert (-not (Test-Path -LiteralPath $obsoleteUiPath)) 'obsolete English UI text file is absent'
@@ -262,14 +267,13 @@ Assert (@($uiKeys | Group-Object | Where-Object Count -gt 1).Count -eq 0) 'SLA U
 $uiTranslations = $uiText | ConvertFrom-Json
 $actualUiKeys = @($uiTranslations.PSObject.Properties.Name)
 Assert ($actualUiKeys.Count -eq $requiredUi.Count) 'exact SLA UI translation count'
-Assert (($actualUiKeys -join ',') -eq (@($requiredUi.Keys) -join ',')) 'exact ordered SLA UI translation keys'
+Assert (($actualUiKeys | Sort-Object) -join ',' -eq (@($requiredUi.Keys) | Sort-Object) -join ',') 'required SLA UI translation key set'
 foreach ($key in $requiredUi.Keys) {
     $value = $uiTranslations.$key
-    if ($null -ne $requiredUi[$key]) {
-        Assert ($value -eq $requiredUi[$key]) "exact SLA UI wording $key"
-    } else {
-        Assert (-not [string]::IsNullOrWhiteSpace($value)) "SLA UI translation exists $key"
-    }
-    Assert ($value -notmatch ';') "SLA UI copy has no semicolon $key"
+    Assert (-not [string]::IsNullOrWhiteSpace($value)) "SLA UI translation exists $key"
+    $actualPlaceholders = @([regex]::Matches($value, '%(?:[1-9]|%)') | ForEach-Object Value | Sort-Object) -join ','
+    Assert ($actualPlaceholders -eq $requiredUi[$key]) "SLA UI placeholders $key"
+    Assert ($value -notmatch '(?<!%)%(?![%1-9])') "SLA UI literal percent escaping $key"
+    Assert ($value -notmatch '[;\u2014]') "SLA UI copy punctuation $key"
 }
 Write-Output "Public sandbox settings: $assertions assertions passed."

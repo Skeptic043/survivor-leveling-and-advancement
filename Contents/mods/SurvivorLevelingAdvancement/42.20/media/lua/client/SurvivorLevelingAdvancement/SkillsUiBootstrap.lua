@@ -87,6 +87,7 @@ local adminCalled, adminCreated = pcall(Build42AdminUi.create, {
     isClient = function() return isClient() end,
     isDebugEnabled = function() return isDebugEnabled() end,
     getText = function(key, ...) return getText(key, ...) end,
+    getLanguage = function() return Translator.getLanguage():name() end,
     measureText = function(text) return getTextManager():MeasureStringX(UIFont.Small, text) end,
     fontHeight = function() return getTextManager():getFontHeight(UIFont.Small) end,
     viewport = function(playerNum)

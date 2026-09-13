@@ -64,5 +64,7 @@
     "IGUI_SLA_LevelGain_AP": "AP +%1",
     "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
     "IGUI_SLA_WatchOption": "Dijital saatte sonraki seviyeye kadar XP yüzdesini (%%) göster",
-    "IGUI_SLA_WatchOption_Tooltip": "Sonraki hayatta kalan seviyesine yönelik XP ilerlemesini dijital saatin sağ alt köşesinde küçük bir yüzde olarak gösterir. Yalnızca 1. oyuncunun XP yüzdesini (%%) gösterir."
+    "IGUI_SLA_WatchOption_Tooltip": "Sonraki hayatta kalan seviyesine yönelik XP ilerlemesini dijital saatin sağ alt köşesinde küçük bir yüzde olarak gösterir. Yalnızca 1. oyuncunun XP yüzdesini (%%) gösterir.",
+    "IGUI_SLA_Admin_CharacterName": "Karakter: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "Ad kullanılamıyor"
 }

@@ -91,6 +91,10 @@ local function fixture(server, client, configure, pendingNewPlayers, pendingLoca
     local source = {
         install = function() calls[#calls + 1] = { "install_source" }; return { ok = true } end,
         verifyOwnership = function() return { ok = true, code = "ownership_verified" } end,
+        invokeWithRoute = function(player, perk, useMultipliers, callback, ...)
+            calls[#calls+1] = { "route", player, perk, useMultipliers }
+            return callback(...)
+        end,
     }
     local inheritanceSession = {
         tokenNewCharacter = function(player) calls[#calls + 1] = { "inheritance_token", player }; return { ok = true } end,
@@ -281,8 +285,8 @@ do
         install = true, status = true, clientState = true,
         refreshOwner = true, setClientStateListener = true, setAdminResultListener = true,
         requestAdvancement = true, advancementStatus = true,
-        requestAdmin = true, adminStatus = true,
-    }, 10, "exact owner API")
+        requestAdmin = true, adminStatus = true, invokeWithRoute = true,
+    }, 11, "exact owner API")
     eq(f.clientCreates(), 0, "server creates no client transport")
     eq(f.factoryCalls(), 0, "server construction is inert")
     eq(f.events.OnServerStarted.adds(), 0, "server construction registers no event")
@@ -1996,7 +2000,14 @@ do
     created.owner.install(); acknowledge(f, 0, {})
     eq(created.owner.requestAdmin(0, {}).code, "invalid_request", "valid admin client rejection is returned")
     eq(created.owner.status().failure, nil, "valid admin rejection does not poison lifecycle")
+    statusSource.result.summary.characterName = "Actual Character"
     local view = created.owner.adminStatus(0)
+    eq(view.result.summary.characterName, "Actual Character", "lifecycle carries optional character name")
+    view.result.summary.characterName = "changed"
+    eq(created.owner.adminStatus(0).result.summary.characterName, "Actual Character", "name summary remains detached")
+    statusSource.result.summary.characterName = "bad\nname"
+    eq(created.owner.adminStatus(0).code, "admin_status_invalid", "lifecycle rejects unsafe name")
+    statusSource.result.summary.characterName = nil
     eq(view.result.code, "stale_revision", "admin status delegates terminal")
     no(view.result == statusSource.result, "admin terminal status is detached")
     view.result.target.username = "mutated"

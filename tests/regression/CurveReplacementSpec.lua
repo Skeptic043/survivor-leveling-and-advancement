@@ -242,7 +242,7 @@ local function services(store, resolver)
     local awardCreated = SupportedAwardProcessor.create({
         NaturalLedger = NaturalLedger,
         SurvivorEconomy = SurvivorEconomy,
-        PostMax = PostMax,
+
         MutationScope = MutationScope,
         PlayerStateStore = store,
         ActualObservation = ActualObservation,
@@ -259,7 +259,7 @@ local function trackedSettings()
         accountingMode = "Tracked",
         normalization = 1,
         survivorMultiplier = 1,
-        postMax = { enabled = false, fullRateAllowance = 0, diminishedRate = 0 },
+
     }
 end
 

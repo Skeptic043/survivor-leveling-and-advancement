@@ -64,5 +64,7 @@
     "IGUI_SLA_LevelGain_AP": "AP +%1",
     "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
     "IGUI_SLA_WatchOption": "Näytä seuraavan tason XP %% digitaalikellossa",
-    "IGUI_SLA_WatchOption_Tooltip": "Näytä edistyminen kohti seuraavaa selviytyjätasoa pienenä prosenttilukuna digitaalikellon oikeassa alakulmassa. Näyttää vain pelaajan 1 XP %%."
+    "IGUI_SLA_WatchOption_Tooltip": "Näytä edistyminen kohti seuraavaa selviytyjätasoa pienenä prosenttilukuna digitaalikellon oikeassa alakulmassa. Näyttää vain pelaajan 1 XP %%.",
+    "IGUI_SLA_Admin_CharacterName": "Hahmo: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "Nimi ei saatavilla"
 }

@@ -424,6 +424,7 @@ local function makeEnvironment(options)
             evidence.adminRequests = evidence.adminRequests + 1
             error("Skills UI must not request admin")
         end,
+        invokeWithRoute = function(_, _, _, callback, ...) return callback(...) end,
         adminStatus = function()
             evidence.adminStatusReads = evidence.adminStatusReads + 1
             error("Skills UI must not read admin status")
@@ -920,6 +921,7 @@ expect(exact(environment.owner, {
     advancementStatus = true,
     requestAdmin = true,
     adminStatus = true,
+    invokeWithRoute = true,
 }), "exact nine-method owner is accepted")
 
 local function copyOwner(owner)

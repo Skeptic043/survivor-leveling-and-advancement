@@ -73,7 +73,6 @@ local function validateAward(award)
         appliedDelta = true,
         actualPositionBefore = true,
         actualPositionAfter = true,
-        effectiveDelta = true,
     }
     for key in pairs(award) do
         if not allowed[key] then
@@ -91,10 +90,6 @@ local function validateAward(award)
     if not isFinite(award.actualPositionAfter) or award.actualPositionAfter < 0 then
         return failure("invalid_award", "actualPositionAfter")
     end
-    if award.effectiveDelta ~= nil
-        and (not isFinite(award.effectiveDelta) or award.effectiveDelta < 0) then
-        return failure("invalid_award", "effectiveDelta")
-    end
     if award.survivorCreditBase > 0 and award.appliedDelta < 0 then
         return failure("invalid_award", "positive_base_negative_movement")
     end
@@ -104,7 +99,7 @@ end
 local function validateSettings(settings)
     if type(settings) ~= "table" then return failure("invalid_settings", "settings_not_table") end
     for key in pairs(settings) do
-        if key ~= "accountingMode" and key ~= "normalization" and key ~= "survivorMultiplier" and key ~= "postMax" then
+        if key ~= "accountingMode" and key ~= "normalization" and key ~= "survivorMultiplier" then
             return failure("invalid_settings", "unexpected_field:" .. tostring(key))
         end
     end
@@ -116,19 +111,6 @@ local function validateSettings(settings)
     end
     if not isFinite(settings.survivorMultiplier) or settings.survivorMultiplier < 0 then
         return failure("invalid_settings", "survivorMultiplier")
-    end
-    local postMax = settings.postMax
-    if type(postMax) ~= "table" or type(postMax.enabled) ~= "boolean" then
-        return failure("invalid_settings", "postMax_enabled")
-    end
-    if postMax.enabled and (
-        not isFinite(postMax.fullRateAllowance)
-        or postMax.fullRateAllowance < 0
-        or not isFinite(postMax.diminishedRate)
-        or postMax.diminishedRate < 0
-        or postMax.diminishedRate > 1
-    ) then
-        return failure("invalid_settings", "postMax_values")
     end
     return { ok = true }
 end
@@ -350,7 +332,7 @@ local function computeAward(deps, survivorCreditBase, settings, ratio, multiplie
     return { ok = true, award = computed }
 end
 
-local function processOrdinary(deps, record, award, settings)
+local function processOrdinary(deps, record, award, settings, atMaximum)
     if award.actualPositionAfter - award.actualPositionBefore ~= award.appliedDelta then
         return failure("invalid_award", "applied_delta_position_mismatch")
     end
@@ -362,6 +344,15 @@ local function processOrdinary(deps, record, award, settings)
     if type(transitioned) ~= "table" or not transitioned.ok then
         return failure("perk_quarantined", "supported_transition_" .. detailOf(transitioned))
     end
+    if atMaximum and #transitioned.state.activeTargets > 0 then
+        -- Native positive XP stops at the cap, so remaining slots cannot be repaid there.
+        local cleared = deps.NaturalLedger.master(transitioned.state, award.actualPositionAfter)
+        if type(cleared) ~= "table" or not cleared.ok then
+            return failure("perk_quarantined", "maximum_clear_" .. detailOf(cleared))
+        end
+        appendCleared(transitioned.effect.clearedTargetIds, cleared.effect.clearedTargetIds)
+        transitioned.state = cleared.state
+    end
     local nextRecord, recordError = applyLedger(record, transitioned.state)
     if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
     local ratio = 0
@@ -372,90 +363,8 @@ local function processOrdinary(deps, record, award, settings)
         ok = true,
         record = nextRecord,
         naturalAward = natural.award,
-        postMaxAward = zeroAward(),
-        postMaxXp = 0,
         clearedTargetIds = transitioned.effect.clearedTargetIds,
-        changed = award.appliedDelta ~= 0,
-    }
-end
-
-local function processAtMaximum(deps, record, award, settings, maximumPosition)
-    if award.actualPositionAfter ~= maximumPosition then
-        return failure("invalid_award", "maximum_award_position_changed")
-    end
-    local inspected = deps.NaturalLedger.inspect(ledgerFromPerk(record))
-    if type(inspected) ~= "table" or not inspected.ok then
-        return failure("perk_quarantined", "ledger_inspection_" .. detailOf(inspected))
-    end
-
-    local nextRecord = record
-    local naturalRatio = 0
-    local postMaxRatio = 0
-    local clearedTargetIds = {}
-    local changed = false
-    if inspected.activeCount == 0 then
-        postMaxRatio = 1
-    else
-        if award.effectiveDelta == nil then
-            return failure("invalid_award", "effectiveDelta_required")
-        end
-        if record.naturalPosition > maximumPosition or record.highWaterPosition > maximumPosition then
-            return failure("perk_quarantined", "ledger_above_maximum")
-        end
-        if award.effectiveDelta > 0 then
-            local movement = math.min(award.effectiveDelta, maximumPosition - record.naturalPosition)
-            local transitionPosition = award.actualPositionAfter
-            local transitioned = deps.NaturalLedger.applySupported(
-                ledgerFromPerk(record),
-                movement,
-                transitionPosition
-            )
-            if type(transitioned) ~= "table" or not transitioned.ok then
-                return failure("perk_quarantined", "maximum_transition_" .. detailOf(transitioned))
-            end
-            local recordError
-            nextRecord, recordError = applyLedger(record, transitioned.state)
-            if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
-            naturalRatio = transitioned.effect.eligibleApplied / award.effectiveDelta
-            postMaxRatio = (award.effectiveDelta - movement) / award.effectiveDelta
-            clearedTargetIds = transitioned.effect.clearedTargetIds
-            changed = movement ~= 0
-        end
-    end
-
-    local natural = computeAward(deps, award.survivorCreditBase, settings, naturalRatio, settings.survivorMultiplier)
-    if not natural.ok then return natural end
-    local postMax = computeAward(deps, award.survivorCreditBase, settings, postMaxRatio, 1)
-    if not postMax.ok then return postMax end
-
-    local postMaxApplied = { state = { fullRateUsed = nextRecord.postMaxFullRateUsed }, effect = { survivorXp = 0 } }
-    if postMax.award.normalizedBase > 0 then
-        postMaxApplied = deps.PostMax.apply(
-            { fullRateUsed = nextRecord.postMaxFullRateUsed },
-            postMax.award.normalizedBase,
-            settings.survivorMultiplier,
-            settings.postMax
-        )
-        if type(postMaxApplied) ~= "table" or not postMaxApplied.ok then
-            return failure("postmax_failed", detailOf(postMaxApplied))
-        end
-        if postMaxApplied.state.fullRateUsed ~= nextRecord.postMaxFullRateUsed then
-            local copy, copyError = cloneValue(nextRecord)
-            if not copy then return failure("perk_quarantined", "record_" .. copyError) end
-            nextRecord = copy
-            nextRecord.postMaxFullRateUsed = postMaxApplied.state.fullRateUsed
-            changed = true
-        end
-    end
-
-    return {
-        ok = true,
-        record = nextRecord,
-        naturalAward = natural.award,
-        postMaxAward = postMax.award,
-        postMaxXp = postMaxApplied.effect.survivorXp,
-        clearedTargetIds = clearedTargetIds,
-        changed = changed,
+        changed = award.appliedDelta ~= 0 or #transitioned.effect.clearedTargetIds > 0,
     }
 end
 
@@ -509,6 +418,17 @@ local function processPreservedFreeRecord(deps, player, state, award)
     if type(transitioned) ~= "table" or not transitioned.ok then
         return failure("perk_quarantined", "supported_transition_" .. detailOf(transitioned))
     end
+    if inspected.inspection.storedLevel == described.identity.effectiveMaximum
+        and inspected.inspection.levelAligned
+        and award.actualPositionAfter == described.maximumPosition
+        and #transitioned.state.activeTargets > 0 then
+        local cleared = deps.NaturalLedger.master(transitioned.state, award.actualPositionAfter)
+        if type(cleared) ~= "table" or not cleared.ok then
+            return failure("perk_quarantined", "maximum_clear_" .. detailOf(cleared))
+        end
+        appendCleared(transitioned.effect.clearedTargetIds, cleared.effect.clearedTargetIds)
+        transitioned.state = cleared.state
+    end
     local recordError
     nextRecord, recordError = applyLedger(nextRecord, transitioned.state)
     if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
@@ -517,7 +437,7 @@ local function processPreservedFreeRecord(deps, player, state, award)
     state.perks[award.perkId] = nextRecord
     return {
         ok = true,
-        changed = observedPosition == nil or reconciledBoundary or award.appliedDelta ~= 0,
+        changed = observedPosition == nil or reconciledBoundary or award.appliedDelta ~= 0 or #clearedTargetIds > 0,
         clearedTargetIds = clearedTargetIds,
     }
 end
@@ -528,9 +448,8 @@ function SupportedAwardProcessor.create(dependencies)
     end
     local store = dependencies.store or dependencies.PlayerStateStore
     local required = {
-        { dependencies.NaturalLedger, { "baseline", "inspect", "applySupported", "reconcileExternal" }, "NaturalLedger" },
+        { dependencies.NaturalLedger, { "baseline", "inspect", "applySupported", "reconcileExternal", "master" }, "NaturalLedger" },
         { dependencies.SurvivorEconomy, { "computeAward", "applyXp" }, "SurvivorEconomy" },
-        { dependencies.PostMax, { "apply" }, "PostMax" },
         { dependencies.MutationScope, { "isActive" }, "MutationScope" },
         { store, { "load", "save" }, "PlayerStateStore" },
         { dependencies.ActualObservation, { "get", "set" }, "ActualObservation" },
@@ -552,7 +471,6 @@ function SupportedAwardProcessor.create(dependencies)
     local deps = {
         NaturalLedger = dependencies.NaturalLedger,
         SurvivorEconomy = dependencies.SurvivorEconomy,
-        PostMax = dependencies.PostMax,
         MutationScope = dependencies.MutationScope,
         store = store,
         ActualObservation = dependencies.ActualObservation,
@@ -742,16 +660,10 @@ function SupportedAwardProcessor.create(dependencies)
             stateChanged = true
         end
 
-        local accounting
-        if award.actualPositionBefore == maximumPosition
-            and award.actualPositionAfter == maximumPosition then
-            if inspected.inspection.storedLevel ~= identity.effectiveMaximum then
-                return failure("adapter_inspection_failed", "maximum_level_not_reached")
-            end
-            accounting = processAtMaximum(deps, record, award, settings, maximumPosition)
-        else
-            accounting = processOrdinary(deps, record, award, settings)
-        end
+        local atMaximum = award.actualPositionAfter == maximumPosition
+            and inspected.inspection.storedLevel == identity.effectiveMaximum
+            and inspected.inspection.levelAligned
+        local accounting = processOrdinary(deps, record, award, settings, atMaximum)
         if not accounting.ok then return accounting end
         appendCleared(clearedTargetIds, accounting.clearedTargetIds)
         stateChanged = stateChanged or accounting.changed
@@ -763,7 +675,7 @@ function SupportedAwardProcessor.create(dependencies)
         end
         state.perks[award.perkId] = accounting.record
 
-        local survivorXp = accounting.naturalAward.survivorXp + accounting.postMaxXp
+        local survivorXp = accounting.naturalAward.survivorXp
         if not isFinite(survivorXp) or survivorXp < 0 then
             return failure("award_math_failed", "survivor_xp_invalid")
         end
@@ -804,8 +716,8 @@ function SupportedAwardProcessor.create(dependencies)
             levelsGained = applied.effects.levelsGained,
             apGained = applied.effects.apGained,
             naturalEligibleBase = accounting.naturalAward.eligibleBase,
-            postMaxBase = accounting.postMaxAward.eligibleBase,
-            postMaxXp = accounting.postMaxXp,
+            postMaxBase = 0,
+            postMaxXp = 0,
             clearedTargetIds = clearedTargetIds,
             stateWritten = alreadyWritten or stateChanged,
         }

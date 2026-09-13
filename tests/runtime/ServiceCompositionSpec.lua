@@ -102,7 +102,7 @@ local function makeDependencies(overrides)
     local settings = {
         normalization = 25,
         survivorMultiplier = 1.5,
-        postMax = { enabled = false },
+
     }
     local settingsCalls = {}
     local worldSettings = {
@@ -191,7 +191,7 @@ local function makeDependencies(overrides)
             applyXp = function() end,
         },
         Allotment = { evaluate = function() end },
-        PostMax = { apply = function() end },
+
         MutationScope = {
             begin = function() end,
             isActive = function() return false end,
@@ -908,7 +908,7 @@ do
     assertEqual(#fixture.processorCalls, 1, "processor boundary once with real settings")
     assertEqual(processorSettings.normalization, 347.5, "normalization delegated to WorldSettings")
     assertEqual(processorSettings.survivorMultiplier, 2, "multiplier delegated to WorldSettings")
-    assertFalse(processorSettings.postMax.enabled, "post-max setting delegated to WorldSettings")
+    assertEqual(processorSettings.postMax, nil, "no dormant post-max settings")
 end
 
 do

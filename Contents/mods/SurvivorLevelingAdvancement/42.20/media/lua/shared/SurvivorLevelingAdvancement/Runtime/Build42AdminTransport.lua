@@ -161,6 +161,11 @@ local FAILURE_RESPONSE_FIELDS = {
     committed = true,
 }
 
+local function validCharacterName(value)
+    return type(value) == "string" and #value > 0 and #value <= 128
+        and value:find("%S") ~= nil and value:find("[%c]") == nil
+end
+
 local function failure(code, detail, committed)
     local result = { ok = false, code = code, detail = detail }
     if committed ~= nil then result.committed = committed end
@@ -312,7 +317,14 @@ end
 
 local function copySummary(value)
     local offline = type(value) == "table" and rawget(value, "profileIndex") ~= nil
-    if not offline and not exactPlainTable(value, SUMMARY_FIELDS) then return nil end
+    local name = type(value) == "table" and rawget(value, "characterName") or nil
+    if name ~= nil and not validCharacterName(name) then return nil end
+    local fields = SUMMARY_FIELDS
+    if name ~= nil then
+        fields = { characterName = true }
+        for key in pairs(SUMMARY_FIELDS) do fields[key] = true end
+    end
+    if not offline and not exactPlainTable(value, fields) then return nil end
     if offline then
         local mailbox, mailboxValid = copyMailbox(rawget(value, "mailbox"))
         if not mailboxValid or (mailbox ~= nil
@@ -322,13 +334,13 @@ local function copySummary(value)
             accountingMode = true, revision = true, level = true, xpIntoLevel = true,
             xpForNextLevel = true, spent = true, availableAp = true, username = true,
             profileIndex = true, incarnationId = true, initialized = true, dead = true,
-            mailbox = true,
+            mailbox = true, characterName = true,
         }
         for key in pairs(value) do
             if type(key) ~= "string" or not allowed[key] then return nil end
             count = count + 1
         end
-        if count ~= (mailbox == nil and 12 or 13)
+        if count ~= (mailbox == nil and 12 or 13) + (name ~= nil and 1 or 0)
             or not safeUsername(rawget(value, "username"))
             or not safeInteger(rawget(value, "profileIndex"))
             or rawget(value, "profileIndex") > 3
@@ -355,6 +367,7 @@ local function copySummary(value)
         return nil
     end
     local result = {
+        characterName = name,
         accountingMode = accountingMode,
         revision = revision,
         level = level,
@@ -1012,6 +1025,11 @@ end
 
 local function responseMatchesRoute(terminal, route)
     if terminal.operation ~= route.operation then return false end
+    if terminal.summary ~= nil and route.target.profileIndex ~= nil then
+        local summary = terminal.summary
+        if summary.username ~= route.target.username or summary.profileIndex ~= route.target.profileIndex
+            or summary.incarnationId ~= route.target.incarnationId then return false end
+    end
     if route.operation == "enumerateOfflineProfiles" then
         return terminal.target.username == route.target.username
             and (not terminal.ok or terminal.outcome == "enumerated")

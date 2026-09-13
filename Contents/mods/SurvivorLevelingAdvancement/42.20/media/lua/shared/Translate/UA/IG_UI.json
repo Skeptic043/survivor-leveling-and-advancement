@@ -64,5 +64,7 @@
     "IGUI_SLA_LevelGain_AP": "AP +%1",
     "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
     "IGUI_SLA_WatchOption": "Показувати %% XP до наступного рівня на електронному годиннику",
-    "IGUI_SLA_WatchOption_Tooltip": "Показує прогрес XP до наступного рівня вцілілого невеликим відсотком у правому нижньому куті електронного годинника. Показує лише %% XP гравця 1."
+    "IGUI_SLA_WatchOption_Tooltip": "Показує прогрес XP до наступного рівня вцілілого невеликим відсотком у правому нижньому куті електронного годинника. Показує лише %% XP гравця 1.",
+    "IGUI_SLA_Admin_CharacterName": "Персонаж: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "Ім’я недоступне"
 }

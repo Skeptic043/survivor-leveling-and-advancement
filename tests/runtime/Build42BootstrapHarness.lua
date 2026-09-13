@@ -38,7 +38,7 @@ local function exactOwner(owner)
     local allowed = {
         install = true, status = true, clientState = true, refreshOwner = true,
         setClientStateListener = true, setAdminResultListener = true, requestAdvancement = true,
-        advancementStatus = true, requestAdmin = true, adminStatus = true,
+        advancementStatus = true, requestAdmin = true, adminStatus = true, invokeWithRoute = true,
     }
     if type(owner) ~= "table" or getmetatable(owner) ~= nil then return false end
     local count = 0
@@ -46,7 +46,7 @@ local function exactOwner(owner)
         count = count + 1
         if not allowed[name] or type(rawget(owner, name)) ~= "function" then return false end
     end
-    return count == 10
+    return count == 11
 end
 
 local function validOwner(install)
@@ -61,6 +61,7 @@ local function validOwner(install)
         advancementStatus = function() return { ok = true, pending = false } end,
         requestAdmin = function() return { ok = false } end,
         adminStatus = function() return { ok = true, pending = false } end,
+        invokeWithRoute = function(_, _, _, callback, ...) return callback(...) end,
     }
 end
 
@@ -481,7 +482,7 @@ elseif evidence.phase == 23 then
         "SurvivorLevelingAdvancement/Runtime/Build42Lifecycle", "SurvivorLevelingAdvancement/Runtime/Build42RuntimeFactory", "SurvivorLevelingAdvancement/Runtime/Build42OwnerTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdvancementTransport", "SurvivorLevelingAdvancement/Runtime/Build42AdminTransport", "SurvivorLevelingAdvancement/Adapters/Build42AdminBoundary", "SurvivorLevelingAdvancement/Adapters/Build42LevelFeedback", "SurvivorLevelingAdvancement/Runtime/ClientOwnerState", "SurvivorLevelingAdvancement/Runtime/LevelGainCompletion",
         "SurvivorLevelingAdvancement/Adapters/Build42PerkCatalog", "SurvivorLevelingAdvancement/Adapters/VanillaProgressionAdapter", "SurvivorLevelingAdvancement/Adapters/Build42NormalizationSnapshot", "SurvivorLevelingAdvancement/Adapters/Build42WorldSettingsProvider", "SurvivorLevelingAdvancement/Adapters/Build42SandboxMultiplier", "SurvivorLevelingAdvancement/Adapters/Build42XpPositionArithmetic",
         "SurvivorLevelingAdvancement/Adapters/Build42InheritanceIdentity", "SurvivorLevelingAdvancement/Adapters/Build42InheritanceWorldStore",
-        "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Persistence/CharacterInheritanceStore", "SurvivorLevelingAdvancement/Persistence/InheritanceRecordStore", "SurvivorLevelingAdvancement/Core/InheritancePolicy", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/Core/PostMax", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/AccountingMode", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Runtime/InheritanceSession", "SurvivorLevelingAdvancement/Runtime/AdvancementSession", "SurvivorLevelingAdvancement/Runtime/AdminSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
+        "SurvivorLevelingAdvancement/State/StateCodec", "SurvivorLevelingAdvancement/Persistence/PlayerStateStore", "SurvivorLevelingAdvancement/Persistence/CharacterInheritanceStore", "SurvivorLevelingAdvancement/Persistence/InheritanceRecordStore", "SurvivorLevelingAdvancement/Core/InheritancePolicy", "SurvivorLevelingAdvancement/Core/NaturalLedger", "SurvivorLevelingAdvancement/Core/SurvivorEconomy", "SurvivorLevelingAdvancement/Core/Allotment", "SurvivorLevelingAdvancement/State/MutationScope", "SurvivorLevelingAdvancement/State/ActualObservation", "SurvivorLevelingAdvancement/Runtime/AccountingMode", "SurvivorLevelingAdvancement/Runtime/OwnerSnapshot", "SurvivorLevelingAdvancement/Runtime/OwnerSession", "SurvivorLevelingAdvancement/Runtime/InheritanceSession", "SurvivorLevelingAdvancement/Runtime/AdvancementSession", "SurvivorLevelingAdvancement/Runtime/AdminSession", "SurvivorLevelingAdvancement/Advancement/ApTransaction", "SurvivorLevelingAdvancement/XP/SupportedAwardProcessor", "SurvivorLevelingAdvancement/Runtime/WorldSettings", "SurvivorLevelingAdvancement/XP/EventDerivedXpSource", "SurvivorLevelingAdvancement/Runtime/ServiceComposition",
     }
     for index = 1, #required do
         check(evidence.requires[required[index]] == 13, "exact bootstrap require count " .. index)

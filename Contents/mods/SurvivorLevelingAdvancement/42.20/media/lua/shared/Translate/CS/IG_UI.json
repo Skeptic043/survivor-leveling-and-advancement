@@ -64,5 +64,7 @@
   "IGUI_SLA_LevelGain_AP": "AP +%1",
   "IGUI_SLA_ModOptions_Title": "Survivor Leveling & Advancement",
   "IGUI_SLA_WatchOption": "Zobrazit %% XP k další úrovni na digitálních hodinkách",
-  "IGUI_SLA_WatchOption_Tooltip": "Zobrazí postup XP k další úrovni přeživšího jako malé procento vpravo dole na digitálních hodinkách. Zobrazuje pouze %% XP hráče 1."
+  "IGUI_SLA_WatchOption_Tooltip": "Zobrazí postup XP k další úrovni přeživšího jako malé procento vpravo dole na digitálních hodinkách. Zobrazuje pouze %% XP hráče 1.",
+    "IGUI_SLA_Admin_CharacterName": "Postava: %1",
+    "IGUI_SLA_Admin_NameUnavailable": "Jméno není k dispozici"
 }

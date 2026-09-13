@@ -84,18 +84,17 @@ local award = resolver.awardSettings.resolve(opaquePlayer, "Carving")
 expect(award.ok)
 expectEqual(award.settings.normalization, 2)
 expectEqual(award.settings.survivorMultiplier, 1.5)
-expectEqual(award.settings.postMax.enabled, false)
+expectEqual(award.settings.postMax, nil)
 expectEqual(award.settings.accountingMode, "Tracked")
 expectEqual(reads, 3)
 award.settings.normalization = 99
 award.settings.survivorMultiplier = 99
-award.settings.postMax.enabled = true
 local readsBefore = reads
 award = resolver.awardSettings.resolve(opaquePlayer, "Carving")
 expectEqual(reads, readsBefore + 1)
 expectEqual(award.settings.normalization, 2)
 expectEqual(award.settings.survivorMultiplier, 1.5)
-expectEqual(award.settings.postMax.enabled, false)
+expectEqual(award.settings.postMax, nil)
 
 award = resolver.awardSettings.resolve(opaquePlayer, "Fitness")
 expect(award.ok)

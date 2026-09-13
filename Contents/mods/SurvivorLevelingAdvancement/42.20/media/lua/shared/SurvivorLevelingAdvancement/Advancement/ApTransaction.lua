@@ -171,20 +171,6 @@ local function durableTargetId(requestId, preRevision)
     return requestId .. ":revision:" .. tostring(preRevision)
 end
 
-local function hasLegacyCompletedTarget(record, reservation)
-    if type(record) ~= "table" or type(record.activeTargets) ~= "table" then return false end
-    for index = 1, #record.activeTargets do
-        local target = record.activeTargets[index]
-        if type(target) == "table"
-            and target.targetId == reservation.requestId
-            and target.targetLevel == reservation.targetLevel
-            and target.targetPosition == reservation.targetPosition then
-            return true
-        end
-    end
-    return false
-end
-
 local function ledgerFromPerk(record)
     return {
         naturalPosition = record.naturalPosition,
@@ -536,9 +522,6 @@ local function recoverLoaded(deps, player, state)
             ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), reservation.targetPosition)
         else
             local targetId = durableTargetId(reservation.requestId, reservation.preRevision)
-            if hasLegacyCompletedTarget(record, reservation) then
-                targetId = reservation.requestId
-            end
             ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
                 targetId = targetId,
                 targetLevel = reservation.targetLevel,

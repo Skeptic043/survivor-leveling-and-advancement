@@ -1040,4 +1040,24 @@ do
         expectEqual(#values.state.perks.Axe.activeTargets, 1, "failed reset preserves original target: " .. failureKind)
     end
 end
+do
+    local session, values = fixture()
+    local descriptor = { getForename = function() return string.char(26446) end,
+        getSurname = function() return string.char(26126) end }
+    values.target.getDescriptor = function() return descriptor end
+    local result = session.inspect(values.target)
+    expect(result.ok, "named target can be inspected")
+    expectEqual(result.summary.characterName, string.char(26446) .. " " .. string.char(26126), "actual target Unicode descriptor supplies display name")
+    expect(values.state.characterName == nil, "name is not written to persistent progression state")
+    local changed = session.request(values.target,{kind="awardSurvivorXp",amount=1,expectedRevision=7})
+    expect(changed.ok and changed.summary.characterName == result.summary.characterName,"mutation summary retains actual character name")
+    for _, badName in ipairs({"bad\nname",string.rep("x",129),false}) do
+        descriptor.getForename=function() return badName end
+        local unavailable=session.inspect(values.target)
+        expect(unavailable.ok and unavailable.summary.characterName == nil,"unsafe display name never disables inspection")
+    end
+    values.target.getDescriptor=function() error("missing descriptor") end
+    result=session.inspect(values.target)
+    expect(result.ok and result.summary.characterName==nil,"throwing descriptor does not disable Admin")
+end
 return assertions

@@ -33,18 +33,20 @@ function Build42AdminSkillUi.create(deps)
     if type(deps) ~= "table" or type(deps.PlayerStats) ~= "table"
         or type(deps.owner) ~= "table" or type(deps.owner.requestAdmin) ~= "function"
         or type(deps.owner.adminStatus) ~= "function"
+        or type(deps.owner.invokeWithRoute) ~= "function"
         or type(deps.owner.setAdminResultListener) ~= "function"
         or type(deps.getSpecificPlayer) ~= "function" or type(deps.isClient) ~= "function"
         or type(deps.report) ~= "function" then return failure("invalid_dependencies") end
     local stats, owner = deps.PlayerStats, deps.owner
     local prior = rawget(stats, "onOptionMouseDown")
     local priorVisible = rawget(stats, "setVisible")
-    if type(prior) ~= "function" or type(priorVisible) ~= "function" then
+    local priorAddXP = rawget(stats, "onAddXP")
+    if type(prior) ~= "function" or type(priorVisible) ~= "function" or type(priorAddXP) ~= "function" then
         return failure("missing_player_stats_hook")
     end
     local pending, running = {}, {}
     local installed, disabled = false, false
-    local hook, visibilityHook, listener
+    local hook, visibilityHook, addXpHook, listener
 
     local function report(code)
         pcall(deps.report, code)
@@ -52,7 +54,8 @@ function Build42AdminSkillUi.create(deps)
 
     local function owns()
         if not installed or disabled then return false end
-        if rawget(stats, "onOptionMouseDown") ~= hook or rawget(stats, "setVisible") ~= visibilityHook then
+        if rawget(stats, "onOptionMouseDown") ~= hook or rawget(stats, "setVisible") ~= visibilityHook
+            or rawget(stats, "onAddXP") ~= addXpHook then
             disabled = true
             pending = {}
             report("player_stats_hook_ownership_lost")
@@ -300,11 +303,27 @@ function Build42AdminSkillUi.create(deps)
         return priorVisible(view, visible, ...)
     end
 
+    addXpHook = function(view, button, perk, amount, addGlobalXP, useMultipliers, ...)
+        local clientOk, multiplayer = pcall(deps.isClient)
+        if not owns() or not clientOk or multiplayer ~= false or type(useMultipliers) ~= "boolean" then
+            return priorAddXP(view, button, perk, amount, addGlobalXP, useMultipliers, ...)
+        end
+        local current = rawget(stats, "instance")
+        local player = current and member(current, "char")
+        local selectedPerk = call(perk, "getType")
+        if player == nil or selectedPerk == nil then
+            return priorAddXP(view, button, perk, amount, addGlobalXP, useMultipliers, ...)
+        end
+        return owner.invokeWithRoute(player, selectedPerk, useMultipliers, priorAddXP,
+            view, button, perk, amount, addGlobalXP, useMultipliers, ...)
+    end
+
     local integration = {}
     function integration.install()
         if disabled then return failure("player_stats_hook_ownership_lost") end
         if installed then return owns() and { ok = true } or failure("player_stats_hook_ownership_lost") end
-        if rawget(stats, "onOptionMouseDown") ~= prior or rawget(stats, "setVisible") ~= priorVisible then
+        if rawget(stats, "onOptionMouseDown") ~= prior or rawget(stats, "setVisible") ~= priorVisible
+            or rawget(stats, "onAddXP") ~= priorAddXP then
             disabled = true
             return failure("player_stats_hook_ownership_lost")
         end
@@ -312,6 +331,7 @@ function Build42AdminSkillUi.create(deps)
         if not ok or type(bound) ~= "table" or not bound.ok then return failure("listener_install_failed") end
         rawset(stats, "onOptionMouseDown", hook)
         rawset(stats, "setVisible", visibilityHook)
+        rawset(stats, "onAddXP", addXpHook)
         installed = true
         return { ok = true }
     end

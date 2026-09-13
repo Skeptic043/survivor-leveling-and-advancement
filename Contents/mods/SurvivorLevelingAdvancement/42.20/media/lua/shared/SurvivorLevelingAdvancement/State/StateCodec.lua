@@ -84,7 +84,7 @@ local function cloneChecked(raw)
     return copy
 end
 
-local function validateTarget(target, effectiveMaximum)
+local function validateTarget(target, effectiveMaximum, detached)
     if type(target) ~= "table" then return nil, failure("invalid_target", "not_table") end
     local fields, key = hasOnlyFields(target, TARGET_FIELDS)
     if not fields then return nil, failure("invalid_target", "unknown_field:" .. tostring(key)) end
@@ -92,10 +92,11 @@ local function validateTarget(target, effectiveMaximum)
     if not isPositiveInteger(target.targetLevel) then return nil, failure("invalid_target", "targetLevel") end
     if target.targetLevel > effectiveMaximum then return nil, failure("invalid_target", "targetLevel_above_maximum") end
     if not (isFiniteNumber(target.targetPosition) and target.targetPosition >= 0) then return nil, failure("invalid_target", "targetPosition") end
+    if detached then return target end
     return { targetId = target.targetId, targetLevel = target.targetLevel, targetPosition = target.targetPosition }
 end
 
-local function validatePerk(perk)
+local function validatePerk(perk, detached)
     if type(perk) ~= "table" then return nil, failure("invalid_perk", "not_table") end
     local fields, key = hasOnlyFields(perk, PERK_FIELDS)
     if not fields then return nil, failure("invalid_perk", "unknown_field:" .. tostring(key)) end
@@ -111,9 +112,9 @@ local function validatePerk(perk)
         return nil, failure("invalid_perk", "observedPosition")
     end
     if type(perk.activeTargets) ~= "table" then return nil, failure("invalid_perk", "activeTargets") end
-    local targets, targetIds, lastLevel, lastPosition = {}, {}, 0, -1
+    local targets, targetIds, lastLevel, lastPosition = detached and perk.activeTargets or {}, {}, 0, -1
     for index = 1, #perk.activeTargets do
-        local target, targetError = validateTarget(perk.activeTargets[index], perk.effectiveMaximum)
+        local target, targetError = validateTarget(perk.activeTargets[index], perk.effectiveMaximum, detached)
         if not target then return nil, targetError end
         if targetIds[target.targetId] then return nil, failure("invalid_perk", "duplicate_target_id") end
         if target.targetLevel <= lastLevel then return nil, failure("invalid_perk", "target_level_order") end
@@ -129,6 +130,7 @@ local function validatePerk(perk)
             return nil, failure("invalid_perk", "activeTargets_shape")
         end
     end
+    if detached then return perk end
     local result = {
         adapterId = perk.adapterId, adapterVersion = perk.adapterVersion,
         curveFingerprint = perk.curveFingerprint, effectiveMaximum = perk.effectiveMaximum,
@@ -139,7 +141,7 @@ local function validatePerk(perk)
     return result
 end
 
-local function validateInFlight(record)
+local function validateInFlight(record, detached)
     if record == nil then return nil end
     if type(record) ~= "table" then return nil, failure("invalid_in_flight_advancement", "not_table") end
     local fields, key = hasOnlyFields(record, IN_FLIGHT_FIELDS)
@@ -159,6 +161,7 @@ local function validateInFlight(record)
     if record.targetLevel > record.effectiveMaximum then return nil, failure("invalid_in_flight_advancement", "targetLevel_above_maximum") end
     if record.targetLevel ~= record.preLevel + 1 then return nil, failure("invalid_in_flight_advancement", "targetLevel_not_next") end
     if record.targetPosition <= record.prePosition then return nil, failure("invalid_in_flight_advancement", "targetPosition_not_ahead") end
+    if detached then return record end
     return {
         requestId = record.requestId, perkId = record.perkId,
         preRevision = record.preRevision, preSpent = record.preSpent,
@@ -169,19 +172,19 @@ local function validateInFlight(record)
     }
 end
 
-local function validateMap(map, label)
+local function validateMap(map, label, detached)
     if type(map) ~= "table" then return nil, failure("invalid_" .. label, "not_table") end
-    local result = {}
+    local result = detached and map or {}
     for id, record in pairs(map) do
         if not isSafeId(id) then return nil, failure("invalid_" .. label, "id") end
-        local checked, err = validatePerk(record)
+        local checked, err = validatePerk(record, detached)
         if not checked then return nil, err end
         result[id] = checked
     end
     return result
 end
 
-local function validateV3(raw)
+local function validateV3(raw, detached)
     if type(raw) ~= "table" then return nil, failure("invalid_state", "not_table") end
     local fields, key = hasOnlyFields(raw, ROOT_FIELDS)
     if not fields then return nil, failure("invalid_state", "unknown_field:" .. tostring(key)) end
@@ -197,14 +200,14 @@ local function validateV3(raw)
     if not isNonNegativeInteger(survivor.level) or not (isFiniteNumber(survivor.xpIntoLevel) and survivor.xpIntoLevel >= 0) then return nil, failure("invalid_survivor", "level_or_xp") end
     if survivor.xpIntoLevel >= 1200 + 700 * survivor.level then return nil, failure("invalid_survivor", "xp_into_level_at_or_above_cost") end
     if not isNonNegativeInteger(survivor.spent) or survivor.spent > survivor.level then return nil, failure("invalid_survivor", "ap") end
-    local perks, perkError = validateMap(raw.perks, "perks")
+    local perks, perkError = validateMap(raw.perks, "perks", detached)
     if not perks then return nil, perkError end
-    local orphaned, orphanError = validateMap(raw.orphanedPerks, "orphaned_perks")
+    local orphaned, orphanError = validateMap(raw.orphanedPerks, "orphaned_perks", detached)
     if not orphaned then return nil, orphanError end
     for id in pairs(perks) do
         if orphaned[id] then return nil, failure("invalid_state", "duplicate_perk:" .. id) end
     end
-    local inFlight, inFlightError = validateInFlight(raw.inFlightAdvancement)
+    local inFlight, inFlightError = validateInFlight(raw.inFlightAdvancement, detached)
     if inFlightError then return nil, inFlightError end
     if inFlight ~= nil then
         local apCost = inFlight.targetLevel == inFlight.effectiveMaximum and 2 or 1
@@ -216,6 +219,7 @@ local function validateV3(raw)
             return nil, failure("invalid_in_flight_advancement", "spent_outside_reservation")
         end
     end
+    if detached then return raw end
     return {
         schemaVersion = Codec.SCHEMA_VERSION, accountingMode = raw.accountingMode, revision = raw.revision,
         survivor = { level = survivor.level, xpIntoLevel = survivor.xpIntoLevel, spent = survivor.spent },
@@ -334,7 +338,8 @@ function Codec.decode(raw, options)
         if cloned.schemaVersion ~= schema + 1 then return failure("schema_migration_not_consecutive", schema, raw) end
         schema = cloned.schemaVersion
     end
-    local state, err = validateV3(cloned)
+    -- Decode already owns a plain detached clone. Encode and callback results still need copying.
+    local state, err = validateV3(cloned, true)
     if not state then return err end
     if state.accountingMode == "Free" then return { ok = true, state = state } end
     local compatible, compatibilityError = applyCompatibility(state, options)

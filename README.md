@@ -32,6 +32,10 @@ SLA gives each character a Survivor Level separate from their normal skills. By 
 
 Admins can manage existing online and offline SLA profiles. Positive Survivor XP and whole Survivor Levels apply immediately to offline profiles. Clear Advancements queues the action for offline profiles, remaining visible and cancellable, applying when that character reconnects. Clear Advancements does not refund AP or change vanilla skill XP. Changing a skill level through Player Stats automatically clears advancement accounting for that skill.
 
+Single-player administration requires debug mode. Multiplayer administration uses the player's server-role permissions and validates changes on the server. Core Survivor progression, AP spending, advancement slots and optional inheritance are available in both modes.
+
+**Player Stats XP limitation:** The 1.2.1 fix for skill XP grants with **Use multipliers** unchecked applies to single-player. In hosted and dedicated games, keep that checkbox checked when granting skill XP. If it is unchecked and the applicable sandbox XP multiplier is not 1x, SLA can award too much or too little Survivor XP. The skill XP itself and blue catch-up still use the actual skill award. This does not affect ordinary gameplay XP or the Survivor XP and Level buttons in SLA's own admin window.
+
 SLA uses Project Zomboid's normal saves. For hosted and dedicated servers, set `SaveWorldEveryMinutes` above `0` to enable periodic world saves and shut down the server normally. A crash, forced shutdown, or power failure can lose SLA changes made since the last successful world save.
 
 ## Adding or removing SLA
