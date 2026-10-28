@@ -53,7 +53,7 @@ AI was used to write all of the code in this project. The original concept, desi
 
 ## Mod information
 
-- Developed/tested on version: 42.20.4
+- Developed/tested on version: 42.22.0
 - Required dependencies: None
 - License: MIT
 - [Source and issue tracker](https://github.com/Skeptic043/survivor-leveling-and-advancement)

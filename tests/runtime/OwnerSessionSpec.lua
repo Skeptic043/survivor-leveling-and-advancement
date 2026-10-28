@@ -169,7 +169,7 @@ local function fixture(overrides)
             return { ok = true }
         end,
     }
-    local dependencies = { store = store, recoveryService = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, NaturalLedger = NaturalLedger, ActualObservation = actualObservation, xpSource = xpSource, ownerSnapshot = ownerSnapshot, inheritanceSession = inheritanceSession }
+    local dependencies = { store = store, recoveryService = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, NaturalLedger = NaturalLedger, PerkProgressionRecord = PerkProgressionRecord, ActualObservation = actualObservation, xpSource = xpSource, ownerSnapshot = ownerSnapshot, inheritanceSession = inheritanceSession }
     local values = { calls = calls, loads = loads, saves = saves, positions = positions, observations = observations, state = state, recoveredState = recoveredState, options = options, perks = perks, player = player, store = store, recovery = recovery, accountingMode = accountingMode, accountingSettings = accountingSettings, catalog = catalog, xpSource = xpSource, ownerSnapshot = ownerSnapshot, ActualObservation = actualObservation }
     if overrides then overrides(dependencies, values) end
     local created = OwnerSession.create(dependencies)
@@ -209,6 +209,8 @@ failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "inhe
 creationDependencies.inheritanceSession = { initialize = function() end }
 failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "inheritanceSession.clearPlayer is required")
 creationDependencies.inheritanceSession.clearPlayer = function() end
+failure(OwnerSession.create(creationDependencies), "invalid_dependencies", "PerkProgressionRecord capabilities are required")
+creationDependencies.PerkProgressionRecord = PerkProgressionRecord
 
 do
     local session, _, values = fixture(function(dependencies, fixtureValues)

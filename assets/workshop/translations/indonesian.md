@@ -53,7 +53,7 @@ AI digunakan untuk menulis seluruh kode proyek ini. Konsep awal, arah desain, pe
 
 ## Informasi mod
 
-- Dikembangkan/diuji pada versi: 42.20.4
+- Dikembangkan/diuji pada versi: 42.22.0
 - Dependensi wajib: Tidak ada
 - Lisensi: MIT
 - [Kode sumber dan pelaporan masalah](https://github.com/Skeptic043/survivor-leveling-and-advancement)

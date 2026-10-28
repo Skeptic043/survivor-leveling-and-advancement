@@ -134,35 +134,6 @@ local function inspectAdapter(adapter, handle, player, identity)
     return { ok = true, inspection = result }
 end
 
-local function sameIdentity(record, identity)
-    return type(record) == "table"
-        and record.adapterId == identity.adapterId
-        and record.adapterVersion == identity.adapterVersion
-        and record.curveFingerprint == identity.curveFingerprint
-        and record.effectiveMaximum == identity.effectiveMaximum
-end
-
-local function replacementOrphan(state, perkId, identity)
-    local orphaned = state.orphanedPerks
-    if orphaned == nil then return { ok = true, present = false } end
-    if type(orphaned) ~= "table" then
-        return failure("perk_quarantined", "orphaned_perks_invalid")
-    end
-    local record = orphaned[perkId]
-    if record == nil then return { ok = true, present = false } end
-    if type(record) ~= "table"
-        or not isSafeId(record.adapterId)
-        or not isNonnegativeInteger(record.adapterVersion)
-        or not isSafeId(record.curveFingerprint)
-        or not isPositiveInteger(record.effectiveMaximum) then
-        return failure("perk_quarantined", "orphan_invalid")
-    end
-    if sameIdentity(record, identity) then
-        return failure("perk_quarantined", "same_identity_orphan")
-    end
-    return { ok = true, present = true }
-end
-
 local function advancementCost(targetLevel, effectiveMaximum)
     return targetLevel == effectiveMaximum and 2 or 1
 end
@@ -171,51 +142,11 @@ local function durableTargetId(requestId, preRevision)
     return requestId .. ":revision:" .. tostring(preRevision)
 end
 
-local function ledgerFromPerk(record)
-    return {
-        naturalPosition = record.naturalPosition,
-        highWaterPosition = record.highWaterPosition,
-        activeTargets = record.activeTargets,
-    }
-end
-
-local function durableRecordBoundary(record)
-    if record.observedPosition ~= nil then return record.observedPosition end
-    local boundary = record.naturalPosition
-    if type(record.activeTargets) == "table" and #record.activeTargets > 0 then
-        boundary = record.activeTargets[#record.activeTargets].targetPosition
-    end
-    return boundary
-end
-
-local function applyLedger(record, ledger)
-    local copy, copyError = cloneValue(record)
-    if not copy then return nil, copyError end
-    copy.naturalPosition = ledger.naturalPosition
-    copy.highWaterPosition = ledger.highWaterPosition
-    copy.activeTargets = ledger.activeTargets
-    return copy
-end
-
-local function perkFromBaseline(identity, ledger)
-    return {
-        adapterId = identity.adapterId,
-        adapterVersion = identity.adapterVersion,
-        curveFingerprint = identity.curveFingerprint,
-        effectiveMaximum = identity.effectiveMaximum,
-        naturalPosition = ledger.naturalPosition,
-        highWaterPosition = ledger.highWaterPosition,
-        activeTargets = ledger.activeTargets,
-        postMaxFullRateUsed = 0,
-    }
-end
-
-local function setPreservedFreeBoundary(state, perkId, identity, position)
+local function setPreservedFreeBoundary(records, state, perkId, identity, position)
     local record = state.perks[perkId]
-    if record == nil or not sameIdentity(record, identity) then return { ok = true } end
-    local nextRecord, recordError = cloneValue(record)
+    if record == nil or not records.sameIdentity(record, identity) then return { ok = true } end
+    local nextRecord, recordError = records.applyLedger(record, nil, position)
     if not nextRecord then return failure("invalid_state", recordError) end
-    nextRecord.observedPosition = position
     state.perks[perkId] = nextRecord
     return { ok = true }
 end
@@ -364,7 +295,7 @@ local function synchronizeObservation(deps, player, perkId, state, record, actua
             if not setResult.ok then return setResult end
             return { ok = true, state = state, record = record }
         end
-        observed = { ok = true, present = true, position = durableRecordBoundary(record) }
+        observed = { ok = true, present = true, position = deps.PerkProgressionRecord.durableBoundary(record) }
     end
     if not isFinite(observed.position) or observed.position < 0 then
         return failure("observation_failed", "stored_position_invalid")
@@ -377,13 +308,13 @@ local function synchronizeObservation(deps, player, perkId, state, record, actua
         return { ok = true, state = state, record = record }
     end
 
-    local reconciled = deps.NaturalLedger.reconcileExternal(ledgerFromPerk(record), delta, actualPosition)
+    local records = deps.PerkProgressionRecord
+    local reconciled = deps.NaturalLedger.reconcileExternal(records.ledger(record), delta, actualPosition)
     if type(reconciled) ~= "table" or not reconciled.ok then
         return failure("perk_quarantined", "reconciliation_" .. detailOf(reconciled))
     end
-    local nextRecord, recordError = applyLedger(record, reconciled.state)
+    local nextRecord, recordError = records.applyLedger(record, reconciled.state, actualPosition)
     if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
-    nextRecord.observedPosition = actualPosition
     local nextState, stateError = cloneValue(state)
     if not nextState then return failure("invalid_state", stateError) end
     nextState.perks[perkId] = nextRecord
@@ -496,6 +427,7 @@ local function recoverLoaded(deps, player, state)
         return failure("recovery_quarantined", "adapter_identity_mismatch")
     end
 
+    local records = deps.PerkProgressionRecord
     local free = state.accountingMode == "Free"
     local record
     local mastered = reservation.targetLevel == reservation.effectiveMaximum
@@ -503,7 +435,7 @@ local function recoverLoaded(deps, player, state)
     local addedTarget = false
     if not free then
         record = state.perks[reservation.perkId]
-        if record ~= nil and not sameIdentity(record, identity) then
+        if record ~= nil and not records.sameIdentity(record, identity) then
             return failure("recovery_quarantined", "perk_identity_mismatch")
         end
         if record == nil then
@@ -511,18 +443,18 @@ local function recoverLoaded(deps, player, state)
             if type(baseline) ~= "table" or not baseline.ok then
                 return failure("recovery_quarantined", "baseline_" .. detailOf(baseline))
             end
-            record = perkFromBaseline(identity, baseline.state)
+            record = records.fromBaseline(identity, baseline.state)
         end
 
         if mastered then
-            local ledgerInspection = deps.NaturalLedger.inspect(ledgerFromPerk(record))
+            local ledgerInspection = deps.NaturalLedger.inspect(records.ledger(record))
             if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
                 return failure("recovery_quarantined", "ledger_" .. detailOf(ledgerInspection))
             end
-            ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), reservation.targetPosition)
+            ledgerResult = deps.NaturalLedger.master(records.ledger(record), reservation.targetPosition)
         else
             local targetId = durableTargetId(reservation.requestId, reservation.preRevision)
-            ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
+            ledgerResult = deps.NaturalLedger.appendTarget(records.ledger(record), {
                 targetId = targetId,
                 targetLevel = reservation.targetLevel,
                 targetPosition = reservation.targetPosition,
@@ -569,6 +501,7 @@ local function recoverLoaded(deps, player, state)
     if not committed then return failure("recovery_quarantined", "state_" .. stateError) end
     if free then
         local bounded = setPreservedFreeBoundary(
+            records,
             committed,
             reservation.perkId,
             identity,
@@ -576,9 +509,12 @@ local function recoverLoaded(deps, player, state)
         )
         if not bounded.ok then return failure("recovery_quarantined", detailOf(bounded)) end
     else
-        local committedRecord, recordError = applyLedger(record, ledgerResult.state)
+        local committedRecord, recordError = records.applyLedger(
+            record,
+            ledgerResult.state,
+            reservation.targetPosition
+        )
         if not committedRecord then return failure("recovery_quarantined", "record_" .. recordError) end
-        committedRecord.observedPosition = reservation.targetPosition
         committed.perks[reservation.perkId] = committedRecord
     end
     committed.survivor.spent = reservation.preSpent + apCost
@@ -638,6 +574,11 @@ function ApTransaction.create(dependencies)
         { store, { "load", "save" }, "PlayerStateStore" },
         { dependencies.ActualObservation, { "get", "set", "clearPlayer" }, "ActualObservation" },
         { dependencies.AccountingMode, { "synchronizeLoaded" }, "AccountingMode" },
+        {
+            dependencies.PerkProgressionRecord,
+            { "sameIdentity", "replacementOrphan", "ledger", "durableBoundary", "applyLedger", "fromBaseline" },
+            "PerkProgressionRecord",
+        },
     }
     for index = 1, #required do
         if not hasMethods(required[index][1], required[index][2]) then
@@ -659,6 +600,7 @@ function ApTransaction.create(dependencies)
         store = store,
         ActualObservation = dependencies.ActualObservation,
         AccountingMode = dependencies.AccountingMode,
+        PerkProgressionRecord = dependencies.PerkProgressionRecord,
         resolver = dependencies.resolver,
         loadOptions = dependencies.resolver.loadOptions,
     }
@@ -732,6 +674,7 @@ function ApTransaction.create(dependencies)
             local reservationState, stateError = cloneValue(state)
             if not reservationState then return failure("invalid_state", stateError) end
             local bounded = setPreservedFreeBoundary(
+                deps.PerkProgressionRecord,
                 reservationState,
                 request.perkId,
                 identity,
@@ -784,6 +727,7 @@ function ApTransaction.create(dependencies)
             local committed, commitError = cloneValue(reloaded.state)
             if not committed then return failure("commit_save_failed", commitError) end
             bounded = setPreservedFreeBoundary(
+                deps.PerkProgressionRecord,
                 committed,
                 request.perkId,
                 identity,
@@ -812,13 +756,14 @@ function ApTransaction.create(dependencies)
             }
         end
 
+        local records = deps.PerkProgressionRecord
         local record = state.perks[request.perkId]
-        if record ~= nil and not sameIdentity(record, identity) then
+        if record ~= nil and not records.sameIdentity(record, identity) then
             return failure("perk_quarantined", "adapter_identity_mismatch")
         end
         local replacingOrphan = false
         if record == nil then
-            local replacement = replacementOrphan(state, request.perkId, identity)
+            local replacement = records.replacementOrphan(state, request.perkId, identity)
             if not replacement.ok then return replacement end
             replacingOrphan = replacement.present
         end
@@ -853,18 +798,18 @@ function ApTransaction.create(dependencies)
             if type(baseline) ~= "table" or not baseline.ok then
                 return failure("perk_quarantined", "baseline_" .. detailOf(baseline))
             end
-            record = perkFromBaseline(identity, baseline.state)
+            record = records.fromBaseline(identity, baseline.state)
         end
-        local ledgerInspection = deps.NaturalLedger.inspect(ledgerFromPerk(record))
+        local ledgerInspection = deps.NaturalLedger.inspect(records.ledger(record))
         if type(ledgerInspection) ~= "table" or not ledgerInspection.ok then
             return failure("perk_quarantined", "ledger_" .. detailOf(ledgerInspection))
         end
 
         local ledgerResult
         if mastered then
-            ledgerResult = deps.NaturalLedger.master(ledgerFromPerk(record), actual.nextTargetPosition)
+            ledgerResult = deps.NaturalLedger.master(records.ledger(record), actual.nextTargetPosition)
         else
-            ledgerResult = deps.NaturalLedger.appendTarget(ledgerFromPerk(record), {
+            ledgerResult = deps.NaturalLedger.appendTarget(records.ledger(record), {
                 targetId = durableTargetId(request.requestId, state.revision),
                 targetLevel = actual.nextTargetLevel,
                 targetPosition = actual.nextTargetPosition,
@@ -941,9 +886,12 @@ function ApTransaction.create(dependencies)
         if not reloaded.ok then return reloaded end
         local committed, commitError = cloneValue(reloaded.state)
         if not committed then return failure("commit_save_failed", commitError) end
-        local committedRecord, recordError = applyLedger(record, ledgerResult.state)
+        local committedRecord, recordError = records.applyLedger(
+            record,
+            ledgerResult.state,
+            actual.nextTargetPosition
+        )
         if not committedRecord then return failure("commit_save_failed", recordError) end
-        committedRecord.observedPosition = actual.nextTargetPosition
         committed.perks[request.perkId] = committedRecord
         committed.survivor.spent = state.survivor.spent + apCost
         committed.revision = state.revision + 1

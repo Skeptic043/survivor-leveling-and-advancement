@@ -230,6 +230,7 @@ end
 local function services(store, resolver)
     local apCreated = ApTransaction.create({
         NaturalLedger = NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         SurvivorEconomy = SurvivorEconomy,
         Allotment = Allotment,
         MutationScope = MutationScope,
@@ -241,6 +242,7 @@ local function services(store, resolver)
     expect(apCreated.ok, "AP service creation")
     local awardCreated = SupportedAwardProcessor.create({
         NaturalLedger = NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         SurvivorEconomy = SurvivorEconomy,
 
         MutationScope = MutationScope,

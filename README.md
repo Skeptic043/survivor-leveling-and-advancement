@@ -65,7 +65,7 @@ Survivor Level inheritance is configured through sandbox settings. The host can 
 
 - Internal mod ID: `SurvivorLevelingAdvancement`
 - Target version: Project Zomboid Build 42.20
-- Currently developed and tested on: Project Zomboid 42.20.4
+- Currently developed and tested on: Project Zomboid 42.22.0
 - Server persistence: native world saves, with periodic saving controlled by `SaveWorldEveryMinutes`
 - License: MIT
 

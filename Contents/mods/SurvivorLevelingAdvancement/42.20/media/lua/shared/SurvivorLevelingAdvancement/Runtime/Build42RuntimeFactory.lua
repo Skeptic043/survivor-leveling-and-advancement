@@ -30,6 +30,7 @@ local function validateModules(m)
         { "InheritancePolicy", { "plan" } },
         { "LevelGainCompletion", { "create", "validate" } },
         { "NaturalLedger", { "baseline", "inspect", "reconcileExternal", "appendTarget", "master", "applySupported" } },
+        { "PerkProgressionRecord", { "sameIdentity", "replacementOrphan", "ledger", "durableBoundary", "applyLedger", "fromBaseline" } },
         { "SurvivorEconomy", { "availableAp", "nextLevelCost", "computeAward", "applyXp", "normalizationFromCoreCurve" } }, { "Allotment", { "evaluate" } },
         { "MutationScope", { "begin", "isActive", "finish" } }, { "ActualObservation", { "get", "set", "clearPlayer" } },
         { "PlayerStateStore", { "create" } }, { "CharacterInheritanceStore", { "create" } },
@@ -199,7 +200,7 @@ function Factory.create(dependencies)
         offlineStore, err = resultField(serverStoreResult, "offlineStore", "server_offline_store_create_failed"); if err then return err end
     end
     local composition, compositionErr = call("ServiceComposition.create", m.ServiceComposition.create, {
-        StateCodec = m.StateCodec, stateStore = stateStore, characterStore = characterStore, InheritanceRecordStore = m.InheritanceRecordStore, InheritanceSession = m.InheritanceSession, InheritancePolicy = m.InheritancePolicy, NaturalLedger = m.NaturalLedger, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, LevelGainCompletion = m.LevelGainCompletion,
+        StateCodec = m.StateCodec, stateStore = stateStore, characterStore = characterStore, InheritanceRecordStore = m.InheritanceRecordStore, InheritanceSession = m.InheritanceSession, InheritancePolicy = m.InheritancePolicy, NaturalLedger = m.NaturalLedger, PerkProgressionRecord = m.PerkProgressionRecord, SurvivorEconomy = m.SurvivorEconomy, Allotment = m.Allotment, LevelGainCompletion = m.LevelGainCompletion,
         MutationScope = m.MutationScope, ActualObservation = m.ActualObservation, AccountingMode = rawget(m, "AccountingMode"), OwnerSnapshot = m.OwnerSnapshot, ApTransaction = m.ApTransaction, SupportedAwardProcessor = m.SupportedAwardProcessor, WorldSettings = m.WorldSettings, EventDerivedXpSource = m.EventDerivedXpSource, OwnerSession = m.OwnerSession, AdvancementSession = rawget(m, "AdvancementSession"), AdminSession = rawget(m, "AdminSession"),
         catalog = catalog, worldSettingsProvider = provider, normalizationByPerk = normalization, sandboxMultiplier = resolver, positionArithmetic = arithmetic, environment = { globals = g }, authority = authority, playerIdentity = playerIdentity, inheritanceWorldStore = inheritanceWorldStore, inheritanceIdentity = inheritanceIdentity, levelGainSink = levelGainSink, offlineStore = offlineStore,
     }); if compositionErr then return compositionErr end

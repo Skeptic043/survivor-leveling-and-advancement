@@ -63,7 +63,7 @@ description=
 description=[h2]Mod information[/h2]
 description=
 description=[list]
-description=[*]Developed/tested on version: 42.20.4
+description=[*]Developed/tested on version: 42.22.0
 description=[*]Required dependencies: None
 description=[*]License: MIT
 description=[*][url=https://github.com/Skeptic043/survivor-leveling-and-advancement]Source and issue tracker[/url]

@@ -53,7 +53,7 @@ SLA 使用 Project Zomboid 的正常存檔機制。專用伺服器和主機連�
 
 ## 模組資訊
 
-- 開發/測試版本：42.20.4
+- 開發/測試版本：42.22.0
 - 必需依賴：無
 - 授權條款：MIT
 - [原始碼與問題回報](https://github.com/Skeptic043/survivor-leveling-and-advancement)

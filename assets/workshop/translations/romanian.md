@@ -53,7 +53,7 @@ SLA folosește salvările obișnuite Project Zomboid. Pe servere găzduite și d
 
 ## Informații despre mod
 
-- Dezvoltat/testat pe versiunea: 42.20.4
+- Dezvoltat/testat pe versiunea: 42.22.0
 - Dependențe obligatorii: Niciuna
 - Licență: MIT
 - [Cod sursă și raportarea problemelor](https://github.com/Skeptic043/survivor-leveling-and-advancement)

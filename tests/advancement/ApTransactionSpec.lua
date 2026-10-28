@@ -271,6 +271,7 @@ local function dependenciesFor(store, resolver)
     end
     return {
         NaturalLedger = NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         SurvivorEconomy = SurvivorEconomy,
         Allotment = Allotment,
         MutationScope = MutationScope,
@@ -340,6 +341,11 @@ do
     local callableOptions = dependenciesFor(store, resolver)
     callableOptions.resolver = { resolve = resolver.resolve, loadOptions = function() return {} end }
     assertCode(ApTransaction.create(callableOptions), "invalid_dependencies")
+    local missingRecord = dependenciesFor(store, resolver)
+    missingRecord.PerkProgressionRecord = nil
+    local missingRecordResult = ApTransaction.create(missingRecord)
+    assertCode(missingRecordResult, "invalid_dependencies")
+    assertEqual(missingRecordResult.detail, "PerkProgressionRecord_invalid")
 end
 do
     local store = makeStore(newState(3, 0))

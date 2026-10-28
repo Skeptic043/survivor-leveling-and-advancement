@@ -54,10 +54,12 @@ local function fixture(server, maximum, modeName)
     ok(store.save(player,initial), "seed")
     local mode=ok(AccountingMode.create({store=store, ActualObservation=ActualObservation}), "mode").service
     local purchases=ok(ApTransaction.create({store=store, resolver=resolver, NaturalLedger=NaturalLedger,
+        PerkProgressionRecord=PerkProgressionRecord,
         SurvivorEconomy=SurvivorEconomy, Allotment=Allotment, MutationScope=MutationScope,
         ActualObservation=ActualObservation, AccountingMode=mode}), "purchases").service
     local processor=ok(SupportedAwardProcessor.create({store=store, resolver=resolver,
-        NaturalLedger=NaturalLedger, SurvivorEconomy=SurvivorEconomy, MutationScope=MutationScope,
+        NaturalLedger=NaturalLedger, PerkProgressionRecord=PerkProgressionRecord,
+        SurvivorEconomy=SurvivorEconomy, MutationScope=MutationScope,
         ActualObservation=ActualObservation, recoveryService=purchases, AccountingMode=mode}), "processor").service
     local config=modeName=="Global" and {mode="Global",globalLimit=3}
         or {mode="PerSkill",perSkillDefault=3}

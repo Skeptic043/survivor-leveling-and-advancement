@@ -53,7 +53,7 @@ SLAはProject Zomboidの通常のセーブを使います。ホスト・専用�
 
 ## MOD情報
 
-- 開発・テスト環境: 42.20.4
+- 開発・テスト環境: 42.22.0
 - 必須の前提MOD: なし
 - ライセンス: MIT
 - [ソースコードと不具合報告](https://github.com/Skeptic043/survivor-leveling-and-advancement)

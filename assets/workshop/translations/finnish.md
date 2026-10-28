@@ -53,7 +53,7 @@ Projektin kaikki koodi on kirjoitettu tekoälyllä. Alkuperäinen idea, suunnitt
 
 ## Modin tiedot
 
-- Kehitetty/testattu versiolla: 42.20.4
+- Kehitetty/testattu versiolla: 42.22.0
 - Pakolliset riippuvuudet: Ei ole
 - Lisenssi: MIT
 - [Lähdekoodi ja ongelmailmoitukset](https://github.com/Skeptic043/survivor-leveling-and-advancement)

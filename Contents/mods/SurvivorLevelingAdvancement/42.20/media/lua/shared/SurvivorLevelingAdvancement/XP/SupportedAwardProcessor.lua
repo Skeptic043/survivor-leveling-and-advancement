@@ -41,30 +41,6 @@ local function callResult(method, label, ...)
     return result
 end
 
-local function cloneValue(value, seen)
-    local valueType = type(value)
-    if valueType == "nil" or valueType == "boolean" or valueType == "string" or valueType == "number" then
-        if valueType == "number" and not isFinite(value) then
-            return nil, "non_finite_number"
-        end
-        return value
-    end
-    if valueType ~= "table" then return nil, "unsupported_type" end
-    seen = seen or {}
-    if seen[value] then return nil, "cycle" end
-    seen[value] = true
-    local copy = {}
-    for key, child in pairs(value) do
-        local copiedKey, keyError = cloneValue(key, seen)
-        if keyError then seen[value] = nil; return nil, keyError end
-        local copiedChild, childError = cloneValue(child, seen)
-        if childError then seen[value] = nil; return nil, childError end
-        copy[copiedKey] = copiedChild
-    end
-    seen[value] = nil
-    return copy
-end
-
 local function validateAward(award)
     if type(award) ~= "table" then return failure("invalid_award", "award_not_table") end
     local allowed = {
@@ -176,76 +152,6 @@ local function inspectAdapter(adapter, handle, player, identity)
     return { ok = true, inspection = inspected }
 end
 
-local function sameIdentity(record, identity)
-    return type(record) == "table"
-        and record.adapterId == identity.adapterId
-        and record.adapterVersion == identity.adapterVersion
-        and record.curveFingerprint == identity.curveFingerprint
-        and record.effectiveMaximum == identity.effectiveMaximum
-end
-
-local function replacementOrphan(state, perkId, identity)
-    local orphaned = state.orphanedPerks
-    if orphaned == nil then return { ok = true, present = false } end
-    if type(orphaned) ~= "table" then
-        return failure("perk_quarantined", "orphaned_perks_invalid")
-    end
-    local record = orphaned[perkId]
-    if record == nil then return { ok = true, present = false } end
-    if type(record) ~= "table"
-        or not isSafeId(record.adapterId)
-        or not isInteger(record.adapterVersion)
-        or record.adapterVersion < 0
-        or not isSafeId(record.curveFingerprint)
-        or not isInteger(record.effectiveMaximum)
-        or record.effectiveMaximum <= 0 then
-        return failure("perk_quarantined", "orphan_invalid")
-    end
-    if sameIdentity(record, identity) then
-        return failure("perk_quarantined", "same_identity_orphan")
-    end
-    return { ok = true, present = true }
-end
-
-local function ledgerFromPerk(record)
-    return {
-        naturalPosition = record.naturalPosition,
-        highWaterPosition = record.highWaterPosition,
-        activeTargets = record.activeTargets,
-    }
-end
-
-local function durableRecordBoundary(record)
-    if record.observedPosition ~= nil then return record.observedPosition end
-    local boundary = record.naturalPosition
-    if type(record.activeTargets) == "table" and #record.activeTargets > 0 then
-        boundary = record.activeTargets[#record.activeTargets].targetPosition
-    end
-    return boundary
-end
-
-local function applyLedger(record, ledger)
-    local copy, copyError = cloneValue(record)
-    if not copy then return nil, copyError end
-    copy.naturalPosition = ledger.naturalPosition
-    copy.highWaterPosition = ledger.highWaterPosition
-    copy.activeTargets = ledger.activeTargets
-    return copy
-end
-
-local function perkFromBaseline(identity, ledger)
-    return {
-        adapterId = identity.adapterId,
-        adapterVersion = identity.adapterVersion,
-        curveFingerprint = identity.curveFingerprint,
-        effectiveMaximum = identity.effectiveMaximum,
-        naturalPosition = ledger.naturalPosition,
-        highWaterPosition = ledger.highWaterPosition,
-        activeTargets = ledger.activeTargets,
-        postMaxFullRateUsed = 0,
-    }
-end
-
 local function loadState(store, player, options)
     local loaded = callResult(store.load, "store_load", player, options)
     if not loaded.ok or type(loaded.state) ~= "table" then
@@ -337,7 +243,7 @@ local function processOrdinary(deps, record, award, settings, atMaximum)
         return failure("invalid_award", "applied_delta_position_mismatch")
     end
     local transitioned = deps.NaturalLedger.applySupported(
-        ledgerFromPerk(record),
+        deps.PerkProgressionRecord.ledger(record),
         award.appliedDelta,
         award.actualPositionAfter
     )
@@ -353,7 +259,7 @@ local function processOrdinary(deps, record, award, settings, atMaximum)
         appendCleared(transitioned.effect.clearedTargetIds, cleared.effect.clearedTargetIds)
         transitioned.state = cleared.state
     end
-    local nextRecord, recordError = applyLedger(record, transitioned.state)
+    local nextRecord, recordError = deps.PerkProgressionRecord.applyLedger(record, transitioned.state)
     if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
     local ratio = 0
     if award.survivorCreditBase > 0 then ratio = transitioned.effect.eligibleRatio end
@@ -369,6 +275,7 @@ local function processOrdinary(deps, record, award, settings, atMaximum)
 end
 
 local function processPreservedFreeRecord(deps, player, state, award)
+    local records = deps.PerkProgressionRecord
     local record = state.perks[award.perkId]
     if record == nil then
         return { ok = true, changed = false, clearedTargetIds = {} }
@@ -379,7 +286,7 @@ local function processPreservedFreeRecord(deps, player, state, award)
         return { ok = true, changed = false, clearedTargetIds = {} }
     end
     local described = describeAdapter(resolved.adapter, resolved.handle)
-    if not described.ok or not sameIdentity(record, described.identity) then
+    if not described.ok or not records.sameIdentity(record, described.identity) then
         return { ok = true, changed = false, clearedTargetIds = {} }
     end
     local inspected = inspectAdapter(resolved.adapter, resolved.handle, player, described.identity)
@@ -393,11 +300,11 @@ local function processPreservedFreeRecord(deps, player, state, award)
     if observedPosition ~= nil and (not isFinite(observedPosition) or observedPosition < 0) then
         return failure("perk_quarantined", "observed_position_invalid")
     end
-    local durableBoundary = durableRecordBoundary(record)
+    local durableBoundary = records.durableBoundary(record)
     local reconciledBoundary = durableBoundary ~= award.actualPositionBefore
     if reconciledBoundary then
         local reconciled = deps.NaturalLedger.reconcileExternal(
-            ledgerFromPerk(nextRecord),
+            records.ledger(nextRecord),
             award.actualPositionBefore - durableBoundary,
             award.actualPositionBefore
         )
@@ -405,13 +312,13 @@ local function processPreservedFreeRecord(deps, player, state, award)
             return failure("perk_quarantined", "reconciliation_" .. detailOf(reconciled))
         end
         local recordError
-        nextRecord, recordError = applyLedger(nextRecord, reconciled.state)
+        nextRecord, recordError = records.applyLedger(nextRecord, reconciled.state)
         if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
         appendCleared(clearedTargetIds, reconciled.effect.clearedTargetIds)
     end
 
     local transitioned = deps.NaturalLedger.applySupported(
-        ledgerFromPerk(nextRecord),
+        records.ledger(nextRecord),
         award.appliedDelta,
         award.actualPositionAfter
     )
@@ -430,9 +337,8 @@ local function processPreservedFreeRecord(deps, player, state, award)
         transitioned.state = cleared.state
     end
     local recordError
-    nextRecord, recordError = applyLedger(nextRecord, transitioned.state)
+    nextRecord, recordError = records.applyLedger(nextRecord, transitioned.state, award.actualPositionAfter)
     if not nextRecord then return failure("perk_quarantined", "record_" .. recordError) end
-    nextRecord.observedPosition = award.actualPositionAfter
     appendCleared(clearedTargetIds, transitioned.effect.clearedTargetIds)
     state.perks[award.perkId] = nextRecord
     return {
@@ -455,6 +361,11 @@ function SupportedAwardProcessor.create(dependencies)
         { dependencies.ActualObservation, { "get", "set" }, "ActualObservation" },
         { dependencies.recoveryService, { "recoverLoadedState" }, "recoveryService" },
         { dependencies.AccountingMode, { "synchronizeLoaded" }, "AccountingMode" },
+        {
+            dependencies.PerkProgressionRecord,
+            { "sameIdentity", "replacementOrphan", "ledger", "durableBoundary", "applyLedger", "fromBaseline" },
+            "PerkProgressionRecord",
+        },
     }
     for index = 1, #required do
         if not hasMethods(required[index][1], required[index][2]) then
@@ -478,6 +389,7 @@ function SupportedAwardProcessor.create(dependencies)
         loadOptions = dependencies.resolver.loadOptions,
         recoveryService = dependencies.recoveryService,
         AccountingMode = dependencies.AccountingMode,
+        PerkProgressionRecord = dependencies.PerkProgressionRecord,
     }
     local service = {}
 
@@ -609,13 +521,14 @@ function SupportedAwardProcessor.create(dependencies)
             return failure("adapter_inspection_failed", "position_above_maximum")
         end
 
+        local records = deps.PerkProgressionRecord
         local record = state.perks[award.perkId]
-        if record ~= nil and not sameIdentity(record, identity) then
+        if record ~= nil and not records.sameIdentity(record, identity) then
             return failure("perk_quarantined", "adapter_identity_mismatch")
         end
         local replacingOrphan = false
         if record == nil then
-            local replacement = replacementOrphan(state, award.perkId, identity)
+            local replacement = records.replacementOrphan(state, award.perkId, identity)
             if not replacement.ok then return replacement end
             replacingOrphan = replacement.present
         end
@@ -627,7 +540,7 @@ function SupportedAwardProcessor.create(dependencies)
         local reconciliationBoundary = observed.present and observed.position or nil
         if reconciliationBoundary == nil and synchronized.transitioned
             and synchronized.fromMode == "Free" and record ~= nil then
-            reconciliationBoundary = durableRecordBoundary(record)
+            reconciliationBoundary = records.durableBoundary(record)
             if not isFinite(reconciliationBoundary) or reconciliationBoundary < 0 then
                 return failure("perk_quarantined", "observed_position_invalid")
             end
@@ -635,7 +548,7 @@ function SupportedAwardProcessor.create(dependencies)
         if record ~= nil and reconciliationBoundary ~= nil
             and reconciliationBoundary ~= award.actualPositionBefore then
             local reconciled = deps.NaturalLedger.reconcileExternal(
-                ledgerFromPerk(record),
+                records.ledger(record),
                 award.actualPositionBefore - reconciliationBoundary,
                 award.actualPositionBefore
             )
@@ -643,7 +556,7 @@ function SupportedAwardProcessor.create(dependencies)
                 return failure("perk_quarantined", "reconciliation_" .. detailOf(reconciled))
             end
             local recordError
-            record, recordError = applyLedger(record, reconciled.state)
+            record, recordError = records.applyLedger(record, reconciled.state)
             if not record then return failure("perk_quarantined", "record_" .. recordError) end
             appendCleared(clearedTargetIds, reconciled.effect.clearedTargetIds)
             state.perks[award.perkId] = record
@@ -655,7 +568,7 @@ function SupportedAwardProcessor.create(dependencies)
             if type(baseline) ~= "table" or not baseline.ok then
                 return failure("perk_quarantined", "baseline_" .. detailOf(baseline))
             end
-            record = perkFromBaseline(identity, baseline.state)
+            record = records.fromBaseline(identity, baseline.state)
             state.perks[award.perkId] = record
             stateChanged = true
         end
@@ -668,9 +581,12 @@ function SupportedAwardProcessor.create(dependencies)
         appendCleared(clearedTargetIds, accounting.clearedTargetIds)
         stateChanged = stateChanged or accounting.changed
         if stateChanged and accounting.record.observedPosition ~= award.actualPositionAfter then
-            local observedRecord, observedError = cloneValue(accounting.record)
+            local observedRecord, observedError = records.applyLedger(
+                accounting.record,
+                nil,
+                award.actualPositionAfter
+            )
             if not observedRecord then return failure("perk_quarantined", "record_" .. observedError) end
-            observedRecord.observedPosition = award.actualPositionAfter
             accounting.record = observedRecord
         end
         state.perks[award.perkId] = accounting.record

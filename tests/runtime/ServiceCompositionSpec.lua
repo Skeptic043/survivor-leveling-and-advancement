@@ -184,6 +184,14 @@ local function makeDependencies(overrides)
             master = function() end,
             applySupported = function() end,
         },
+        PerkProgressionRecord = {
+            sameIdentity = function() end,
+            replacementOrphan = function() end,
+            ledger = function() end,
+            durableBoundary = function() end,
+            applyLedger = function() end,
+            fromBaseline = function() end,
+        },
         SurvivorEconomy = {
             availableAp = function() end,
             nextLevelCost = function() end,
@@ -373,6 +381,8 @@ do
     assertSame(fixture.arguments.processor.ActualObservation, dependencies.ActualObservation, "processor observation identity")
     assertSame(fixture.arguments.processor.AccountingMode, fixture.accountingMode, "processor accounting-mode identity")
     assertSame(fixture.arguments.processor.recoveryService, fixture.apService, "recovery identity")
+    assertSame(fixture.arguments.ap.PerkProgressionRecord, dependencies.PerkProgressionRecord, "AP perk-record identity")
+    assertSame(fixture.arguments.processor.PerkProgressionRecord, dependencies.PerkProgressionRecord, "processor perk-record identity")
     assertSame(fixture.arguments.source.perkIdentity, dependencies.catalog.perkIdentity, "perk identity")
     assertSame(fixture.arguments.source.positionReader, dependencies.catalog.positionReader, "position reader identity")
     assertSame(fixture.arguments.source.awardHandler, result.services.awardHandler, "handler identity")
@@ -382,6 +392,7 @@ do
     assertSame(fixture.arguments.session.accountingSettings, fixture.worldSettings.accountingSettings, "session accounting-settings identity")
     assertSame(fixture.arguments.session.catalog, dependencies.catalog, "session catalog identity")
     assertSame(fixture.arguments.session.NaturalLedger, dependencies.NaturalLedger, "session ledger identity")
+    assertSame(fixture.arguments.session.PerkProgressionRecord, dependencies.PerkProgressionRecord, "session perk-record identity")
     assertSame(fixture.arguments.session.ActualObservation, dependencies.ActualObservation, "session observation identity")
     assertSame(fixture.arguments.session.xpSource, fixture.source, "session XP source identity")
     assertSame(fixture.arguments.session.ownerSnapshot, fixture.ownerSnapshot, "session snapshot identity")
@@ -584,6 +595,7 @@ local function assertPreflightFailure(mutator, expectedDetail)
 end
 
 assertPreflightFailure(function(dependencies) dependencies.StateCodec = nil end, "StateCodec capabilities are required")
+assertPreflightFailure(function(dependencies) dependencies.PerkProgressionRecord = nil end, "PerkProgressionRecord capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.stateStore.load = nil end, "stateStore capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.characterStore.inspect = nil end, "characterStore capabilities are required")
 assertPreflightFailure(function(dependencies) dependencies.InheritanceRecordStore.create = nil end, "InheritanceRecordStore.create is required")
