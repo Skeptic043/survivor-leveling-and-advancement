@@ -53,7 +53,7 @@ Der gesamte Code wurde mit KI geschrieben. Konzept, Design, Tests, Fehlersuche u
 
 ## Modinformationen
 
-- Entwickelt/getestet auf Version: 42.20.4
+- Entwickelt/getestet auf Version: 42.22.0
 - Erforderliche Abhängigkeiten: Keine
 - Lizenz: MIT
 - [Quellcode und Fehlermeldungen](https://github.com/Skeptic043/survivor-leveling-and-advancement)

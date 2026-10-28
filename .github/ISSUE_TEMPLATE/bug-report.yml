@@ -12,7 +12,7 @@ body:
     id: pz-version
     attributes:
       label: Project Zomboid version
-      placeholder: "42.20.4"
+      placeholder: "42.22.0"
     validations:
       required: true
   - type: input

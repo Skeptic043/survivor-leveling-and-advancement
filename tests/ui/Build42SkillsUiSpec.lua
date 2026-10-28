@@ -3374,26 +3374,50 @@ do
         local texts = VanillaSkillTranslations[locale]
         local function lookup(key) return texts[key] or VanillaSkillTranslations.EN[key] end
         local env = makeEnvironment({ getTextOrNull = lookup })
-        expect(env.integration.install().ok, locale .. " description fallback installs")
-        for id, canonical in pairs({ Aiming = "Aiming", Blunt = "Long Blunt", Woodwork = "Carpentry", Sprinting = "Running", Nimble = "Nimble", Strength = "Strength" }) do
-            local bar = makeBar(env, id)
+        expect(env.integration.install().ok, locale .. " installed description lookup installs")
+        -- Synthetic 42.20-style catalog: descriptions keyed by English display name, so vanilla's
+        -- localized-name lookup stays unresolved and SLA must repair it.
+        local cases = {
+            { id = "Aiming", canonical = "Aiming" }, { id = "Blunt", canonical = "Long Blunt" },
+            { id = "Woodwork", canonical = "Carpentry" }, { id = "Sprinting", canonical = "Running" },
+            { id = "Nimble", canonical = "Nimble" }, { id = "Strength", canonical = "Strength" },
+        }
+        local legacy = {}
+        for _, case in ipairs(cases) do
+            legacy["IGUI_perks_" .. case.canonical .. "_Description"] = "Legacy " .. case.id .. " description"
+        end
+        local legacyEnv = makeEnvironment({ getTextOrNull = function(key) return legacy[key] end })
+        expect(legacyEnv.integration.install().ok, locale .. " legacy description fallback installs")
+        for _, case in ipairs(cases) do
+            local id = case.id
             local name = texts["IGUI_perks_" .. id]
+            expect(type(name) == "string" and name ~= "", locale .. " installed skill name exists: " .. id)
+            local description = lookup("IGUI_perks_" .. id .. "_Description")
+            expect(type(description) == "string" and description ~= "",
+                locale .. " installed perk-ID description exists: " .. id)
+            local bar = makeBar(env, id)
             function bar.perk:getName() return name end
             function bar.perk:isCustom() return false end
+            env.tooltipMessage = "XP header <LINE><LINE> " .. description .. " <LINE> XP boost"
+            bar:updateTooltip(1)
+            equal(bar.message, env.tooltipMessage, locale .. " leaves resolved perk-ID description untouched: " .. id)
+
+            local legacyBar = makeBar(legacyEnv, id)
+            function legacyBar.perk:getName() return name end
+            function legacyBar.perk:isCustom() return false end
             local badKey = "IGUI_perks_" .. name .. "_Description"
-            local description = lookup("IGUI_perks_" .. canonical .. "_Description")
-            expect(type(description) == "string", locale .. " installed canonical description exists: " .. id)
-            env.tooltipMessage = "XP header <LINE><LINE> " .. (texts[badKey] or badKey) .. " <LINE> XP boost"
-            bar:updateTooltip(1)
-            equal(bar.message, "XP header <LINE><LINE> " .. description .. " <LINE> XP boost",
+            local repaired = legacy["IGUI_perks_" .. case.canonical .. "_Description"]
+            legacyEnv.tooltipMessage = "XP header <LINE><LINE> " .. (legacy[badKey] or badKey) .. " <LINE> XP boost"
+            legacyBar:updateTooltip(1)
+            equal(legacyBar.message, "XP header <LINE><LINE> " .. repaired .. " <LINE> XP boost",
                 locale .. " repairs only missing description and preserves surrounding text: " .. id)
-            env.tooltipMessage = "Other mod's valid description"
-            bar:updateTooltip(1)
-            equal(bar.message, env.tooltipMessage, "valid third-party tooltip remains unchanged")
-            function bar.perk:isCustom() return true end
-            env.tooltipMessage = "XP header <LINE><LINE> " .. badKey
-            bar:updateTooltip(1)
-            equal(bar.message, env.tooltipMessage, "custom perk descriptions remain unchanged")
+            legacyEnv.tooltipMessage = "Other mod's valid description"
+            legacyBar:updateTooltip(1)
+            equal(legacyBar.message, legacyEnv.tooltipMessage, "valid third-party tooltip remains unchanged")
+            function legacyBar.perk:isCustom() return true end
+            legacyEnv.tooltipMessage = "XP header <LINE><LINE> " .. badKey
+            legacyBar:updateTooltip(1)
+            equal(legacyBar.message, legacyEnv.tooltipMessage, "custom perk descriptions remain unchanged")
         end
     end
     local texts = { IGUI_perks_Carpentry_Description = "Base", IGUI_perks_Carpentry_Description2 = "Level two" }

@@ -53,7 +53,7 @@ AI blev brugt til at skrive al koden i projektet. Den oprindelige idé, designre
 
 ## Modoplysninger
 
-- Udviklet/testet på version: 42.20.4
+- Udviklet/testet på version: 42.22.0
 - Påkrævede afhængigheder: Ingen
 - Licens: MIT
 - [Kildekode og fejlrapportering](https://github.com/Skeptic043/survivor-leveling-and-advancement)

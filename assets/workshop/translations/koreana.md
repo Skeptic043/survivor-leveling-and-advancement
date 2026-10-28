@@ -53,7 +53,7 @@ SLA는 Project Zomboid의 일반 저장을 사용합니다. 전용 서버와 호
 
 ## 모드 정보
 
-- 개발/테스트 버전: 42.20.4
+- 개발/테스트 버전: 42.22.0
 - 필수 의존성: 없음
 - 라이선스: MIT
 - [소스 코드 및 문제 신고](https://github.com/Skeptic043/survivor-leveling-and-advancement)

@@ -119,6 +119,7 @@ local function environment(options)
     expect(accountingCreated.ok, "accounting mode creation")
     local apCreated = ApTransaction.create({
         NaturalLedger = NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         SurvivorEconomy = SurvivorEconomy,
         Allotment = Allotment,
         MutationScope = MutationScope,
@@ -130,6 +131,7 @@ local function environment(options)
     expect(apCreated.ok, "AP transaction creation")
     local awardCreated = SupportedAwardProcessor.create({
         NaturalLedger = NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         SurvivorEconomy = SurvivorEconomy,
 
         MutationScope = MutationScope,
@@ -159,6 +161,7 @@ local function environment(options)
             end },
         },
         NaturalLedger = NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         ActualObservation = ActualObservation,
         xpSource = { initializePlayer = function()
             return { ok = true, detail = { initialized = 2, skipped = 0 } }

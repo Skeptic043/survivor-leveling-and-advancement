@@ -53,7 +53,7 @@ Cały kod tego projektu napisano przy użyciu AI. Pierwotny pomysł, kierunek pr
 
 ## Informacje o modzie
 
-- Opracowano/testowano na wersji: 42.20.4
+- Opracowano/testowano na wersji: 42.22.0
 - Wymagane zależności: Brak
 - Licencja: MIT
 - [Kod źródłowy i zgłaszanie problemów](https://github.com/Skeptic043/survivor-leveling-and-advancement)

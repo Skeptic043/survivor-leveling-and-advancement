@@ -53,7 +53,7 @@ A projekt teljes kódja AI segítségével készült. Az eredeti ötlet, a terve
 
 ## Modinformációk
 
-- Fejlesztve/tesztelve ezen a verzión: 42.20.4
+- Fejlesztve/tesztelve ezen a verzión: 42.22.0
 - Kötelező függőségek: Nincsenek
 - Licenc: MIT
 - [Forráskód és hibabejelentés](https://github.com/Skeptic043/survivor-leveling-and-advancement)

@@ -53,7 +53,7 @@ Bu projenin tüm kodu yapay zekâ kullanılarak yazıldı. İlk fikir, tasarım 
 
 ## Mod bilgileri
 
-- Geliştirildiği/test edildiği sürüm: 42.20.4
+- Geliştirildiği/test edildiği sürüm: 42.22.0
 - Zorunlu bağımlılıklar: Yok
 - Lisans: MIT
 - [Kaynak kodu ve sorun takibi](https://github.com/Skeptic043/survivor-leveling-and-advancement)

@@ -53,7 +53,7 @@ Alle code in dit project is met AI geschreven. Het oorspronkelijke concept, de o
 
 ## Modinformatie
 
-- Ontwikkeld/getest op versie: 42.20.4
+- Ontwikkeld/getest op versie: 42.22.0
 - Verplichte afhankelijkheden: Geen
 - Licentie: MIT
 - [Broncode en problemen melden](https://github.com/Skeptic043/survivor-leveling-and-advancement)

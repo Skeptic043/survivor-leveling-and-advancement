@@ -91,6 +91,7 @@ local function createPipeline(case)
     expect(accounting.ok, case.name .. " accounting mode construction")
     local transaction = ApTransaction.create({
         NaturalLedger = NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         SurvivorEconomy = SurvivorEconomy,
         Allotment = Allotment,
         MutationScope = MutationScope,

@@ -130,16 +130,22 @@ function Test-NoDateShapedText {
     return -not ([string]::Join("`n", $Lines) -match $dateShapedTextPattern)
 }
 
-Assert-ReleaseCondition (@($changelogLines -ceq '## 1.2.1 - 2026-09-13').Count -eq 1) 'exact current 1.2.1 changelog heading'
+Assert-ReleaseCondition (@($changelogLines -ceq '## 1.2.2').Count -eq 1) 'exact released 1.2.2 changelog heading'
+Assert-ReleaseCondition (@($changelogLines -match '^## 1\.2\.2').Count -eq 1) 'exactly one changelog 1.2.2 heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.2.2').Count -eq 1) 'exact current Steam 1.2.2 heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -match '^## 1\.2\.2').Count -eq 1) 'exactly one Steam 1.2.2 heading'
+Assert-ReleaseCondition (@($changelogLines -ceq '## 1.2.1 - 2026-09-13').Count -eq 1) 'exact released 1.2.1 changelog heading'
 Assert-ReleaseCondition (@($changelogLines -match '^## 1\.2\.1').Count -eq 1) 'exactly one changelog 1.2.1 heading'
-Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.2.1').Count -eq 1) 'exact current Steam 1.2.1 heading'
+Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.2.1').Count -eq 1) 'exact released Steam 1.2.1 heading'
 Assert-ReleaseCondition (@($steamChangeNoteLines -match '^## 1\.2\.1').Count -eq 1) 'exactly one Steam 1.2.1 heading'
 Assert-ReleaseCondition (@($changelogLines -ceq '## 1.2.0 - 2026-09-11').Count -eq 1) 'exact released 1.2.0 changelog heading'
 Assert-ReleaseCondition (@($changelogLines -match '^## 1\.2\.0').Count -eq 1) 'exactly one changelog 1.2.0 heading'
 Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.2.0').Count -eq 1) 'exact released Steam 1.2.0 heading'
 Assert-ReleaseCondition (@($steamChangeNoteLines -match '^## 1\.2\.0').Count -eq 1) 'exactly one Steam 1.2.0 heading'
-Assert-ReleaseCondition (@($changelogLines -match '^## ')[0] -ceq '## 1.2.1 - 2026-09-13') 'changelog latest release is 1.2.1'
-Assert-ReleaseCondition (@($steamChangeNoteLines -match '^## ')[0] -ceq '## 1.2.1') 'Steam latest release is 1.2.1'
+Assert-ReleaseCondition (@($changelogLines -match '^## ')[0] -ceq '## 1.2.2') 'changelog latest release is 1.2.2'
+Assert-ReleaseCondition (@($steamChangeNoteLines -match '^## ')[0] -ceq '## 1.2.2') 'Steam latest release is 1.2.2'
+Assert-ReleaseCondition (@($changelogLines -match '^## ')[1] -ceq '## 1.2.1 - 2026-09-13') 'changelog 1.2.1 follows 1.2.2'
+Assert-ReleaseCondition (@($steamChangeNoteLines -match '^## ')[1] -ceq '## 1.2.1') 'Steam 1.2.1 follows 1.2.2'
 Assert-ReleaseCondition (@($changelogLines -ceq '## 1.1.2 - 2026-09-08').Count -eq 1) 'exact released 1.1.2 changelog heading'
 Assert-ReleaseCondition (@($changelogLines -match '^## 1\.1\.2').Count -eq 1) 'exactly one changelog 1.1.2 heading'
 Assert-ReleaseCondition (@($steamChangeNoteLines -ceq '## 1.1.2').Count -eq 1) 'exact released Steam 1.1.2 heading'
@@ -171,10 +177,14 @@ $release120ChangelogContent = @($release120ChangelogBody | Where-Object { -not [
 $release120SteamContent = @($release120SteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $release121ChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Heading '## 1.2.1 - 2026-09-13')
 $release121SteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.2.1')
-$release121GithubBody = @(Get-MarkdownDocumentBody -Lines $githubReleaseNoteLines -Heading '# Survivor Leveling & Advancement v1.2.1')
 $release121ChangelogContent = @($release121ChangelogBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $release121SteamContent = @($release121SteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$release121GithubContent = @($release121GithubBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$release122ChangelogBody = @(Get-MarkdownSectionBody -Lines $changelogLines -Heading '## 1.2.2')
+$release122SteamBody = @(Get-MarkdownSectionBody -Lines $steamChangeNoteLines -Heading '## 1.2.2')
+$release122GithubBody = @(Get-MarkdownDocumentBody -Lines $githubReleaseNoteLines -Heading '# Survivor Leveling & Advancement v1.2.2')
+$release122ChangelogContent = @($release122ChangelogBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$release122SteamContent = @($release122SteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$release122GithubContent = @($release122GithubBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $release110ChangelogContent = @($release110ChangelogBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $release110SteamContent = @($release110SteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $releasedSteamContent = @($releasedSteamBody | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -228,11 +238,14 @@ $release112SteamBullets = @($release112SteamBody | Where-Object { $_.StartsWith(
 $release120ChangelogBullets = @($release120ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 $release120SteamBullets = @($release120SteamBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 $release121ChangelogBullets = @($release121ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
+$release122ChangelogBullets = @($release122ChangelogBody | Where-Object { $_.StartsWith('- ', [StringComparison]::Ordinal) })
 Assert-ReleaseCondition ($release120ChangelogBullets.Count -gt 0) 'non-empty released 1.2.0 change notes'
 Assert-ReleaseCondition ([string]::Join("`n", $release120ChangelogContent) -ceq [string]::Join("`n", $release120SteamContent)) 'exact ordered equality between changelog and Steam 1.2.0 notes'
-Assert-ReleaseCondition ($release121ChangelogBullets.Count -gt 0) 'non-empty current 1.2.1 change notes'
+Assert-ReleaseCondition ($release121ChangelogBullets.Count -gt 0) 'non-empty released 1.2.1 change notes'
 Assert-ReleaseCondition ([string]::Join("`n", $release121ChangelogContent) -ceq [string]::Join("`n", $release121SteamContent)) 'exact ordered equality between changelog and Steam 1.2.1 notes'
-Assert-ReleaseCondition ([string]::Join("`n", $release121SteamContent) -ceq [string]::Join("`n", $release121GithubContent)) 'exact ordered equality between Steam and GitHub 1.2.1 notes'
+Assert-ReleaseCondition ($release122ChangelogBullets.Count -gt 0) 'non-empty current 1.2.2 change notes'
+Assert-ReleaseCondition ([string]::Join("`n", $release122ChangelogContent) -ceq [string]::Join("`n", $release122SteamContent)) 'exact ordered equality between changelog and Steam 1.2.2 notes'
+Assert-ReleaseCondition ([string]::Join("`n", $release122SteamContent) -ceq [string]::Join("`n", $release122GithubContent)) 'exact ordered equality between Steam and GitHub 1.2.2 notes'
 Assert-ReleaseCondition ($release110ChangelogContent.Count -gt 0) 'non-empty changelog 1.1.0 section'
 Assert-ReleaseCondition ($release110SteamContent.Count -gt 0) 'non-empty Steam 1.1.0 section'
 Assert-ReleaseCondition ([string]::Join("`n", $release110ChangelogBullets) -ceq [string]::Join("`n", $expectedNextUpdateBullets)) 'exact changelog 1.1.0 update bullets'
@@ -250,7 +263,7 @@ Assert-ReleaseCondition ([string]::Join("`n", $release112SteamBullets) -ceq [str
 Assert-ReleaseCondition ([string]::Join("`n", $release112ChangelogBullets) -ceq [string]::Join("`n", $release112SteamBullets)) 'exact ordered equality between changelog and Steam 1.1.2 bullets'
 $extraRelease112BulletFixture = @($release112ChangelogBullets + '- Unexpected extra v1.1.2 change-note bullet.')
 Assert-ReleaseCondition (-not ([string]::Join("`n", $extraRelease112BulletFixture) -ceq [string]::Join("`n", $expectedRelease112Bullets))) 'extra v1.1.2 change-note bullet fixture fails exact contract'
-Assert-ReleaseCondition (@($githubReleaseNoteLines -ceq '# Survivor Leveling & Advancement v1.2.1').Count -eq 1) 'exact GitHub v1.2.1 release title'
+Assert-ReleaseCondition (@($githubReleaseNoteLines -ceq '# Survivor Leveling & Advancement v1.2.2').Count -eq 1) 'exact GitHub v1.2.2 release title'
 Assert-ReleaseCondition (@($githubReleaseNoteLines -match '^# ').Count -eq 1) 'exactly one GitHub release title'
 Assert-ReleaseCondition (@($githubReleaseNoteLines -ceq 'Draft release notes').Count -eq 0) 'GitHub notes omit stale draft label'
 Assert-ReleaseCondition (-not $githubReleaseNoteText.Contains('Version 1.1.2 is not yet released and is awaiting live acceptance.')) 'GitHub notes omit stale unreleased blurb'
@@ -260,7 +273,9 @@ Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release120ChangelogBody) 
 Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release120SteamBody) 'Steam v1.2.0 body omits invented release date'
 Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release121ChangelogBody) 'changelog v1.2.1 body keeps any release date in its heading'
 Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release121SteamBody) 'Steam v1.2.1 body omits invented release date'
-Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release121GithubBody) 'GitHub v1.2.1 body omits invented release date'
+Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release122ChangelogBody) 'changelog v1.2.2 body keeps any release date in its heading'
+Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release122SteamBody) 'Steam v1.2.2 body omits invented release date'
+Assert-ReleaseCondition (Test-NoDateShapedText -Lines $release122GithubBody) 'GitHub v1.2.2 body omits invented release date'
 $datedChangelogBodyFixture = @($release112ChangelogBody + 'Planned release date: 2026-09-02')
 $datedSteamBodyFixture = @($release112SteamBody + 'Planned release date: 2026-09-02')
 Assert-ReleaseCondition (-not (Test-NoDateShapedText -Lines $datedChangelogBodyFixture)) 'invented date in changelog v1.1.2 body fixture fails'
@@ -295,9 +310,32 @@ Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $rel
 Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release112SteamBullets) 'released Steam 1.1.2 bullets omit developer-facing housekeeping'
 Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release120ChangelogBullets) 'released changelog 1.2.0 bullets omit developer-facing housekeeping'
 Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release120SteamBullets) 'released Steam 1.2.0 bullets omit developer-facing housekeeping'
-Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release121ChangelogContent) 'current changelog 1.2.1 content omits developer-facing housekeeping'
-Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release121SteamContent) 'current Steam 1.2.1 content omits developer-facing housekeeping'
-Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release121GithubContent) 'current GitHub 1.2.1 content omits developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release121ChangelogContent) 'released changelog 1.2.1 content omits developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets $release121SteamContent) 'released Steam 1.2.1 content omits developer-facing housekeeping'
+# D-162 permits exactly one copy of this exact bullet in 1.2.2 only. Everything else still goes through the guard.
+$release122AllowedRefactorBullet = '- Refactored part of SLA''s progression code for readability and maintainability. Gameplay and existing saves are unchanged.'
+function Remove-Release122AllowedRefactorBullet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Content
+    )
+
+    $index = [Array]::IndexOf($Content, $release122AllowedRefactorBullet)
+    if ($index -lt 0) {
+        return @($Content)
+    }
+
+    return @($Content | Select-Object -First $index) + @($Content | Select-Object -Skip ($index + 1))
+}
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets @(Remove-Release122AllowedRefactorBullet -Content $release122ChangelogContent)) 'current changelog 1.2.2 content omits developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets @(Remove-Release122AllowedRefactorBullet -Content $release122SteamContent)) 'current Steam 1.2.2 content omits developer-facing housekeeping'
+Assert-ReleaseCondition (Test-NoDeveloperFacingReleaseHousekeeping -Bullets @(Remove-Release122AllowedRefactorBullet -Content $release122GithubContent)) 'current GitHub 1.2.2 content omits developer-facing housekeeping'
+$secondRelease122RefactorFixture = @($release122ChangelogContent + '- Refactored the advancement code.')
+$duplicateRelease122RefactorFixture = @($release122ChangelogContent + $release122AllowedRefactorBullet)
+Assert-ReleaseCondition (-not (Test-NoDeveloperFacingReleaseHousekeeping -Bullets @(Remove-Release122AllowedRefactorBullet -Content $secondRelease122RefactorFixture))) 'second 1.2.2 refactoring bullet fixture is rejected'
+Assert-ReleaseCondition (-not (Test-NoDeveloperFacingReleaseHousekeeping -Bullets @(Remove-Release122AllowedRefactorBullet -Content $duplicateRelease122RefactorFixture))) 'duplicate allowed 1.2.2 refactoring bullet fixture is rejected'
+Assert-ReleaseCondition (-not (Test-NoDeveloperFacingReleaseHousekeeping -Bullets @($release122AllowedRefactorBullet))) 'allowed 1.2.2 refactoring bullet is still rejected outside 1.2.2'
 $developerFacingHousekeepingFixtures = @(
     '- Removed semicolons from public copy.'
     '- Updated punctuation in public copy.'
@@ -333,6 +371,20 @@ $staleSteamReminderFixture = @($steamChangeNoteLines + $authoringReminder)
 Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $staleChangelogHeadingFixture -SteamNotes $steamChangeNoteLines)) 'stale Unreleased heading fixture fails'
 Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $changelogLines -SteamNotes $staleSteamHeadingFixture)) 'stale Next update heading fixture fails'
 Assert-ReleaseCondition (-not (Test-NoStaleReleaseAuthoring -Changelog $changelogLines -SteamNotes $staleSteamReminderFixture)) 'stale authoring reminder fixture fails'
+
+function Test-NoUnreleasedChangelogHeading {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string[]]$Changelog
+    )
+
+    return @($Changelog | Where-Object { $_ -match '^## ' -and $_ -match 'Unreleased' }).Count -eq 0
+}
+
+Assert-ReleaseCondition (Test-NoUnreleasedChangelogHeading -Changelog $changelogLines) 'changelog never carries an Unreleased heading'
+$unreleasedChangelogHeadingFixture = @($changelogLines + '## 9.9.9 - Unreleased')
+Assert-ReleaseCondition (-not (Test-NoUnreleasedChangelogHeading -Changelog $unreleasedChangelogHeadingFixture)) 'Unreleased changelog heading fixture fails'
 Assert-ReleaseCondition ($releasedSteamContent.Count -gt 0) 'non-empty Steam 1.0.0 section'
 $howItWorksCopy = "SLA gives each character a Survivor Level separate from their normal skills. By default, XP earned in supported trainable skills also earns Survivor XP, with each Survivor Level granting one Advancement Point, or AP. AP can then be spent directly in the vanilla skills panel to raise the level of a selected skill. Advancing a skill with AP occupies the required number of Advancement Slots. To earn a slot back, you must naturally earn the XP that the AP allowed you to bypass. That XP still applies toward the skill's next level, allowing AP to boost your progress without replacing natural skill progression. The final advancement to a skill's effective maximum, normally level 9 to level 10, is considered mastering the skill. Mastery costs 2 AP and requires 2 free Advancement Slots, then clears any active Advancement Slots on that skill. If the Global or Per Skill slot limit is set to 1, mastery only requires 1 free slot while retaining the 2 AP cost. Free mode requires no Advancement Slots while still retaining the 2 AP cost."
 $advancementModeCopy = @(
@@ -501,7 +553,7 @@ foreach ($readmeHeading in @(
 }
 Assert-ReleaseCondition ($readmeText.Contains('Internal mod ID: `SurvivorLevelingAdvancement`')) 'README internal mod ID'
 Assert-ReleaseCondition ($readmeText.Contains('Target version: Project Zomboid Build 42.20')) 'README Build 42.20 target'
-Assert-ReleaseCondition ($readmeText.Contains('Currently developed and tested on: Project Zomboid 42.20.4')) 'README tested patch'
+Assert-ReleaseCondition ($readmeText.Contains('Currently developed and tested on: Project Zomboid 42.22.0')) 'README tested patch'
 Assert-ReleaseCondition ($readmeText.Contains('[Subscribe through the Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3792412209)')) 'README supported Workshop installation'
 Assert-ReleaseCondition ($readmeText.Contains('[Report a bug or issue](https://github.com/Skeptic043/survivor-leveling-and-advancement/issues/new/choose)')) 'README issue link'
 Assert-ReleaseCondition ($readmeText.Contains('[Changelog](CHANGELOG.md)')) 'README changelog link'
@@ -631,8 +683,8 @@ foreach ($boundary in @(
 )) {
     Assert-ReleaseCondition ($normalizedMarkdown.Contains($boundary)) "Workshop retains factual boundary: $boundary"
 }
-Assert-ReleaseCondition (@($descriptionLines -ceq '- Developed/tested on version: 42.20.4').Count -eq 1) 'exact Markdown developed-and-tested version'
-Assert-ReleaseCondition (@($workshopLines -ceq 'description=[*]Developed/tested on version: 42.20.4').Count -eq 1) 'exact Workshop developed-and-tested version'
+Assert-ReleaseCondition (@($descriptionLines -ceq '- Developed/tested on version: 42.22.0').Count -eq 1) 'exact Markdown developed-and-tested version'
+Assert-ReleaseCondition (@($workshopLines -ceq 'description=[*]Developed/tested on version: 42.22.0').Count -eq 1) 'exact Workshop developed-and-tested version'
 Assert-ReleaseCondition (@($descriptionLines -ceq '- Required dependencies: None').Count -eq 1) 'exact Markdown dependency declaration'
 Assert-ReleaseCondition (@($workshopLines -ceq 'description=[*]Required dependencies: None').Count -eq 1) 'exact Workshop dependency declaration'
 Assert-ReleaseCondition (-not $descriptionText.Contains('content track')) 'Markdown omits content-track wording'

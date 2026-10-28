@@ -53,7 +53,7 @@ Tout le code a été écrit avec l'IA. Le concept, le design, les tests, le déb
 
 ## Informations du mod
 
-- Développé/testé sur la version : 42.20.4
+- Développé/testé sur la version : 42.22.0
 - Dépendances obligatoires : Aucune
 - Licence : MIT
 - [Code source et suivi des problèmes](https://github.com/Skeptic043/survivor-leveling-and-advancement)

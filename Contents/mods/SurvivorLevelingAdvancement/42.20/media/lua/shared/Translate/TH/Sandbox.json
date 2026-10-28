@@ -47,7 +47,7 @@
   "Sandbox_SLA_PerSkill_SmallBlade": "อาวุธมีคมสั้น",
   "Sandbox_SLA_PerSkill_Spear": "หอก",
   "Sandbox_SLA_PerSkill_Maintenance": "การดูแลรักษาอาวุธ",
-  "Sandbox_SLA_PerSkill_Farming": "การเกษตร",
+  "Sandbox_SLA_PerSkill_Farming": "การเพาะปลูก",
   "Sandbox_SLA_PerSkill_Husbandry": "การเลี้ยงสัตว์",
   "Sandbox_SLA_PerSkill_Woodwork": "งานไม้",
   "Sandbox_SLA_PerSkill_Carving": "งานแกะสลัก",
@@ -68,7 +68,7 @@
   "Sandbox_SLA_PerSkill_Tracking": "การแกะรอย",
   "Sandbox_SLA_PerSkill_Trapping": "การวางกับดัก",
   "Sandbox_SLA_PerSkill_Butchering": "การชำแหละ",
-  "Sandbox_SLA_PerSkill_Glassmaking": "งานทำแก้ว",
+  "Sandbox_SLA_PerSkill_Glassmaking": "การทำแก้ว",
   "Sandbox_SLA_SkillSurvivorXp_Fitness": "ความฟิตให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Strength": "พละกำลังให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Sprinting": "การวิ่งให้ XP ผู้รอดชีวิต",
@@ -82,7 +82,7 @@
   "Sandbox_SLA_SkillSurvivorXp_SmallBlade": "อาวุธมีคมสั้นให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Spear": "หอกให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Maintenance": "การดูแลรักษาอาวุธให้ XP ผู้รอดชีวิต",
-  "Sandbox_SLA_SkillSurvivorXp_Farming": "การเกษตรให้ XP ผู้รอดชีวิต",
+  "Sandbox_SLA_SkillSurvivorXp_Farming": "การเพาะปลูกให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Husbandry": "การเลี้ยงสัตว์ให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Woodwork": "งานไม้ให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Carving": "งานแกะสลักให้ XP ผู้รอดชีวิต",
@@ -103,5 +103,5 @@
   "Sandbox_SLA_SkillSurvivorXp_Tracking": "การแกะรอยให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Trapping": "การวางกับดักให้ XP ผู้รอดชีวิต",
   "Sandbox_SLA_SkillSurvivorXp_Butchering": "การชำแหละให้ XP ผู้รอดชีวิต",
-  "Sandbox_SLA_SkillSurvivorXp_Glassmaking": "งานทำแก้วให้ XP ผู้รอดชีวิต"
+  "Sandbox_SLA_SkillSurvivorXp_Glassmaking": "การทำแก้วให้ XP ผู้รอดชีวิต"
 }

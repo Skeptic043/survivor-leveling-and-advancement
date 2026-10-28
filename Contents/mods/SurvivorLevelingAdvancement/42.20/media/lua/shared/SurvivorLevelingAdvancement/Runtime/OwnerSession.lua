@@ -71,26 +71,6 @@ local function sortedKeys(map)
     return keys
 end
 
-local function ledgerFromPerk(record)
-    return {
-        naturalPosition = record.naturalPosition,
-        highWaterPosition = record.highWaterPosition,
-        activeTargets = record.activeTargets,
-    }
-end
-
-local function recordAtPosition(record, ledger, position)
-    local copy = cloneValue(record)
-    if copy == nil then return nil end
-    if ledger ~= nil then
-        copy.naturalPosition = ledger.naturalPosition
-        copy.highWaterPosition = ledger.highWaterPosition
-        copy.activeTargets = ledger.activeTargets
-    end
-    copy.observedPosition = position
-    return copy
-end
-
 local function successful(result)
     return type(result) == "table" and rawget(result, "ok") == true
 end
@@ -292,6 +272,11 @@ function OwnerSession.create(dependencies)
     if type(inheritanceSession.clearPlayer) ~= "function" then
         return failure("invalid_dependencies", "inheritanceSession.clearPlayer is required")
     end
+    local PerkProgressionRecord = dependencies.PerkProgressionRecord
+    if type(PerkProgressionRecord) ~= "table" or type(PerkProgressionRecord.ledger) ~= "function"
+        or type(PerkProgressionRecord.applyLedger) ~= "function" then
+        return failure("invalid_dependencies", "PerkProgressionRecord capabilities are required")
+    end
 
     local entries = {}
     local loadOptions = catalog.resolver.loadOptions
@@ -337,16 +322,16 @@ function OwnerSession.create(dependencies)
                 local position = readResult.position
                 local nextRecord
                 if record.observedPosition == nil then
-                    nextRecord = recordAtPosition(record, nil, position)
+                    nextRecord = PerkProgressionRecord.applyLedger(record, nil, position)
                 elseif record.observedPosition ~= position then
                     local reconciledCalled, reconciled = pcall(
                         NaturalLedger.reconcileExternal,
-                        ledgerFromPerk(record),
+                        PerkProgressionRecord.ledger(record),
                         position - record.observedPosition,
                         position
                     )
                     if reconciledCalled and successful(reconciled) and type(reconciled.state) == "table" then
-                        nextRecord = recordAtPosition(record, reconciled.state, position)
+                        nextRecord = PerkProgressionRecord.applyLedger(record, reconciled.state, position)
                     end
                 end
 

@@ -53,7 +53,7 @@ Veškerý kód tohoto projektu napsala AI. Původní koncept, směr návrhu, tes
 
 ## Informace o modu
 
-- Vyvinuto/testováno na verzi: 42.20.4
+- Vyvinuto/testováno na verzi: 42.22.0
 - Povinné závislosti: žádné
 - Licence: MIT
 - [Zdrojový kód a hlášení problémů](https://github.com/Skeptic043/survivor-leveling-and-advancement)

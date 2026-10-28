@@ -253,6 +253,7 @@ local function makeEnvironment(config)
     if config.logObservation then observation.eventLog = log end
     local created = SupportedAwardProcessor.create({
         NaturalLedger = config.naturalLedger or NaturalLedger,
+        PerkProgressionRecord = PerkProgressionRecord,
         SurvivorEconomy = SurvivorEconomy,
 
         MutationScope = config.mutationScope or MutationScope,
@@ -280,6 +281,19 @@ do
     local invalid = SupportedAwardProcessor.create({})
     expect(not invalid.ok, "missing dependencies fail")
     equal(invalid.code, "invalid_dependencies", "missing dependency code")
+    local missingRecord = SupportedAwardProcessor.create({
+        NaturalLedger = NaturalLedger,
+        SurvivorEconomy = SurvivorEconomy,
+        MutationScope = MutationScope,
+        PlayerStateStore = { load = function() end, save = function() end },
+        ActualObservation = { get = function() end, set = function() end },
+        resolver = { resolve = function() end },
+        recoveryService = { recoverLoadedState = function() end },
+        AccountingMode = { synchronizeLoaded = function() end },
+    })
+    expect(not missingRecord.ok, "missing perk-record dependency fails")
+    equal(missingRecord.code, "invalid_dependencies", "missing perk-record dependency code")
+    equal(missingRecord.detail, "PerkProgressionRecord_invalid", "missing perk-record dependency detail")
 end
 
 do

@@ -53,7 +53,7 @@ KI ble brukt til å skrive all koden i prosjektet. Den opprinnelige ideen, desig
 
 ## Modinformasjon
 
-- Utviklet/testet på versjon: 42.20.4
+- Utviklet/testet på versjon: 42.22.0
 - Påkrevde avhengigheter: Ingen
 - Lisens: MIT
 - [Kildekode og feilrapportering](https://github.com/Skeptic043/survivor-leveling-and-advancement)

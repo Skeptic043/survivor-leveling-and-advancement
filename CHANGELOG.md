@@ -2,6 +2,12 @@
 
 All notable public changes will be documented here.
 
+## 1.2.2
+
+- Per-skill sandbox option names now match the game's renamed skills in Catalan, Dutch, Finnish, German, Indonesian, Italian, Norwegian, Polish, Romanian, Spanish (Argentina, Chile and Mexico), Thai, Turkish and Ukrainian.
+- Fixed garbled accented letters in three Spanish (Argentina) skill names in the sandbox options.
+- Refactored part of SLA's progression code for readability and maintainability. Gameplay and existing saves are unchanged.
+
 ## 1.2.1 - 2026-09-13
 
 - Reaching a skill's maximum level through XP now frees any advancement slots still occupied by that skill. Previously, you would be left with XP owed without a way to earn it, this resolves that edge case.

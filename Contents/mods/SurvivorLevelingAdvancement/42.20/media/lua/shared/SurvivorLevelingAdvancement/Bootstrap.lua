@@ -85,6 +85,7 @@ local modules = {
     InheritanceRecordStore = require "SurvivorLevelingAdvancement/Persistence/InheritanceRecordStore",
     InheritancePolicy = require "SurvivorLevelingAdvancement/Core/InheritancePolicy",
     NaturalLedger = require "SurvivorLevelingAdvancement/Core/NaturalLedger",
+    PerkProgressionRecord = require "SurvivorLevelingAdvancement/State/PerkProgressionRecord",
     SurvivorEconomy = require "SurvivorLevelingAdvancement/Core/SurvivorEconomy",
     Allotment = require "SurvivorLevelingAdvancement/Core/Allotment",
 

@@ -53,7 +53,7 @@ Tutto il codice del progetto è stato scritto con IA. Il concetto originale, la 
 
 ## Informazioni sul mod
 
-- Sviluppato/testato sulla versione: 42.20.4
+- Sviluppato/testato sulla versione: 42.22.0
 - Dipendenze obbligatorie: Nessuna
 - Licenza: MIT
 - [Codice sorgente e segnalazione problemi](https://github.com/Skeptic043/survivor-leveling-and-advancement)
